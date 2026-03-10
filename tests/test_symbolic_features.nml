@@ -1,0 +1,46 @@
+; NML Symbolic Syntax — v0.4 Features Test
+; Tests: ÷ (SDIV), ≺ (CMPI), ≶ (CMP), ⇒/⇐ (CALL/RET), backward ↗, Greek named registers
+
+; === ÷ scalar division ===
+∎  κ #100.0
+÷  λ κ #4.0
+↑  λ @sdiv_result        ; expect 25.0
+
+; === ≺ compare immediate ===
+∎  κ #25.0
+≺  φ κ #30.0             ; 25 < 30 → flag = 1
+↗  #2
+∎  ς #0.0
+→  #1
+∎  ς #1.0
+↑  ς @cmpi_true          ; expect 1.0
+
+; === ≶ register compare ===
+∎  κ #50.0
+∎  λ #30.0
+≶  κ λ                   ; 50 < 30 → flag = 0
+↗  #2
+∎  ς #1.0
+→  #1
+∎  ς #0.0
+↑  ς @cmp_correct        ; expect 1.0
+
+; === backward ↗ — while loop sum 1..5 ===
+∎  α #0.0                ; sum = 0
+∎  δ #1.0                ; counter = 1
+∑  α α δ                 ; sum += counter
+∎  γ #1.0
+∑  δ δ γ                 ; counter++
+≺  φ δ #6.0              ; counter < 6?
+↗  #-5                   ; yes → back to ∑ α α δ
+↑  α @sum_1_to_5         ; expect 15.0
+
+; === ⇒/⇐ subroutine call ===
+∎  κ #7.0
+⇒  #2                    ; call double subroutine
+↑  κ @call_result        ; expect 14.0
+→  #2
+∑  κ κ κ                 ; double: κ = κ + κ
+⇐                        ; return
+
+◼

@@ -1,0 +1,59 @@
+; NML v0.4 Feature Test
+; Tests: SDIV, EDIV, CMP, CMPI, CALL/RET, backward jumps
+
+; --- Setup ---
+ALLC  R0 #[1]
+ALLC  R9 #[1]
+
+; === TEST 1: SDIV (scalar division) ===
+LEAF  R1 #100.0
+SDIV  R2 R1 #4.0       ; R2 = 100 / 4 = 25
+ST    R2 @sdiv_result
+
+; === TEST 2: EDIV (element-wise division) ===
+LEAF  R1 #10.0
+LEAF  R4 #2.0
+EDIV  R5 R1 R4          ; R5 = 10 / 2 = 5
+ST    R5 @ediv_result
+
+; === TEST 3: CMPI (compare register to immediate) ===
+LEAF  R1 #25.0
+CMPI  RE R1 #30.0       ; 25 < 30 → flag = 1
+JMPT  #2                ; flag is true → skip next 2 instructions
+LEAF  R9 #0.0           ; (skipped)
+JUMP  #1                ; (skipped)
+LEAF  R9 #1.0           ; flag was true
+ST    R9 @cmpi_true     ; expect 1.0
+
+; === TEST 4: CMP (register-register comparison) ===
+LEAF  R1 #50.0
+LEAF  R2 #30.0
+CMP   R1 R2             ; 50 < 30 → flag = 0 (false)
+JMPT  #2                ; flag is false → don't jump
+LEAF  R9 #1.0           ; correct path: 50 >= 30
+JUMP  #1
+LEAF  R9 #0.0           ; (skipped)
+ST    R9 @cmp_correct   ; expect 1.0
+
+; === TEST 5: Backward jump (while loop — sum 1..5) ===
+LEAF  RA #0.0            ; sum = 0
+LEAF  RD #1.0            ; counter = 1
+; --- loop body starts here (this is the target) ---
+TACC  RA RA RD           ; sum += counter
+LEAF  RC #1.0
+TACC  RD RD RC           ; counter++
+CMPI  RE RD #6.0         ; counter < 6?
+JMPT  #-5                ; yes → back to TACC (offset accounts for pc++)
+ST    RA @sum_1_to_5     ; expect 15.0
+
+; === TEST 6: CALL / RET (subroutine) ===
+LEAF  R1 #7.0
+CALL  #2                 ; call subroutine (offset 2 → lands on TACC)
+ST    R1 @call_result    ; expect 14.0 (7 doubled)
+JUMP  #2                 ; skip past subroutine
+; --- subroutine: double R1 ---
+TACC  R1 R1 R1           ; R1 = R1 + R1
+RET
+
+; === Done ===
+HALT

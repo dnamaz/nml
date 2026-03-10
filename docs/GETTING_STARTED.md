@@ -1,0 +1,250 @@
+# NML — Getting Started
+
+A 5-minute introduction to writing and running NML programs.
+
+## Build
+
+```bash
+git clone <repo-url>
+cd nml
+make
+```
+
+This produces a single `nml` binary (~83 KB).
+
+## Your First Program
+
+Create `my_program.nml`:
+
+```
+LEAF  R0 #10.0
+LEAF  R1 #3.0
+TACC  RA R0 R1
+ST    RA @result
+HALT
+```
+
+Run it:
+
+```bash
+./nml my_program.nml
+```
+
+Output:
+
+```
+result: shape=[1] dtype=f64 data=[13.0000]
+```
+
+This program sets R0 to 10, R1 to 3, adds them into the accumulator (RA), stores the result, and halts.
+
+## Key Concepts
+
+### Registers
+
+NML has 16 tensor registers. Each register holds an entire tensor (scalar, vector, or matrix).
+
+| Register | Purpose |
+|----------|---------|
+| R0-R9 | General purpose |
+| RA | Accumulator |
+| RB | General |
+| RC | Scratch / temporaries |
+| RD | Loop counter |
+| RE | Condition flag (set by CMP/CMPI/CMPF) |
+| RF | Stack pointer |
+
+### Two Ways to Get Values Into Registers
+
+- **`LEAF R0 #42.0`** — Load an immediate constant (the number is in the instruction)
+- **`LD R0 @name`** — Load from a named memory address (defined in a `.nml.data` file)
+
+This is the most important distinction in NML. Constants use `LEAF` with `#`. Memory uses `LD` with `@`.
+
+### Programs Must End With HALT
+
+Every NML program must contain a `HALT` instruction. Without it, execution continues past the last instruction.
+
+## Opcode Quick Reference
+
+### Arithmetic
+| Opcode | Symbolic | Description | Example |
+|--------|----------|-------------|---------|
+| `MMUL` | `×` | Matrix multiply | `MMUL R3 R0 R1` |
+| `MADD` | `⊕` | Element-wise add | `MADD R2 R0 R1` |
+| `MSUB` | `⊖` | Element-wise subtract | `MSUB R2 R0 R1` |
+| `EMUL` | `⊗` | Element-wise multiply | `EMUL R2 R0 R1` |
+| `EDIV` | `⊘` | Element-wise divide | `EDIV R2 R0 R1` |
+| `SDOT`/`DOT` | `·` | Dot product | `SDOT R2 R0 R1` |
+| `SCLR` | `∗` | Scalar multiply | `SCLR R1 R0 #2.0` |
+| `SDIV` | `÷` | Scalar divide | `SDIV R1 R0 #4.0` |
+
+### Activation
+| Opcode | Symbolic | Description |
+|--------|----------|-------------|
+| `RELU` | `⌐` | ReLU: max(0, x) |
+| `SIGM` | `σ` | Sigmoid: 1/(1+exp(-x)) |
+| `TANH` | `τ` | Hyperbolic tangent |
+| `SOFT` | `Σ` | Softmax |
+| `GELU` | `ℊ` | GELU (used in transformers) |
+
+### Memory
+| Opcode | Symbolic | Description | Example |
+|--------|----------|-------------|---------|
+| `LD` | `↓` | Load from memory | `LD R0 @input` |
+| `ST` | `↑` | Store to memory | `ST R0 @result` |
+| `MOV` | `←` | Copy register | `MOV R1 R0` |
+| `ALLC` | `□` | Allocate zero tensor | `ALLC R0 #[4]` |
+| `LEAF` | `∎` | Load constant | `LEAF R0 #42.0` |
+
+### Control Flow
+| Opcode | Symbolic | Description | Example |
+|--------|----------|-------------|---------|
+| `CMPI` | `≺`/`ϟ` | Compare vs immediate | `CMPI RE R0 #50.0` |
+| `CMP` | `≶` | Compare two registers | `CMP R0 R1` |
+| `CMPF` | `⋈` | Tree feature compare | `CMPF RE R0 #3 #100.0` |
+| `JMPT` | `↗` | Jump if flag true | `JMPT #2` |
+| `JMPF` | `↘` | Jump if flag false | `JMPF #3` |
+| `JUMP` | `→` | Unconditional jump | `JUMP #2` |
+| `LOOP` | `↻` | Begin counted loop | `LOOP R0` |
+| `ENDP` | `↺` | End loop | `ENDP` |
+| `CALL` | `⇒` | Call subroutine | `CALL #2` |
+| `RET` | `⇐` | Return | `RET` |
+
+### Tree Model
+| Opcode | Symbolic | Description | Example |
+|--------|----------|-------------|---------|
+| `LEAF` | `∎` | Set constant value | `LEAF RA #500.0` |
+| `TACC` | `∑` | Scalar accumulate (add) | `TACC RA R0 R1` |
+
+### System
+| Opcode | Symbolic | Description |
+|--------|----------|-------------|
+| `HALT` | `◼` | Stop execution |
+| `TRAP` | `⚠` | Trigger error |
+| `SYNC` | `⏸` | Synchronization barrier |
+| `SYS` | `⚙` | System call (print, read, time, rand) |
+| `MOD` | `%` | Integer modulo |
+
+### Data Flow
+| Opcode | Symbolic | Description |
+|--------|----------|-------------|
+| `RSHP` | `⊞` | Reshape tensor |
+| `TRNS` | `⊤` | Transpose matrix |
+| `SPLT` | `⊢` | Split tensor |
+| `MERG` | `⊣` | Merge/concatenate tensors |
+
+### Extensions (Vision, Transformer, Reduction, Signal, M2M)
+| Opcode | Category | Description |
+|--------|----------|-------------|
+| `CONV` `POOL` `UPSC` `PADZ` | Vision | Convolution, pooling, upscale, padding |
+| `ATTN` `NORM` `EMBD` | Transformer | Attention, layer norm, embedding lookup |
+| `RDUC` | Reduction | Reduce: sum, mean, max, min |
+| `WHER` `CLMP` `CMPR` | Reduction | Conditional select, clamp, mask |
+| `FFT` `FILT` | Signal | Fourier transform, FIR filter |
+| `META` `FRAG` `LINK` | M2M | Metadata, fragments, composition |
+| `SIGN` `VRFY` | M2M | Cryptographic signing |
+| `VOTE` `PROJ` `DIST` | M2M | Consensus, projection, distance |
+| `GATH` `SCAT`/`SCTR` | M2M | Tensor index operations |
+
+## Data Files
+
+NML programs load data from `.nml.data` files:
+
+```
+@input shape=1,4 data=0.9,0.1,0.95,0.3
+@weights shape=4,3 data=0.2,-0.1,0.4,0.5,0.3,-0.2,-0.1,0.6,0.1,0.3,-0.4,0.5
+@bias shape=1,3 data=0.1,-0.1,0.05
+```
+
+Each line defines a named memory address with a shape and data values. Run with:
+
+```bash
+./nml program.nml data.nml.data
+```
+
+## Common Patterns
+
+### Neural Network Layer
+
+```
+LD    R0 @input
+LD    R1 @weights
+LD    R2 @bias
+MMUL  R3 R0 R1       ; matrix multiply
+MADD  R3 R3 R2       ; add bias
+RELU  R3 R3          ; activate
+ST    R3 @output
+HALT
+```
+
+### Conditional (if/else)
+
+```
+LD    R0 @value
+CMPI  RE R0 #100.0   ; flag = (value < 100)
+JMPF  #3             ; if false, skip to else
+SCLR  R1 R0 #0.1     ; then: scale by 0.1
+JUMP  #2             ; skip else
+SCLR  R1 R0 #0.05    ; else: scale by 0.05
+ST    R1 @result
+HALT
+```
+
+### Loop (sum 1 to N)
+
+```
+LEAF  R0 #10          ; N = 10
+ALLC  R1 #[1]         ; sum = 0
+LEAF  R2 #1           ; increment = 1
+LOOP  R0              ; repeat 10 times
+TACC  R1 R1 R2        ;   sum += 1
+ENDP
+ST    R1 @result      ; result = 10
+HALT
+```
+
+### Subroutine
+
+```
+LEAF  R0 #7.0         ; input value
+CALL  #2              ; call subroutine (offset +2)
+ST    R0 @result      ; store doubled value
+HALT
+SCLR  R0 R0 #2.0     ; subroutine: double R0
+RET
+```
+
+Note: `CALL #N` jumps to PC + N + 1. From line 1, `CALL #2` lands on line 4.
+
+### Symbolic Syntax
+
+The same neural network layer in symbolic NML:
+
+```
+↓  ι  @input
+↓  κ  @weights
+↓  λ  @bias
+×  μ  ι  κ
+⊕  μ  μ  λ
+⌐  μ  μ
+↑  μ  @output
+◼
+```
+
+## Command-Line Options
+
+```bash
+./nml program.nml [data.nml.data] [--trace] [--max-cycles N]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--trace` | Print each instruction as it executes (to stderr) |
+| `--max-cycles N` | Override the default 1,000,000 cycle limit |
+
+## Next Steps
+
+- [NML Specification](NML_SPEC.md) — full instruction set reference with encoding details
+- [Usage Guide](NML_Usage_Guide.md) — all 67 instructions with detailed examples
+- [M2M Specification](NML_M2M_Spec.md) — machine-to-machine extensions

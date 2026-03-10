@@ -1,0 +1,22 @@
+; NML Symbolic Syntax Test
+; Anomaly detector using full Unicode opcodes + Greek registers
+; Must produce identical output to classic anomaly_detector.nml
+
+↓  ι @sensor_data
+↓  κ @w1
+↓  λ @b1
+×  μ ι κ
+⊕  μ μ λ
+⌐  μ μ
+↓  ν @w2
+↓  ξ @b2
+×  ο μ ν
+⊕  ο ο ξ
+⌐  ο ο
+↓  π @w3
+↓  ρ @b3
+×  ς ο π
+⊕  ς ς ρ
+σ  ς ς
+↑  ς @anomaly_score
+◼

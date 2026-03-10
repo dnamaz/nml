@@ -1,0 +1,10 @@
+{
+  "name": "nml-terminal",
+  "dependencies": {
+    "react": "^19",
+    "react-dom": "^19",
+    "webview-bun": "^2.4.0"
+  },
+  "private": true,
+  "type": "module"
+}

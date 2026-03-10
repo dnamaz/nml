@@ -1,0 +1,50 @@
+; NML v0.6 M2M Extension Test Program
+
+; ═══ Extension 1: META (self-describing) ═══
+META  @name         "m2m_test"
+META  @version      "0.6.0"
+META  @domain       "test"
+META  @input        test_values    float
+META  @output       median_result  float
+META  @output       distance_result float
+META  @author       "nml_test_suite"
+
+; ═══ Extension 6: VOTE (consensus) ═══
+; Load test data: 5 agent results
+LD    R0 @test_values
+
+; Compute median
+VOTE  RA R0 #0
+
+; Compute mean
+VOTE  RB R0 #1
+
+; Compute quorum (3 must agree)
+VOTE  RE R0 #2 #3
+
+; Store consensus results
+ST    RA @median_result
+ST    RB @mean_result
+ST    RE @quorum_result
+
+; ═══ Extension 7: PROJ/DIST (latent space) ═══
+; Load feature vectors and projection matrix
+LD    R1 @features_a
+LD    R2 @features_b
+LD    R3 @proj_matrix
+
+; Project both into embedding space
+PROJ  R4 R1 R3
+PROJ  R5 R2 R3
+
+; Compute cosine distance
+DIST  R6 R4 R5 #0
+
+; Compute euclidean distance
+DIST  R7 R4 R5 #1
+
+; Store results
+ST    R6 @cosine_dist
+ST    R7 @euclidean_dist
+
+HALT

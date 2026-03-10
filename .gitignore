@@ -1,0 +1,45 @@
+# Domain-specific data, models, and code (not part of NML core)
+domain/
+
+# Generated output (audit logs, provenance, build artifacts)
+output/
+
+# Compiled binary (built from runtime/nml.c via make)
+/nml
+
+# Model weights (prevent accidental commits)
+*.safetensors
+*.bin
+*.gguf
+
+# Python
+*.pyc
+__pycache__/
+*.egg-info/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+serve/logs/
+
+# Cursor IDE workspace state
+.cursor/projects/
+.cursor/plans/
+
+# Agent transcripts
+agent-transcripts/
+
+# External integration docs (drafts, not part of NML core)
+docs/NanoLang_NML_Architecture.md
+docs/NML_VibOS_Architecture.md
+docs/NML_Multi_Agent_Implementation_Plan.md
+plans/NanoLang_NML_Integration_Plan.md
+plans/vibos-nml-collaboration-plan.md
+
+# Temp
+/tmp/

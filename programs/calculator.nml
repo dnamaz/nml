@@ -1,0 +1,38 @@
+; ═══════════════════════════════════════════
+; NML-G Interactive Calculator
+; ═══════════════════════════════════════════
+; Reads two numbers, computes sum/diff/product/quotient
+; Demonstrates: SYS #2 (READ_NUM), SYS #0 (PRINT_NUM)
+; Extension: NML-G (General Purpose)
+; ═══════════════════════════════════════════
+
+; Read first number
+SYS   R0 #2             ; read number → R0
+
+; Read second number
+SYS   R1 #2             ; read number → R1
+
+; Sum
+TACC  R2 R0 R1          ; R2 = a + b
+SYS   R2 #0             ; print sum
+
+; Difference
+MSUB  R3 R0 R1          ; R3 = a - b
+SYS   R3 #0             ; print difference
+
+; Product
+EMUL  R4 R0 R1          ; R4 = a * b
+SYS   R4 #0             ; print product
+
+; Quotient (with zero check)
+CMPI  RE R1 #0.0001     ; R1 < 0.0001? (near zero)
+JMPT  #3                ; skip division if near zero
+EDIV  R5 R0 R1          ; R5 = a / b
+SYS   R5 #0             ; print quotient
+JUMP  #2                ; skip error
+
+; Division by zero: print -1 as error sentinel
+LEAF  R5 #-1.0
+SYS   R5 #0
+
+HALT

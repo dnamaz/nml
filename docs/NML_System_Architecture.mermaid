@@ -1,0 +1,191 @@
+---
+title: "NML — Neural Machine Language: End-to-End Architecture"
+---
+
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor': '#00ffa3', 'primaryTextColor': '#0b0c10', 'primaryBorderColor': '#00ffa3', 'lineColor': '#4a4d62', 'secondaryColor': '#1c1e2a', 'tertiaryColor': '#0f1117', 'fontSize': '14px'}}}%%
+
+flowchart TB
+
+  %% ═══════════════════════════════════════
+  %% HUMAN LAYER
+  %% ═══════════════════════════════════════
+  subgraph HUMAN["🧠 HUMAN INTENT LAYER"]
+    direction LR
+    VOICE["Voice Input"]
+    TEXT["Text Input"]
+    GESTURE["Gesture / Sensor"]
+    VOICE --> INTENT
+    TEXT --> INTENT
+    GESTURE --> INTENT
+    INTENT["Intent\nExpression"]
+  end
+
+  %% ═══════════════════════════════════════
+  %% AI COMPILER LAYER
+  %% ═══════════════════════════════════════
+  subgraph COMPILER["🤖 AI COMPILER LAYER"]
+    direction TB
+
+    subgraph ROUTING["Intent Router"]
+      direction LR
+      CLASSIFY["Classify\nIntent Type"]
+      CLASSIFY -->|"Structured\nComputation"| NML_PATH["NML Path"]
+      CLASSIFY -->|"Creative /\nConversational"| LLM_PATH["LLM Path"]
+      CLASSIFY -->|"Both"| HYBRID["Hybrid"]
+    end
+
+    subgraph NML_GEN["NML Generation"]
+      direction LR
+      INTENT_MODEL["Intent-to-NML\nModel\n(100M-500M params)"]
+      TRANSPILER["Model\nTranspiler\n(XGBoost → NML)"]
+      VERIFIER["Formal\nVerifier"]
+      INTENT_MODEL --> VERIFIER
+      TRANSPILER --> VERIFIER
+    end
+
+    subgraph LLM_GEN["LLM Processing"]
+      direction LR
+      LOCAL_LLM["Local LLM\n(1B params\non-device)"]
+      CLOUD_LLM["Cloud LLM\n(large model)"]
+      UI_GEN["UI\nGenerator"]
+      LOCAL_LLM --> UI_GEN
+      CLOUD_LLM --> UI_GEN
+    end
+
+    ROUTING --> NML_GEN
+    ROUTING --> LLM_GEN
+  end
+
+  %% ═══════════════════════════════════════
+  %% TRAINING PIPELINE (offline)
+  %% ═══════════════════════════════════════
+  subgraph TRAINING["📊 TRAINING PIPELINE (Offline)"]
+    direction LR
+    DATA["Training\nData"]
+    PYTHON["Python\nXGBoost\nPyTorch\nsklearn"]
+    MODEL["Trained\nModel"]
+    EXPORT["NML\nTranspiler"]
+    NML_PROG["NML\nProgram"]
+    DATA --> PYTHON --> MODEL --> EXPORT --> NML_PROG
+  end
+
+  %% ═══════════════════════════════════════
+  %% NML RUNTIME
+  %% ═══════════════════════════════════════
+  subgraph RUNTIME["⚡ NML RUNTIME (30-38KB)"]
+    direction TB
+
+    subgraph CORE["Core ISA (28 instructions)"]
+      direction LR
+      NN_OPS["Neural Net\nMMUL MADD RELU\nSIGM SOFT TANH\n22 ops"]
+      TREE_OPS["Tree Models\nCMPF LEAF TACC\nJMPT JMPF JUMP\n6 ops"]
+    end
+
+    subgraph EXTENSIONS["Extension Modules (+12 instructions)"]
+      direction LR
+      EXT_V["NML-V Vision\nCONV POOL\nUPSC PADZ"]
+      EXT_T["NML-T Transformer\nATTN NORM\nEMBD GELU"]
+      EXT_R["NML-R Reduction\nRDUC WHER\nCLMP CMPR"]
+      EXT_S["NML-S Signal\nFFT FILT"]
+    end
+
+    ASSEMBLER["Assembler\n(text → binary)"]
+    VM["VM Engine\n(execute)"]
+    ASSEMBLER --> VM
+    CORE --> VM
+    EXTENSIONS --> VM
+  end
+
+  %% ═══════════════════════════════════════
+  %% PROTOCOL LAYER
+  %% ═══════════════════════════════════════
+  subgraph PROTOCOL["📡 NML PACKET PROTOCOL"]
+    direction LR
+
+    PACKET["NML Packet\n16B header\n+ instructions\n+ tensor data\n~6KB total"]
+
+    subgraph PATTERNS["Distribution Patterns"]
+      direction TB
+      DISPATCH["Dispatch\n1 → many workers"]
+      PIPELINE["Pipeline\nchain stages"]
+      FEDERATE["Federation\nparallel + aggregate"]
+    end
+
+    PACKET --> PATTERNS
+  end
+
+  %% ═══════════════════════════════════════
+  %% HARDWARE
+  %% ═══════════════════════════════════════
+  subgraph HARDWARE["🔧 HARDWARE TARGETS"]
+    direction LR
+    CPU["CPU\n(system)"]
+    AI_CHIP["AI Chip\n(inference\nmodel)"]
+    GPU["GPU/TPU\n(compute)"]
+    FPGA["FPGA\n(custom\nNML proc)"]
+    EDGE["Edge\nDevices\n(IoT/sensors)"]
+    CUSTOM["Custom\nSilicon\n(future)"]
+  end
+
+  %% ═══════════════════════════════════════
+  %% AI-FIRST OS
+  %% ═══════════════════════════════════════
+  subgraph OS["🖥️ AI-FIRST OS (Future)"]
+    direction LR
+    INTENT_MGR["Intent\nManager"]
+    OBJ_STORE["Semantic\nObject Store"]
+    CHAN_MGR["Channel\nManager"]
+    CAP_MGR["Capability\nManager"]
+    INTENT_MGR --- OBJ_STORE
+    OBJ_STORE --- CHAN_MGR
+    CHAN_MGR --- CAP_MGR
+  end
+
+  %% ═══════════════════════════════════════
+  %% OUTPUT
+  %% ═══════════════════════════════════════
+  subgraph OUTPUT["📤 OUTPUT"]
+    direction LR
+    RESULT["Computation\nResult"]
+    DISPLAY["Visual\nDisplay"]
+    ALERT["Alert /\nNotification"]
+    API_OUT["API /\nChannel\nResponse"]
+  end
+
+  %% ═══════════════════════════════════════
+  %% CONNECTIONS
+  %% ═══════════════════════════════════════
+  HUMAN --> COMPILER
+  COMPILER -->|"NML Program"| RUNTIME
+  COMPILER -->|"UI Markup"| OUTPUT
+  TRAINING -->|"Pre-built\nNML programs"| RUNTIME
+  RUNTIME -->|"Tensor results"| OUTPUT
+  RUNTIME -->|"NML Packets"| PROTOCOL
+  PROTOCOL -->|"Distribute"| HARDWARE
+  HARDWARE -->|"Execute"| RUNTIME
+  OS -->|"Manages"| RUNTIME
+  OS -->|"Manages"| PROTOCOL
+  PROTOCOL -->|"LLM ↔ LLM\nMachine ↔ Machine"| PROTOCOL
+
+  %% ═══════════════════════════════════════
+  %% STYLES
+  %% ═══════════════════════════════════════
+  classDef humanStyle fill:#1a1a2e,stroke:#00ffa3,stroke-width:2px,color:#c8cad4
+  classDef compilerStyle fill:#0f1117,stroke:#00e5ff,stroke-width:2px,color:#c8cad4
+  classDef runtimeStyle fill:#0f1117,stroke:#00ffa3,stroke-width:3px,color:#c8cad4
+  classDef protocolStyle fill:#1a1a2e,stroke:#ffcc00,stroke-width:2px,color:#c8cad4
+  classDef hardwareStyle fill:#1a1a2e,stroke:#ff6bef,stroke-width:2px,color:#c8cad4
+  classDef osStyle fill:#1a1a2e,stroke:#9b59b6,stroke-width:2px,color:#c8cad4
+  classDef outputStyle fill:#1a1a2e,stroke:#2ecc71,stroke-width:2px,color:#c8cad4
+  classDef trainingStyle fill:#1a1a2e,stroke:#e67e22,stroke-width:2px,color:#c8cad4
+  classDef nmlHighlight fill:#00ffa3,stroke:#00ffa3,stroke-width:2px,color:#0b0c10,font-weight:bold
+
+  class HUMAN humanStyle
+  class COMPILER compilerStyle
+  class RUNTIME runtimeStyle
+  class PROTOCOL protocolStyle
+  class HARDWARE hardwareStyle
+  class OS osStyle
+  class OUTPUT outputStyle
+  class TRAINING trainingStyle
+  class VM,CORE,EXTENSIONS nmlHighlight

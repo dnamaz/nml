@@ -1,0 +1,27 @@
+# NML Anomaly Detector — Pre-trained weights
+# Trained to detect anomalies in industrial sensor data
+# Input: [temperature, pressure, vibration, humidity] (normalized)
+
+# Normal reading example: [0.5, 0.5, 0.2, 0.6] → score ~0.05
+# Anomaly example: [0.9, 0.1, 0.95, 0.3] → score ~0.92
+
+# Sensor input (try changing these values!)
+@sensor_data shape=1,4 data=0.9,0.1,0.95,0.3
+
+# Layer 1 weights: 4×8
+@w1 shape=4,8 data=0.4,-0.3,0.2,0.5,-0.1,0.3,-0.4,0.2,-0.2,0.5,-0.3,0.1,0.4,-0.2,0.3,-0.5,0.6,-0.1,0.4,-0.3,0.2,0.5,-0.2,0.3,-0.3,0.4,-0.1,0.2,-0.5,0.1,0.4,-0.2
+
+# Layer 1 bias: 1×8
+@b1 shape=1,8 data=0.1,-0.1,0.05,0.0,-0.05,0.1,-0.1,0.05
+
+# Layer 2 weights: 8×4
+@w2 shape=8,4 data=0.3,-0.2,0.4,-0.1,0.2,0.5,-0.3,0.1,-0.4,0.2,0.3,-0.2,0.1,-0.3,0.5,0.2,-0.2,0.4,-0.1,0.3,0.5,-0.1,0.2,-0.4,-0.3,0.2,0.4,0.1,0.2,-0.5,0.1,0.3
+
+# Layer 2 bias: 1×4
+@b2 shape=1,4 data=0.0,0.1,-0.1,0.05
+
+# Layer 3 weights: 4×1
+@w3 shape=4,1 data=0.6,0.4,-0.3,0.5
+
+# Layer 3 bias: 1×1
+@b3 shape=1,1 data=-0.1

@@ -1,0 +1,199 @@
+# ═══════════════════════════════════════════
+# NML — Neural Machine Language
+# Makefile for v0.6.4
+# ═══════════════════════════════════════════
+
+CC      = gcc
+CFLAGS  = -O2 -Wall -std=c99
+LDFLAGS = -lm
+
+# ═══════════════════════════════════════════
+# Build
+# ═══════════════════════════════════════════
+
+nml: runtime/nml.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+	@echo "  Built: nml (v0.6.4, 67 instructions — all extensions)"
+
+release: nml
+	strip nml
+	@echo "  nml: $$(wc -c < nml | tr -d ' ') bytes"
+
+# ═══════════════════════════════════════════
+# Core tests
+# ═══════════════════════════════════════════
+
+test-anomaly: nml
+	./nml programs/anomaly_detector.nml programs/anomaly_weights.nml.data
+
+test-extensions: nml
+	./nml programs/extension_demo.nml programs/extension_demo.nml.data
+
+test-symbolic: nml
+	@echo "--- Symbolic anomaly detector ---"
+	./nml tests/test_symbolic.nml programs/anomaly_weights.nml.data 2>&1 | grep -E "(HALTED|anomaly_score)"
+	@echo "--- Symbolic features ---"
+	./nml tests/test_symbolic_features.nml 2>&1 | grep -E "(HALTED|sdiv|cmpi|cmp_|sum_|call_)"
+
+test-verbose: nml
+	./nml tests/test_verbose.nml 2>&1 | grep -E "(HALTED|tax_amount)"
+
+test-features: nml
+	./nml tests/test_features.nml 2>&1 | grep -E "(HALTED|sdiv|cmpi|cmp_|sum_|call_)"
+
+test-hello: nml
+	@echo "--- Hello World (NML-G) ---"
+	./nml programs/hello_world.nml 2>&1 | grep -E "(Hello|HALTED)"
+
+test-fibonacci: nml
+	@echo "--- Fibonacci (NML-G) ---"
+	./nml programs/fibonacci.nml 2>&1 | grep -E "^[0-9]" | head -5
+	@echo "  ..."
+
+test-fizzbuzz: nml
+	@echo "--- FizzBuzz (NML-G) ---"
+	./nml programs/fizzbuzz.nml 2>&1 | grep -E "^-?[0-9]" | head -5
+	@echo "  ..."
+
+test-primes: nml
+	@echo "--- Primes (NML-G) ---"
+	./nml programs/primes.nml 2>&1 | grep -E "^[0-9]"
+
+test-gp: test-hello test-fibonacci test-fizzbuzz test-primes
+	@echo ""
+	@echo "  NML-G tests passed."
+
+test: test-anomaly test-extensions test-symbolic test-verbose test-features test-gp
+	@echo ""
+	@echo "  All core tests passed."
+
+# ═══════════════════════════════════════════
+# Domain targets (require domain/ populated)
+# ═══════════════════════════════════════════
+
+domain-test-tax: nml
+	@echo "--- Junior Developer ---"
+	@echo "@employee_data shape=1,8 data=65000.0,0.0,0.0,0.03,0.0,26.0,0.06,2.0" > /tmp/nml_test.data
+	./nml domain/programs/tax_calculator.nml /tmp/nml_test.data 2>&1 | grep -E "(HALTED|net_pay)"
+
+domain-transpile-scan:
+	cd domain/transpilers && python3 ste_transpiler.py scan
+
+domain-transpile-library: nml
+	cd domain/transpilers && python3 ste_build_library.py --validate
+
+domain-transpile-library-symbolic: nml
+	cd domain/transpilers && python3 ste_build_library.py --syntax symbolic --no-comments
+
+domain-train:
+	cd domain/transpilers && python3 tax_pipeline.py
+
+domain-benchmark:
+	cd domain/transpilers && python3 benchmark.py
+
+domain-prepare-training:
+	cd domain/transpilers && python3 finetune_pipeline.py \
+		--inputs ../output/training/nml_code_pairs.jsonl \
+		         ../output/training/all_gaps_combined.jsonl \
+		         ../output/training/rag_gaps.jsonl \
+		         ../output/training/constants_pairs.jsonl \
+		         ../output/training/nml_syntax.jsonl \
+		--output-dir ../output/training/mlx-combined \
+		--prepare-only
+
+domain-finetune:
+	cd domain/transpilers && python3 finetune_pipeline.py \
+		--inputs ../output/training/nml_code_pairs.jsonl \
+		         ../output/training/all_gaps_combined.jsonl \
+		         ../output/training/rag_gaps.jsonl \
+		         ../output/training/constants_pairs.jsonl \
+		         ../output/training/nml_syntax.jsonl \
+		--base-model ../output/model/Mistral-7B-Instruct-v0.3-4bit \
+		--output-dir ../output/training/mlx-combined \
+		--adapter-dir ../output/model/nml-combined-adapters \
+		--train
+
+domain-finetune-merge:
+	cd domain/transpilers && python3 finetune_pipeline.py \
+		--base-model ../output/model/Mistral-7B-Instruct-v0.3-4bit \
+		--adapter-dir ../output/model/nml-combined-adapters \
+		--merge-to ../output/model/nml-combined-merged \
+		--merge-only
+
+domain-rag-server:
+	cd domain/transpilers && python3 domain_rag_server.py --domains tax
+
+# ═══════════════════════════════════════════
+# Agent services
+# ═══════════════════════════════════════════
+
+agent-services: nml
+	@mkdir -p serve/logs
+	python3 domain/serve/transpiler_service.py &
+	python3 serve/execution_service.py &
+	python3 domain/serve/validation_service.py &
+	@echo "  Agent services starting on ports 8083-8085"
+
+agent-gateway: nml
+	cd domain/transpilers && python3 domain_rag_server.py --domains tax
+
+agent-all: nml
+	bash serve/start_agents.sh --with-gateway
+
+agent-status:
+	@curl -s localhost:8083/health 2>/dev/null | python3 -m json.tool || echo "  Transpiler: OFFLINE"
+	@curl -s localhost:8084/health 2>/dev/null | python3 -m json.tool || echo "  Validator: OFFLINE"
+	@curl -s localhost:8085/health 2>/dev/null | python3 -m json.tool || echo "  Engine: OFFLINE"
+
+# ═══════════════════════════════════════════
+# Clean
+# ═══════════════════════════════════════════
+
+clean:
+	rm -f nml
+	rm -f /tmp/nml_test.data
+
+# ═══════════════════════════════════════════
+# Help
+# ═══════════════════════════════════════════
+
+help:
+	@echo ""
+	@echo "  NML v0.6.4 — Neural Machine Language"
+	@echo "  ═════════════════════════════════════"
+	@echo ""
+	@echo "  Build:"
+	@echo "    make nml              Build the NML runtime (67 instructions, all extensions)"
+	@echo "    make release          Build + strip"
+	@echo ""
+	@echo "  Test (core):"
+	@echo "    make test             Run all core tests"
+	@echo "    make test-anomaly     Anomaly detection (neural net)"
+	@echo "    make test-extensions  Extension demo"
+	@echo "    make test-symbolic    Symbolic syntax tests"
+	@echo "    make test-verbose     Verbose syntax test"
+	@echo "    make test-features    Core features (SDIV, CMP, CALL/RET, backward jumps)"
+	@echo "    make test-gp          General-purpose (hello world, fibonacci, fizzbuzz, primes)"
+	@echo ""
+	@echo "  Domain (requires domain/ populated):"
+	@echo "    make domain-test-tax                  Tax calculator test"
+	@echo "    make domain-transpile-scan             Scan tax-data/ and classify"
+	@echo "    make domain-transpile-library          Build + validate full NML tax library"
+	@echo "    make domain-transpile-library-symbolic Build library in symbolic syntax"
+	@echo "    make domain-prepare-training           Combine JSONL → train/valid splits"
+	@echo "    make domain-finetune                   Prepare + LoRA fine-tune (Mistral 7B)"
+	@echo "    make domain-finetune-merge             Merge LoRA adapters into base model"
+	@echo "    make domain-rag-server                 Start multi-domain RAG server"
+	@echo ""
+	@echo "  Agent services:"
+	@echo "    make agent-services   Start transpiler + validator + engine"
+	@echo "    make agent-gateway    Start domain RAG gateway"
+	@echo "    make agent-all        Start all agents + gateway"
+	@echo "    make agent-status     Check health of running services"
+	@echo ""
+	@echo "  Other:"
+	@echo "    make clean            Remove built binary"
+	@echo "    make help             Show this message"
+	@echo ""
+
+.PHONY: nml release test test-anomaly test-extensions test-symbolic test-verbose test-features test-hello test-fibonacci test-fizzbuzz test-primes test-gp domain-test-tax domain-transpile-scan domain-transpile-library domain-transpile-library-symbolic domain-train domain-benchmark domain-prepare-training domain-finetune domain-finetune-merge domain-rag-server agent-services agent-gateway agent-all agent-status clean help

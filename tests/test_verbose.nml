@@ -1,0 +1,16 @@
+; NML Verbose Syntax Test — Human-Readable
+; Same tax bracket calculation in all three syntaxes
+
+; === Verbose: load and compute ===
+SET_VALUE    ACCUMULATOR #0.0
+SET_VALUE    SCRATCH #100000.0
+COMPARE_VALUE FLAG SCRATCH #176100.0    ; income < wage base?
+BRANCH_TRUE  #4
+SET_VALUE    SCRATCH #176100.0
+SCALE        SCRATCH SCRATCH #0.062
+ACCUMULATE   ACCUMULATOR ACCUMULATOR SCRATCH
+JUMP         #2
+SCALE        SCRATCH SCRATCH #0.062
+ACCUMULATE   ACCUMULATOR ACCUMULATOR SCRATCH
+STORE        ACCUMULATOR @tax_amount
+STOP
