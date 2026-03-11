@@ -32,9 +32,8 @@ Thumbs.db
 # Logs
 serve/logs/
 
-# Cursor IDE workspace state
-.cursor/projects/
-.cursor/plans/
+# Cursor IDE (workspace state, skills, MCP config)
+.cursor/
 
 # Agent transcripts
 agent-transcripts/
