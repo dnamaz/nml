@@ -2077,18 +2077,20 @@ static int vm_execute(VM *vm) {
 
             /* Heap-allocate: batch-sized working buffers + weight-sized gradient/Adam buffers */
             size_t bh = (size_t)B * H, kh = (size_t)K * H;
-            size_t need = 3 * bh + 2 * (size_t)B + (size_t)H + kh;
-            if (use_adam) need += 2 * kh + 2 * (size_t)H;
+            size_t need = 3 * bh + 2 * (size_t)B + 2 * (size_t)H + kh;
+            if (use_adam) need += 2 * kh + 4 * (size_t)H;
             double *buf = (double *)calloc(need, sizeof(double));
             if (!buf) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET: alloc failed (%zu doubles)", need);
 
             double *pre_h = buf, *hidden = pre_h + bh, *d_hidden = hidden + bh;
             double *out_buf = d_hidden + bh, *d_out = out_buf + B;
-            double *d_w2 = d_out + B, *d_w1 = d_w2 + H;
+            double *d_w2 = d_out + B, *d_b1 = d_w2 + H, *d_w1 = d_b1 + H;
             double *m_w1 = NULL, *v_w1 = NULL, *m_w2 = NULL, *v_w2 = NULL;
+            double *m_b1 = NULL, *v_b1 = NULL;
             if (use_adam) {
                 m_w1 = d_w1 + kh; v_w1 = m_w1 + kh;
                 m_w2 = v_w1 + kh;  v_w2 = m_w2 + H;
+                m_b1 = v_w2 + H;   v_b1 = m_b1 + H;
             }
             double m_b2 = 0, v_b2 = 0;
             const double BETA1 = 0.9, BETA2 = 0.999, EPS = 1e-8;
@@ -2153,6 +2155,14 @@ static int vm_execute(VM *vm) {
                             d_w1[p * H + j] = sum;
                         }
 
+                    /* d_b1 = sum(d_hidden, axis=0) */
+                    for (int j = 0; j < H; j++) {
+                        double sum = 0;
+                        for (int i = 0; i < Bn; i++)
+                            sum += d_hidden[i * H + j];
+                        d_b1[j] = sum;
+                    }
+
                     /* Weight update (per mini-batch) */
                     if (use_adam) {
                         adam_t++;
@@ -2166,6 +2176,11 @@ static int vm_execute(VM *vm) {
                         m_b2 = BETA1 * m_b2 + (1 - BETA1) * d_b2_val;
                         v_b2 = BETA2 * v_b2 + (1 - BETA2) * d_b2_val * d_b2_val;
                         tensor_setd(bias2, 0, tensor_getd(bias2, 0) - lr * (m_b2 / bc1) / (sqrt(v_b2 / bc2) + EPS));
+                        for (int j = 0; j < H; j++) {
+                            m_b1[j] = BETA1 * m_b1[j] + (1 - BETA1) * d_b1[j];
+                            v_b1[j] = BETA2 * v_b1[j] + (1 - BETA2) * d_b1[j] * d_b1[j];
+                            tensor_setd(bias1, j, tensor_getd(bias1, j) - lr * (m_b1[j] / bc1) / (sqrt(v_b1[j] / bc2) + EPS));
+                        }
                         for (int idx = 0; idx < K * H; idx++) {
                             m_w1[idx] = BETA1 * m_w1[idx] + (1 - BETA1) * d_w1[idx];
                             v_w1[idx] = BETA2 * v_w1[idx] + (1 - BETA2) * d_w1[idx] * d_w1[idx];
@@ -2175,6 +2190,8 @@ static int vm_execute(VM *vm) {
                         for (int j = 0; j < H; j++)
                             tensor_setd(w2, j, tensor_getd(w2, j) - lr * d_w2[j]);
                         tensor_setd(bias2, 0, tensor_getd(bias2, 0) - lr * d_b2_val);
+                        for (int j = 0; j < H; j++)
+                            tensor_setd(bias1, j, tensor_getd(bias1, j) - lr * d_b1[j]);
                         for (int idx = 0; idx < K * H; idx++)
                             tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * d_w1[idx]);
                     }
