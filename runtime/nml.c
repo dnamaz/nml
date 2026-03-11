@@ -1683,7 +1683,7 @@ static int vm_execute(VM *vm) {
             }
 
             /* Tree model */
-            case OP_CMPF: { Tensor *t=&REG(ins->reg[1]); int fi=ins->feat_idx; float val=(fi<t->size)?t->data.f32[fi]:0.0f; vm->cond_flag=(val<ins->imm)?1:0; break; }
+            case OP_CMPF: { Tensor *t=&REG(ins->reg[1]); int fi=ins->feat_idx; double val=(fi<t->size)?tensor_getd(t,fi):0.0; vm->cond_flag=(val<ins->imm)?1:0; break; }
             case OP_LEAF: { int s[]={1}; tensor_init_typed(&REG(ins->reg[0]),1,s,NML_F64); tensor_setd(&REG(ins->reg[0]),0,ins->imm); RVALID(ins->reg[0])=1; break; }
             case OP_TACC: { double a=RVALID(ins->reg[1])?tensor_getd(&REG(ins->reg[1]),0):0; double b=RVALID(ins->reg[2])?tensor_getd(&REG(ins->reg[2]),0):0; int s[]={1}; DType dt=dtype_promote(REG(ins->reg[1]).dtype,REG(ins->reg[2]).dtype); tensor_init_typed(&REG(ins->reg[0]),1,s,dt); tensor_setd(&REG(ins->reg[0]),0,a+b); RVALID(ins->reg[0])=1; break; }
 
