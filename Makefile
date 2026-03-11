@@ -13,7 +13,16 @@ LDFLAGS = -lm
 
 nml: runtime/nml.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
-	@echo "  Built: nml (v0.7.0, 70 instructions, 32 registers — all extensions)"
+	@echo "  Built: nml (v0.7.0, 70 instructions, 32 registers — portable)"
+
+nml-fast: runtime/nml.c
+ifeq ($(shell uname),Darwin)
+	$(CC) -O3 -march=native -std=c99 -DNML_USE_ACCELERATE -DACCELERATE_NEW_LAPACK -o $@ $< -lm -framework Accelerate
+	@echo "  Built: nml-fast (v0.7.0, BLAS via Apple Accelerate)"
+else
+	$(CC) -O3 -march=native -std=c99 -DNML_USE_OPENBLAS -o $@ $< -lm -lopenblas
+	@echo "  Built: nml-fast (v0.7.0, BLAS via OpenBLAS)"
+endif
 
 release: nml
 	strip nml

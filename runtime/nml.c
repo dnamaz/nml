@@ -46,6 +46,15 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+
+/* BLAS acceleration (optional) */
+#ifdef NML_USE_ACCELERATE
+  #include <Accelerate/Accelerate.h>
+  #define NML_HAS_BLAS 1
+#elif defined(NML_USE_OPENBLAS)
+  #include <cblas.h>
+  #define NML_HAS_BLAS 1
+#endif
 #include <string.h>
 #include <strings.h>
 #include <math.h>
@@ -251,12 +260,27 @@ static int tensor_matmul(Tensor *out, const Tensor *a, const Tensor *b) {
     Tensor *dest = (out == a || out == b) ? &tmp : out;
     int rc = tensor_init_typed(dest, 2, shape, dt);
     if (rc) return rc;
-    for (int i = 0; i < m; i++)
-        for (int j = 0; j < n; j++) {
-            double sum = 0.0;
-            for (int p = 0; p < k1; p++) sum += tensor_getd(a, i*k1+p) * tensor_getd(b, p*n+j);
-            tensor_setd(dest, i*n+j, sum);
-        }
+
+#ifdef NML_HAS_BLAS
+    if (dt == NML_F64 && a->dtype == NML_F64 && b->dtype == NML_F64) {
+        cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    m, n, k1, 1.0, a->data.f64, k1, b->data.f64, n,
+                    0.0, dest->data.f64, n);
+    } else if (dt == NML_F32 && a->dtype == NML_F32 && b->dtype == NML_F32) {
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    m, n, k1, 1.0f, a->data.f32, k1, b->data.f32, n,
+                    0.0f, dest->data.f32, n);
+    } else
+#endif
+    {
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < n; j++) {
+                double sum = 0.0;
+                for (int p = 0; p < k1; p++) sum += tensor_getd(a, i*k1+p) * tensor_getd(b, p*n+j);
+                tensor_setd(dest, i*n+j, sum);
+            }
+    }
+
     if (dest == &tmp) *out = tmp;
     return NML_OK;
 }
@@ -301,20 +325,20 @@ static int tensor_ediv(Tensor *out, const Tensor *a, const Tensor *b) {
     return NML_OK;
 }
 
-static void tensor_scale(Tensor *out, const Tensor *a, float s) {
+static void tensor_scale(Tensor *out, const Tensor *a, double s) {
     tensor_copy(out, a);
     for (int i = 0; i < a->size; i++) tensor_setd(out, i, tensor_getd(a, i) * s);
 }
 
-static int tensor_scale_div(Tensor *out, const Tensor *a, float s) {
-    if (s == 0.0f) return NML_ERR_DIVZERO;
+static int tensor_scale_div(Tensor *out, const Tensor *a, double s) {
+    if (s == 0.0) return NML_ERR_DIVZERO;
     tensor_copy(out, a);
     for (int i = 0; i < a->size; i++) tensor_setd(out, i, tensor_getd(a, i) / s);
     return NML_OK;
 }
 
-static float tensor_dot(const Tensor *a, const Tensor *b) {
-    float sum = 0.0f;
+static double tensor_dot(const Tensor *a, const Tensor *b) {
+    double sum = 0.0;
     for (int i = 0; i < a->size; i++) sum += tensor_getd(a, i) * tensor_getd(b, i);
     return sum;
 }
