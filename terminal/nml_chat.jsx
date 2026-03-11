@@ -19,6 +19,45 @@ const COLORS = {
   userBorder: "#1a1a3e",
 };
 
+const NML_OPCODES = new Set([
+  "MMUL","MADD","MSUB","EMUL","EDIV","SDOT","DOT","SCLR","SDIV",
+  "RELU","SIGM","TANH","SOFT","GELU",
+  "LD","ST","MOV","ALLC","RSHP","TRNS","SPLT","MERG",
+  "CMPF","CMP","CMPI","JMPT","JMPF","JUMP","JMP","LOOP","ENDP",
+  "CALL","RET","LEAF","TACC","SYNC","HALT","TRAP",
+  "CONV","POOL","UPSC","PADZ","ATTN","NORM","EMBD",
+  "RDUC","WHER","CLMP","CMPR","FFT","FILT",
+  "META","FRAG","ENDF","LINK","VOTE","PROJ","DIST","GATH","SCAT","SCTR",
+  "SYS","MOD","ITOF","FTOI","BNOT","SIGN","VRFY","PTCH",
+]);
+const NML_SYMBOLIC = new Set([
+  "×","⊕","⊖","⊗","⊘","·","∗","÷","⌐","σ","τ","Σ","ℊ",
+  "↓","↑","←","□","⊞","⊤","⊢","⊣","⋈","≶","≺","ϟ",
+  "↗","↘","→","↻","↺","∎","∑","⇒","⇐","⏸","◼","⚠",
+  "⊛","⊓","⊔","⊡","⊙","‖","⊏","⊥","ϛ","⊻","⊧","⊜",
+  "∿","⋐","§","◆","◇","⚖","✦","✓","⟐","⟂","⊃","⊂","⚙",
+]);
+
+function isNMLCode(text) {
+  const lines = text.trim().split("\n").filter(l => l.trim() && !l.trim().startsWith(";"));
+  if (lines.length === 0) return false;
+  let nmlLines = 0;
+  for (const line of lines) {
+    const firstToken = line.trim().split(/\s+/)[0];
+    if (NML_OPCODES.has(firstToken) || NML_OPCODES.has(firstToken.toUpperCase()) || NML_SYMBOLIC.has(firstToken)) {
+      nmlLines++;
+    }
+  }
+  return nmlLines >= lines.length * 0.5 && nmlLines >= 2;
+}
+
+function _looksLikeNML(line) {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith(";")) return true;
+  const first = trimmed.split(/\s+/)[0];
+  return NML_OPCODES.has(first) || NML_OPCODES.has(first.toUpperCase()) || NML_SYMBOLIC.has(first);
+}
+
 function renderMarkdown(text) {
   const lines = text.split("\n");
   const result = [];
@@ -46,7 +85,36 @@ function renderMarkdown(text) {
   if (inCode && codeLines.length) {
     result.push({ type: "code", content: codeLines.join("\n") });
   }
-  return result;
+
+  // Second pass: detect consecutive NML lines in text blocks and group them as code
+  const merged = [];
+  let nmlBuf = [];
+
+  const flushNML = () => {
+    if (nmlBuf.length >= 2) {
+      merged.push({ type: "code", content: nmlBuf.join("\n") });
+    } else {
+      for (const l of nmlBuf) merged.push({ type: "text", content: l });
+    }
+    nmlBuf = [];
+  };
+
+  for (const block of result) {
+    if (block.type === "code") {
+      flushNML();
+      merged.push(block);
+      continue;
+    }
+    if (_looksLikeNML(block.content)) {
+      nmlBuf.push(block.content);
+    } else {
+      flushNML();
+      merged.push(block);
+    }
+  }
+  flushNML();
+
+  return merged;
 }
 
 function MessageContent({ text }) {
@@ -245,38 +313,6 @@ function CopyButton({ text }) {
       {copied ? "COPIED" : "COPY"}
     </button>
   );
-}
-
-const NML_OPCODES = new Set([
-  "MMUL","MADD","MSUB","EMUL","EDIV","SDOT","DOT","SCLR","SDIV",
-  "RELU","SIGM","TANH","SOFT","GELU",
-  "LD","ST","MOV","ALLC","RSHP","TRNS","SPLT","MERG",
-  "CMPF","CMP","CMPI","JMPT","JMPF","JUMP","JMP","LOOP","ENDP",
-  "CALL","RET","LEAF","TACC","SYNC","HALT","TRAP",
-  "CONV","POOL","UPSC","PADZ","ATTN","NORM","EMBD",
-  "RDUC","WHER","CLMP","CMPR","FFT","FILT",
-  "META","FRAG","ENDF","LINK","VOTE","PROJ","DIST","GATH","SCAT","SCTR",
-  "SYS","MOD","ITOF","FTOI","BNOT","SIGN","VRFY","PTCH",
-]);
-const NML_SYMBOLIC = new Set([
-  "×","⊕","⊖","⊗","⊘","·","∗","÷","⌐","σ","τ","Σ","ℊ",
-  "↓","↑","←","□","⊞","⊤","⊢","⊣","⋈","≶","≺","ϟ",
-  "↗","↘","→","↻","↺","∎","∑","⇒","⇐","⏸","◼","⚠",
-  "⊛","⊓","⊔","⊡","⊙","‖","⊏","⊥","ϛ","⊻","⊧","⊜",
-  "∿","⋐","§","◆","◇","⚖","✦","✓","⟐","⟂","⊃","⊂","⚙",
-]);
-
-function isNMLCode(text) {
-  const lines = text.trim().split("\n").filter(l => l.trim() && !l.trim().startsWith(";"));
-  if (lines.length === 0) return false;
-  let nmlLines = 0;
-  for (const line of lines) {
-    const firstToken = line.trim().split(/\s+/)[0];
-    if (NML_OPCODES.has(firstToken) || NML_OPCODES.has(firstToken.toUpperCase()) || NML_SYMBOLIC.has(firstToken)) {
-      nmlLines++;
-    }
-  }
-  return nmlLines >= lines.length * 0.5 && nmlLines >= 2;
 }
 
 function RunButton({ code }) {
