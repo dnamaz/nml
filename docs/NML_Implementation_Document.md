@@ -2,7 +2,7 @@
 
 ## What Was Built
 
-This document describes the complete implementation of the NML (Neural Machine Language) system: a 67-instruction machine language for AI workloads with a ~51KB C runtime, three transpiler pipelines (XGBoost, deterministic rules, and domain rule transpilation), a tri-syntax system (classic/symbolic/verbose), a training data generator for LLM fine-tuning, and a general-purpose extension (NML-G) enabling console I/O and integer math.
+This document describes the complete implementation of the NML (Neural Machine Language) system: a 71-instruction machine language for AI workloads with a ~51KB C runtime, three transpiler pipelines (XGBoost, deterministic rules, and domain rule transpilation), a tri-syntax system (classic/symbolic/verbose), a training data generator for LLM fine-tuning, and a general-purpose extension (NML-G) enabling console I/O and integer math.
 
 ---
 
@@ -34,7 +34,7 @@ flowchart TD
     end
 
     subgraph runtime [NML Runtime]
-        NMLFull["nml (full) — ~68 KB, 67 instructions"]
+        NMLFull["nml (full) — ~68 KB, 71 instructions"]
         NMLCore["nml-core — ~50 KB, 35 instructions"]
         NMLGP["nml-gp — ~68 KB, expanded limits"]
     end
@@ -88,9 +88,9 @@ flowchart TD
 
 | Binary | Instructions | Size (stripped) | Build |
 |--------|-------------|-----------------|-------|
-| `nml` | 67 (35 core + 14 ext + 13 M2M + 5 GP) | ~68 KB | `make` |
+| `nml` | 71 (35 core + 14 ext + 13 M2M + 5 GP + 4 TR) | ~68 KB | `make` |
 | `nml-core` | 35 (core only) | ~50 KB | `make nml-core` |
-| `nml-gp` | 67 (expanded limits for GP programs) | ~68 KB | `make nml-gp` |
+| `nml-gp` | 71 (expanded limits for GP programs) | ~68 KB | `make nml-gp` |
 
 ```bash
 make all       # Build full + core binaries
@@ -136,7 +136,7 @@ graph LR
     end
 ```
 
-All 67 instructions support three syntax forms: classic (MMUL), symbolic (×), and verbose (MATRIX_MULTIPLY).
+All 71 instructions support three syntax forms: classic (MMUL), symbolic (×), and verbose (MATRIX_MULTIPLY).
 
 ### Register File
 
@@ -302,8 +302,8 @@ Net pay (annual): $86,906.36
 ```mermaid
 flowchart TD
     subgraph core [NML Core]
-        Runtime["C Runtime\nnml.c — ~1,900 lines\n67 instructions, ~68 KB\nTri-syntax: classic | symbolic | verbose"]
-        Spec["NML Spec v0.6.2\n35 core + 14 ext + 13 M2M + 5 GP"]
+        Runtime["C Runtime\nnml.c — ~1,900 lines\n71 instructions, ~68 KB\nTri-syntax: classic | symbolic | verbose"]
+        Spec["NML Spec v0.7.0\n35 core + 14 ext + 13 M2M + 5 GP + 4 TR"]
     end
 
     subgraph transpilers [Transpilers]
@@ -328,7 +328,7 @@ flowchart TD
 | Metric | Value |
 |--------|-------|
 | NML runtime size (stripped) | ~68 KB (full), ~50 KB (core) |
-| NML vocabulary | ~67 symbols (classic) + symbolic + verbose aliases |
+| NML vocabulary | ~71 symbols (classic) + symbolic + verbose aliases |
 | Token count (typical NN program) | 20–50 tokens |
 | Inference time (XGBoost, 20 trees) | 88 µs |
 | Inference time (FIT bracket lookup) | 145 µs |
@@ -479,7 +479,7 @@ make nml-gp    # Build with expanded resource limits
 
 | Binary | Instructions | Description |
 |--------|-------------|-------------|
-| `nml-gp` | 67 (35 core + 14 ext + 13 M2M + 5 GP) | Full runtime with expanded limits |
+| `nml-gp` | 71 (35 core + 14 ext + 13 M2M + 5 GP + 4 TR) | Full runtime with expanded limits |
 
 ### New Instructions
 
@@ -534,3 +534,18 @@ gcc -O2 -o nml-gp nml.c -lm \
 4. **Full golden test generation** — Expand regression suite to cover all transpiled rule files.
 5. **Cross-model federation** — Test agent pipeline with multiple LLM backends (Mistral, Llama, Phi).
 6. **Self-improving feedback loop** — Use explanation agent outputs as training data for the regulation parser.
+
+---
+
+## Component 9: NML v0.7.0 — Training Extension
+
+NML v0.7.0 extends the register file to 32 registers (R0–RV) and adds 4 training opcodes (BKWD, WUPD, LOSS, TNET) that enable self-training capability within NML programs. The extended register file dedicates RG–RI for gradient tensors, RJ for learning rate, and RK–RV for training workspace and hive collective operations. Optional BLAS acceleration is available for matrix operations during training via compile flag `-DNML_USE_BLAS`.
+
+### New Instructions
+
+| Instruction | Symbolic | Description |
+|---|---|---|
+| `BKWD Rd Rs Rtarget` | `∇` | Backpropagation: compute gradient of loss w.r.t. Rs into Rd |
+| `WUPD Rd Rs Rgrad [Rlr]` | `⟳` | Weight update: Rd = Rs - lr * Rgrad |
+| `LOSS Rd Rs Rtarget [#mode]` | `△` | Loss computation (0=MSE, 1=cross-entropy, 2=MAE) |
+| `TNET #epochs #lr [#seed]` | `⥁` | Self-training loop using R1–R4 as network, R0 as input, R9 as target |

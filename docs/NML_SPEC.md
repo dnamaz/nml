@@ -1,4 +1,4 @@
-# NML — Neural Machine Language Specification v0.6.3
+# NML — Neural Machine Language Specification v0.7.0
 
 ## Overview
 
@@ -8,7 +8,7 @@ NML is a minimal machine language designed for AI workloads. It supports neural 
 
 1. **One way to do everything** — no syntactic ambiguity
 2. **Fixed-width opcodes** — every opcode is exactly 4 characters (or fewer)
-3. **Register-based** — 16 tensor registers (R0–RF)
+3. **Register-based** — 32 tensor registers (R0–RV)
 4. **Typed operands** — registers, immediates, addresses
 5. **No implicit behavior** — every side effect is explicit
 6. **Model-agnostic** — supports neural networks, decision trees, and gradient boosted ensembles
@@ -24,8 +24,13 @@ NML is a minimal machine language designed for AI workloads. It supports neural 
 | RD | Counter | Loop counter |
 | RE | Flag | Condition flag (set by CMPF, CMP, CMPI) |
 | RF | Stack | Stack pointer |
+| RG | Gradient1 | Gradient tensor (backpropagation) |
+| RH | Gradient2 | Gradient tensor (backpropagation) |
+| RI | Gradient3 | Gradient tensor (backpropagation) |
+| RJ | LearningRate | Learning rate scalar |
+| RK–RV | Training/Hive | Training workspace and hive collective registers (12) |
 
-## Instruction Set (35 Core + 14 Extensions + 13 M2M + 5 General = 67 Total)
+## Instruction Set (35 Core + 14 Extensions + 13 M2M + 5 General + 4 Training = 71 Total)
 
 ### Arithmetic (8 instructions)
 ```
@@ -136,17 +141,32 @@ FFT   Rd_real Rd_imag Rs           — Discrete Fourier Transform
 FILT  Rd Rs Rs_coeffs              — FIR filter (1D convolution)
 ```
 
+### Extension: NML-TR — Training (4 instructions)
+```
+BKWD  Rd Rs Rtarget               — Backpropagation: compute gradient of loss w.r.t. Rs into Rd
+WUPD  Rd Rs Rgrad [Rlr]           — Weight update: Rd = Rs - lr * Rgrad (default lr from RJ)
+LOSS  Rd Rs Rtarget [#mode]       — Loss computation: mode 0=MSE (default), 1=cross-entropy, 2=MAE
+TNET  #epochs #lr [#seed]         — Self-training loop: train network in R1-R8 for N epochs at learning rate lr
+```
+
+TNET performs end-to-end training using the current register state as the network:
+- R1–R4: weight/bias pairs for up to 2 layers (w1, b1, w2, b2)
+- R0: input data
+- R9: target labels
+- RJ: set to the provided learning rate
+- RA: final prediction after training completes
+
 ## Encoding Format
 
 Each instruction encodes to a fixed 32-bit word:
 
 ```
-[OPCODE: 6 bits][Rd: 4 bits][Rs1: 4 bits][Rs2/imm: 18 bits]
+[OPCODE: 7 bits][Rd: 5 bits][Rs1: 5 bits][Rs2/imm: 15 bits]
 ```
 
-- 6-bit opcode → supports up to 64 instructions
-- 4-bit register fields → 16 registers
-- 18-bit immediate → shapes, addresses, scalar values
+- 7-bit opcode → supports up to 128 instructions
+- 5-bit register fields → 32 registers
+- 15-bit immediate → shapes, addresses, scalar values
 
 ## Data File Format (.nml.data)
 
@@ -167,7 +187,7 @@ Example:
 
 | Resource | Default | Configurable | Compile Flag |
 |----------|---------|-------------|--------------|
-| Registers | 16 | No | — |
+| Registers | 32 | No | — |
 | Max tensor elements | 65,536 | Yes (v0.6.2+) | `-DNML_MAX_TENSOR_SIZE=N` |
 | Max instructions | 8,192 | Yes (v0.6.2+) | `-DNML_MAX_INSTRUCTIONS=N` |
 | Max memory slots | 64 | Yes (v0.6.2+) | `-DNML_MAX_MEMORY_SLOTS=N` |
@@ -357,10 +377,14 @@ NML supports a dual-syntax system: every opcode and register has both a classic 
 | `CMPR` | `⊜` | U+229C | NML-R |
 | `FFT` | `∿` | U+223F | NML-S |
 | `FILT` | `⋐` | U+22D0 | NML-S |
+| `BKWD` | `∇` | U+2207 | NML-TR |
+| `WUPD` | `⟳` | U+27F3 | NML-TR |
+| `LOSS` | `△` | U+25B3 | NML-TR |
+| `TNET` | `⥁` | U+2941 | NML-TR |
 
 ### Greek Register Aliases
 
-All 16 registers have Greek letter aliases:
+All 32 registers have Greek letter aliases:
 
 | Index | Classic | Greek | Letter | Purpose |
 |-------|---------|-------|--------|---------|
@@ -380,6 +404,14 @@ All 16 registers have Greek letter aliases:
 | 13 | `RD` | `δ` | delta | Counter |
 | 14 | `RE` | `φ` | phi | Condition flag |
 | 15 | `RF` | `ψ` | psi | Stack pointer |
+| 16 | `RG` | `η` | eta | Gradient1 |
+| 17 | `RH` | `θ` | theta | Gradient2 |
+| 18 | `RI` | `ζ` | zeta | Gradient3 |
+| 19 | `RJ` | `ω` | omega | LearningRate |
+| 20 | `RK` | `χ` | chi | Training/Hive |
+| 21 | `RL` | `υ` | upsilon | Training/Hive |
+| 22 | `RM` | `ε` | epsilon | Training/Hive |
+| 23–31 | `RN`–`RV` | — | — | Training/Hive |
 
 ### Example: Anomaly Detector in Symbolic Syntax
 
@@ -443,6 +475,10 @@ A third syntax tier uses full English words, optimized for auditability and self
 | `RET` | `RETURN` | System |
 | `TRAP` | `FAULT` | System |
 | `SYNC` | `BARRIER` | System |
+| `BKWD` | `BACKPROPAGATE` | Training |
+| `WUPD` | `WEIGHT_UPDATE` | Training |
+| `LOSS` | `COMPUTE_LOSS` | Training |
+| `TNET` | `TRAIN_NETWORK` | Training |
 
 Verbose register aliases for named registers:
 
@@ -454,6 +490,11 @@ Verbose register aliases for named registers:
 | `RD` | `COUNTER` | `CTR` |
 | `RE` | `FLAG` | `FLG` |
 | `RF` | `STACK` | `STK` |
+| `RG` | `GRADIENT1` | `GRD1` |
+| `RH` | `GRADIENT2` | `GRD2` |
+| `RI` | `GRADIENT3` | `GRD3` |
+| `RJ` | `LEARNING_RATE` | `LR` |
+| `RK`–`RV` | `TRAINING_K`–`TRAINING_V` | `TRK`–`TRV` |
 
 ### Tri-Syntax Comparison
 
@@ -720,6 +761,7 @@ Build with NML-G disabled: `gcc -DNML_NO_GENERAL -o nml nml.c -lm`
 | v0.6.2 | 35 | 14 + 13 M2M + 5 GP | 67 | NML-G general-purpose extension: SYS (multiplexed I/O — print, read, time, rand, exit), MOD (integer modulo), ITOF/FTOI (type conversion), BNOT (bitwise NOT); configurable resource limits via compile flags; CMP operand count fix |
 | v0.6.3 | 35 | 14 + 13 M2M + 5 GP | 67 | Compact form: `¶` (U+00B6, pilcrow) as native instruction delimiter for single-line NML; runtime parses both `\n` and `¶`; `nml_format.py` CLI for compact/format conversion; MCP toolchain server with 9 tools (spec_lookup, transpile, validate, execute, library_lookup, scan, intent, compact, format) |
 | v0.6.4 | 35 | 14 + 13 M2M + 5 GP | 67 | Alternative aliases for LLM trainability: `ϟ` (Greek koppa) for CMPI, `ϛ` (Greek stigma) for RDUC, `DOT` for SDOT, `SCTR` for SCAT (Rd-first order); bare number tolerance on JUMP/JMPT/JMPF/CALL |
+| v0.7.0 | 35 | 14 + 13 M2M + 5 GP + 4 TR | 71 | 32 registers (R0–RV); NML-TR training extension: BKWD (backpropagation), WUPD (weight update), LOSS (loss computation), TNET (self-training loop); optional BLAS acceleration |
 
 ## Alternative Aliases (v0.6.4)
 

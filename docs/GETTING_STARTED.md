@@ -42,7 +42,7 @@ This program sets R0 to 10, R1 to 3, adds them into the accumulator (RA), stores
 
 ### Registers
 
-NML has 16 tensor registers. Each register holds an entire tensor (scalar, vector, or matrix).
+NML has 32 tensor registers. Each register holds an entire tensor (scalar, vector, or matrix).
 
 | Register | Purpose |
 |----------|---------|
@@ -53,6 +53,11 @@ NML has 16 tensor registers. Each register holds an entire tensor (scalar, vecto
 | RD | Loop counter |
 | RE | Condition flag (set by CMP/CMPI/CMPF) |
 | RF | Stack pointer |
+| RG | Gradient1 (backpropagation) |
+| RH | Gradient2 (backpropagation) |
+| RI | Gradient3 (backpropagation) |
+| RJ | Learning rate |
+| RK-RV | Training workspace / hive collective |
 
 ### Two Ways to Get Values Into Registers
 
@@ -147,6 +152,14 @@ Every NML program must contain a `HALT` instruction. Without it, execution conti
 | `VOTE` `PROJ` `DIST` | M2M | Consensus, projection, distance |
 | `GATH` `SCAT`/`SCTR` | M2M | Tensor index operations |
 
+### Training
+| Opcode | Symbolic | Description | Example |
+|--------|----------|-------------|---------|
+| `BKWD` | `∇` | Backpropagation | `BKWD RG R3 R9` |
+| `WUPD` | `⟳` | Weight update | `WUPD R1 R1 RG` |
+| `LOSS` | `△` | Compute loss (MSE/CE/MAE) | `LOSS R5 R3 R9 #0` |
+| `TNET` | `⥁` | Self-training loop | `TNET #2000 #0.001 #0` |
+
 ## Data Files
 
 NML programs load data from `.nml.data` files:
@@ -232,6 +245,22 @@ The same neural network layer in symbolic NML:
 ◼
 ```
 
+### Self-Training (TNET)
+
+```
+LD    R1 @w1
+LD    R2 @b1
+LD    R3 @w2
+LD    R4 @b2
+LD    R0 @input
+LD    R9 @target
+TNET  #2000  #0.001  #0
+ST    RA @result
+HALT
+```
+
+TNET trains the network defined by R1–R4 (weight/bias pairs for up to 2 layers) using input R0 and target R9. After training, RA holds the final prediction.
+
 ## Command-Line Options
 
 ```bash
@@ -246,5 +275,5 @@ The same neural network layer in symbolic NML:
 ## Next Steps
 
 - [NML Specification](NML_SPEC.md) — full instruction set reference with encoding details
-- [Usage Guide](NML_Usage_Guide.md) — all 67 instructions with detailed examples
+- [Usage Guide](NML_Usage_Guide.md) — all 71 instructions with detailed examples
 - [M2M Specification](NML_M2M_Spec.md) — machine-to-machine extensions

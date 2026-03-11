@@ -107,7 +107,7 @@ _CLASSIC_OPCODES = [
     "META", "FRAG", "ENDF", "LINK", "PTCH", "SIGN", "VRFY", "VOTE",
     "PROJ", "DIST", "GATH", "SCAT",
     "SYS", "MOD", "ITOF", "FTOI", "BNOT",
-    "BKWD", "WUPD", "LOSS",
+    "BKWD", "WUPD", "LOSS", "TNET",
 ]
 for _op in _CLASSIC_OPCODES:
     _OPCODE_TO_CANONICAL[_op] = _op
@@ -145,7 +145,7 @@ _SYMBOLIC_TO_CANONICAL = {
     "⊿": "PTCH", "✦": "SIGN", "✓": "VRFY",
     "⚖": "VOTE", "⟐": "PROJ", "⟂": "DIST", "⊃": "GATH", "⊂": "SCAT",
     "⚙": "SYS", "%": "MOD", "⊶": "ITOF", "⊷": "FTOI", "¬": "BNOT",
-    "∇": "BKWD", "⟳": "WUPD", "△": "LOSS",
+    "∇": "BKWD", "⟳": "WUPD", "△": "LOSS", "⥁": "TNET",
 }
 _OPCODE_TO_CANONICAL.update(_SYMBOLIC_TO_CANONICAL)
 
@@ -184,7 +184,7 @@ _VERBOSE_TO_CANONICAL = {
     "SIGN_PROGRAM": "SIGN", "VERIFY_SIGNATURE": "VRFY",
     "CONSENSUS": "VOTE", "PROJECT": "PROJ", "DISTANCE": "DIST", "GATHER": "GATH", "SCATTER": "SCAT",
     "SYSTEM": "SYS", "MODULO": "MOD", "INT_TO_FLOAT": "ITOF", "FLOAT_TO_INT": "FTOI", "BITWISE_NOT": "BNOT",
-    "BACKWARD": "BKWD", "WEIGHT_UPDATE": "WUPD", "COMPUTE_LOSS": "LOSS",
+    "BACKWARD": "BKWD", "WEIGHT_UPDATE": "WUPD", "COMPUTE_LOSS": "LOSS", "TRAIN_NETWORK": "TNET",
 }
 _OPCODE_TO_CANONICAL.update(_VERBOSE_TO_CANONICAL)
 
@@ -269,6 +269,7 @@ _OPERAND_COUNTS: dict[str, tuple[int, int]] = {
     "BKWD": (3, 4),
     "WUPD": (3, 3),
     "LOSS": (3, 4),
+    "TNET": (3, 3),
 }
 
 _STRUCTURAL_OPCODES = {"META", "PTCH", "SIGN"}

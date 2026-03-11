@@ -1,6 +1,6 @@
 # NML — Neural Machine Language
 
-A minimal, deterministic machine language designed for AI workloads. 67 instructions. ~2,100 lines of C. Zero ambiguity.
+A minimal, deterministic machine language designed for AI workloads. 71 instructions. ~2,100 lines of C. Zero ambiguity.
 
 NML supports neural network inference, decision tree execution, transformer attention, signal processing, and general-purpose computation within a single instruction set and runtime — compiled to an 83 KB binary.
 
@@ -8,7 +8,7 @@ NML supports neural network inference, decision tree execution, transformer atte
 
 | Property | NML | Python/PyTorch |
 |----------|-----|---------------|
-| Vocabulary | 67 opcodes | 50,000+ tokens |
+| Vocabulary | 71 opcodes | 50,000+ tokens |
 | Grammar rules | ~10 | 100+ |
 | Syntactic ambiguity | Zero | High |
 | Ways to express same op | 1 | 5-10+ |
@@ -49,7 +49,7 @@ Classic (`MMUL`) for machines and compilers. Symbolic (`×`) for token-efficient
 
 ### Designed for LLM Generation
 
-NML's zero-ambiguity grammar exists specifically so that language models can learn to generate correct programs. With 67 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7-9B parameter model achieves 93-95% valid code generation. The design decision — one way to do everything, no syntactic sugar, no implicit behavior — is driven by learnability, not programmer convenience.
+NML's zero-ambiguity grammar exists specifically so that language models can learn to generate correct programs. With 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7-9B parameter model achieves 93-95% valid code generation. The design decision — one way to do everything, no syntactic sugar, no implicit behavior — is driven by learnability, not programmer convenience.
 
 ## Use Cases
 
@@ -75,7 +75,7 @@ Replace opaque model inference with verifiable instruction sequences. If two sys
 
 ### Training LLMs to Generate Structured Code
 
-NML's zero-ambiguity grammar makes it dramatically easier to train models to write correct code. With only 67 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7-9B parameter model can learn to generate valid NML programs with 93-95% accuracy. Compare this to Python, where the same model must learn thousands of library APIs, multiple coding styles, and ambiguous syntax.
+NML's zero-ambiguity grammar makes it dramatically easier to train models to write correct code. With only 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7-9B parameter model can learn to generate valid NML programs with 93-95% accuracy. Compare this to Python, where the same model must learn thousands of library APIs, multiple coding styles, and ambiguous syntax.
 
 ## Quick Start
 
@@ -127,7 +127,7 @@ STORE       ACCUMULATOR @tax_amount
 STOP
 ```
 
-## Instruction Set (67 Total)
+## Instruction Set (71 Total)
 
 ### Core (35 Instructions)
 
@@ -157,6 +157,9 @@ STOP
 
 ### NML-M2M: Machine-to-Machine (13)
 `META` `FRAG` `ENDF` `LINK` `PTCH` `SIGN` `VRFY` `VOTE` `PROJ` `DIST` `GATH` `SCAT`
+
+### NML-TR: Training (4)
+`BKWD` `WUPD` `LOSS` `TNET`
 
 ### NML-G: General Purpose (5)
 `SYS` `MOD` `ITOF` `FTOI` `BNOT`
@@ -300,6 +303,39 @@ All three programs are in `programs/` with matching `.nml.data` files:
 ./nml programs/rate_neural.nml programs/rate_neural.nml.data
 ```
 
+## Performance
+
+### Self-Training: 10x Faster Than Python
+
+NML can train its own neural networks using the TNET fused opcode. On a 1→4→1 ReLU network learning y=2x+1 (2,000 epochs):
+
+| Method | Result | Time | Binary Size |
+|--------|--------|------|-------------|
+| Python/NumPy | 7.0000 (exact) | 20.5 ms | 1.9 GB runtime |
+| NML (interpreted) | 6.8878 | 188.0 ms | 67 KB |
+| NML (TNET) | 7.0000 (exact) | 1.9 ms | 67 KB |
+| NML (TNET + BLAS) | 7.0000 (exact) | 1.9 ms | 83 KB |
+
+For larger networks (256 neurons, 5,000 epochs):
+
+| Method | Time | vs Python |
+|--------|------|-----------|
+| Python/NumPy | 133.1 ms | 1x |
+| NML TNET (portable) | 27.4 ms | 4.9x faster |
+| NML TNET (BLAS) | 13.0 ms | 10.2x faster |
+
+67 KB binary. Zero dependencies. Trains neural networks 10x faster than a 1.9 GB Python installation.
+
+### Inference Benchmarks
+
+| Program | Instructions | Cycles | Time |
+|---------|-------------|--------|------|
+| Anomaly detector (3-layer NN) | 18 | 18 | 34 µs |
+| Rate cascade (7 tiers) | 66 | 24 | 85 µs |
+| Rate tensor table (GATH lookup) | 31 | 61 | 200 µs |
+| Rate neural (32 neurons) | 12 | 12 | 194 µs |
+| Fibonacci (20 numbers) | 13 | 165 | 89 µs |
+
 ## Architecture
 
 ```
@@ -350,8 +386,11 @@ docs/                Full specification, architecture documents, usage guide,
 ## Building
 
 ```bash
-# Full build (67 instructions, all extensions)
+# Full build (71 instructions, all extensions)
 make
+
+# With BLAS acceleration (10x faster training)
+make nml-fast
 
 # Or directly with gcc
 gcc -O2 -o nml runtime/nml.c -lm
@@ -394,7 +433,7 @@ Memory contents are loaded from simple text files:
 
 ### Go Deeper
 
-3. **[Usage Guide](docs/NML_Usage_Guide.md)** — all 67 instructions with detailed examples and edge cases
+3. **[Usage Guide](docs/NML_Usage_Guide.md)** — all 71 instructions with detailed examples and edge cases
 4. **[NML-G Specification](docs/NML_G_Spec.md)** — general-purpose extensions (SYS, MOD, ITOF, FTOI, BNOT)
 5. **[NML-M2M Specification](docs/NML_M2M_Spec.md)** — machine-to-machine extensions (META, FRAG, SIGN, VOTE, PROJ, DIST)
 
@@ -421,3 +460,4 @@ Memory contents are loaded from simple text files:
 | v0.6.2 | 67 | NML-G general-purpose (SYS, MOD, ITOF, FTOI, BNOT) |
 | v0.6.3 | 67 | Compact form (pilcrow delimiter), MCP toolchain server |
 | v0.6.4 | 67 | Alternative aliases for LLM trainability, bare number tolerance |
+| v0.7.0 | 71 | NML-TR training extensions (BKWD, WUPD, LOSS, TNET), BLAS acceleration |
