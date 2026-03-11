@@ -13,7 +13,7 @@ LDFLAGS = -lm
 
 nml: runtime/nml.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
-	@echo "  Built: nml (v0.6.4, 67 instructions — all extensions)"
+	@echo "  Built: nml (v0.7.0, 70 instructions, 32 registers — all extensions)"
 
 release: nml
 	strip nml

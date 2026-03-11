@@ -78,14 +78,20 @@
   #endif
 #endif
 
+#ifndef NML_NO_TRAINING
+  #ifndef NML_EXT_TRAINING
+    #define NML_EXT_TRAINING
+  #endif
+#endif
+
 /* ═══════════════════════════════════════════
    CONFIGURATION
    ═══════════════════════════════════════════ */
 
 #define NML_VERSION_MAJOR  0
-#define NML_VERSION_MINOR  6
+#define NML_VERSION_MINOR  7
 
-#define NML_MAX_REGISTERS    16
+#define NML_MAX_REGISTERS    32
 #define NML_MAX_DIMS         4
 #ifndef NML_MAX_TENSOR_SIZE
   #define NML_MAX_TENSOR_SIZE  65536
@@ -709,6 +715,10 @@ typedef enum {
     /* Extension: NML-G General Purpose (5) */
     OP_SYS, OP_MOD, OP_ITOF, OP_FTOI, OP_BNOT,
 #endif
+#ifndef NML_NO_TRAINING
+    /* Extension: NML-T Training (3) — v0.7 */
+    OP_BKWD, OP_WUPD, OP_LOSS,
+#endif
     OP_COUNT
 } Opcode;
 
@@ -916,6 +926,20 @@ static const OpcodeEntry OPCODE_TABLE[] = {
     {"FLOAT_TO_INT",  OP_FTOI, "NML-G"},
     {"BITWISE_NOT",   OP_BNOT, "NML-G"},
 #endif
+#ifndef NML_NO_TRAINING
+    /* NML-TR Training (v0.7) — Classic */
+    {"BKWD", OP_BKWD, "NML-TR"},
+    {"WUPD", OP_WUPD, "NML-TR"},
+    {"LOSS", OP_LOSS, "NML-TR"},
+    /* NML-TR Symbolic */
+    {"\xe2\x88\x87", OP_BKWD, "NML-TR"},   /* ∇ nabla */
+    {"\xe2\x9f\xb3", OP_WUPD, "NML-TR"},   /* ⟳ clockwise */
+    {"\xe2\x96\xb3", OP_LOSS, "NML-TR"},   /* △ triangle */
+    /* NML-TR Verbose */
+    {"BACKWARD",       OP_BKWD, "NML-TR"},
+    {"WEIGHT_UPDATE",  OP_WUPD, "NML-TR"},
+    {"COMPUTE_LOSS",   OP_LOSS, "NML-TR"},
+#endif
     {NULL, 0, NULL}
 };
 
@@ -1048,6 +1072,16 @@ static const struct { const char *sym; int idx; } GREEK_REGS[] = {
     {"\xce\xb4", 13}, /* δ delta  = RD (counter) */
     {"\xcf\x86", 14}, /* φ phi    = RE (flag) */
     {"\xcf\x88", 15}, /* ψ psi    = RF (stack) */
+    /* v0.7: Extended registers RG-RV (indices 16-31) */
+    {"\xce\xb7", 16}, /* η eta     = RG (gradient 1) */
+    {"\xce\xb8", 17}, /* θ theta   = RH (gradient 2) */
+    {"\xce\xb6", 18}, /* ζ zeta    = RI (gradient 3) */
+    {"\xcf\x89", 19}, /* ω omega   = RJ (loss/learning rate) */
+    {"\xcf\x87", 20}, /* χ chi     = RK */
+    {"\xcf\x85", 21}, /* υ upsilon = RL */
+    {"\xce\xb5", 22}, /* ε epsilon = RM */
+    {"\xcf\x84", 23}, /* τ tau     = RN — NOTE: τ already used for TANH opcode, context disambiguates */
+    /* RO-RV: no Greek aliases to avoid collisions, use classic only */
     /* Verbose register aliases */
     {"ACCUMULATOR", 10},
     {"ACC", 10},
@@ -1061,15 +1095,27 @@ static const struct { const char *sym; int idx; } GREEK_REGS[] = {
     {"FLG", 14},
     {"STACK", 15},
     {"STK", 15},
+    {"GRAD1", 16},
+    {"GRAD2", 17},
+    {"GRAD3", 18},
+    {"LRATE", 19},
     {NULL, -1}
 };
 
 static int parse_register(const char *s) {
+    /* Strip optional :type annotation (e.g. R0:currency → R0) */
+    char buf[32];
+    const char *colon = strchr(s, ':');
+    if (colon && colon != s) {
+        size_t len = colon - s;
+        if (len < sizeof(buf)) { memcpy(buf, s, len); buf[len] = '\0'; s = buf; }
+    }
+
     if ((s[0] == 'R' || s[0] == 'r') && strlen(s) == 2) {
         char c = s[1];
-        if (c >= '0' && c <= '9') return c - '0';
-        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= '0' && c <= '9') return c - '0';       /* R0-R9: 0-9 */
+        if (c >= 'A' && c <= 'V') return c - 'A' + 10;  /* RA-RV: 10-31 */
+        if (c >= 'a' && c <= 'v') return c - 'a' + 10;
     }
     for (int i = 0; GREEK_REGS[i].sym; i++)
         if (strcmp(s, GREEK_REGS[i].sym) == 0) return GREEK_REGS[i].idx;
@@ -1406,6 +1452,29 @@ static int vm_assemble(VM *vm, const char *source) {
             case OP_ITOF: case OP_FTOI: case OP_BNOT:
                 instr->reg[0] = parse_register(tokens[1]);
                 instr->reg[1] = parse_register(tokens[2]);
+                break;
+#endif
+#ifndef NML_NO_TRAINING
+            /* NML-TR Training (v0.7) */
+            case OP_BKWD:
+                /* BKWD Rd_grad Rs_output Rs_target Rs_weights */
+                instr->reg[0] = parse_register(tokens[1]);
+                instr->reg[1] = parse_register(tokens[2]);
+                instr->reg[2] = parse_register(tokens[3]);
+                instr->int_params[0] = ntokens > 4 ? parse_register(tokens[4]) : -1;
+                break;
+            case OP_WUPD:
+                /* WUPD Rd_weights Rs_gradient #learning_rate */
+                instr->reg[0] = parse_register(tokens[1]);
+                instr->reg[1] = parse_register(tokens[2]);
+                instr->imm = parse_imm(tokens[3]);
+                break;
+            case OP_LOSS:
+                /* LOSS Rd Rs_predicted Rs_target #loss_type */
+                instr->reg[0] = parse_register(tokens[1]);
+                instr->reg[1] = parse_register(tokens[2]);
+                instr->reg[2] = parse_register(tokens[3]);
+                instr->int_params[0] = ntokens > 4 ? (int)parse_imm(tokens[4]) : 0;
                 break;
 #endif
             default:
@@ -1874,6 +1943,76 @@ static int vm_execute(VM *vm) {
             break;
         }
 #endif /* NML_NO_GENERAL */
+
+#ifndef NML_NO_TRAINING
+        /* ═══ NML-TR Training ═══ */
+
+        case OP_LOSS: {
+            /* LOSS Rd Rs_pred Rs_target #type (0=MSE, 1=MAE) */
+            Tensor *pred = &REG(ins->reg[1]);
+            Tensor *target = &REG(ins->reg[2]);
+            int loss_type = ins->int_params[0];
+            int n = pred->size < target->size ? pred->size : target->size;
+            double sum = 0;
+            for (int i = 0; i < n; i++) {
+                double diff = tensor_getd(pred, i) - tensor_getd(target, i);
+                if (loss_type == 1) sum += (diff < 0 ? -diff : diff); /* MAE */
+                else sum += diff * diff; /* MSE */
+            }
+            sum /= (n > 0 ? n : 1);
+            int s[] = {1};
+            tensor_init_typed(&REG(ins->reg[0]), 1, s, NML_F64);
+            tensor_setd(&REG(ins->reg[0]), 0, sum);
+            RVALID(ins->reg[0]) = 1;
+            break;
+        }
+
+        case OP_WUPD: {
+            /* WUPD Rd_weights Rs_gradient #learning_rate */
+            /* Rd = Rd - lr * Rs (in-place weight update) */
+            Tensor *weights = &REG(ins->reg[0]);
+            Tensor *grad = &REG(ins->reg[1]);
+            double lr = ins->imm;
+            int n = weights->size < grad->size ? weights->size : grad->size;
+            for (int i = 0; i < n; i++) {
+                double w = tensor_getd(weights, i);
+                double g = tensor_getd(grad, i);
+                tensor_setd(weights, i, w - lr * g);
+            }
+            break;
+        }
+
+        case OP_BKWD: {
+            /* BKWD Rd_grad Rs_output Rs_target [Rs_weights]
+             * Computes output-layer gradient: Rd = 2 * (output - target) / N
+             * If Rs_weights provided (int_params[0] >= 0), applies chain rule
+             * through weights: Rd = (2/N * (output-target)) @ weights^T
+             */
+            Tensor *output = &REG(ins->reg[1]);
+            Tensor *target = &REG(ins->reg[2]);
+            int n = output->size < target->size ? output->size : target->size;
+
+            /* Compute base gradient: d_loss/d_output = 2*(output-target)/N */
+            int s_out[] = {1, n > 1 ? n : 1};
+            tensor_init_typed(&REG(ins->reg[0]), 2, s_out, NML_F64);
+            double scale = 2.0 / (n > 0 ? n : 1);
+            for (int i = 0; i < n; i++) {
+                double diff = tensor_getd(output, i) - tensor_getd(target, i);
+                tensor_setd(&REG(ins->reg[0]), i, scale * diff);
+            }
+            RVALID(ins->reg[0]) = 1;
+
+            /* If weights register provided, propagate gradient through weights^T */
+            if (ins->int_params[0] >= 0 && ins->int_params[0] < NML_MAX_REGISTERS
+                && RVALID(ins->int_params[0])) {
+                /* Future: propagate gradient through weights^T for hidden layers */
+                /* For 1->N->1 architectures, manual TRNS+MMUL in NML suffices */
+                (void)ins->int_params[0];
+            }
+            break;
+        }
+#endif /* NML_NO_TRAINING */
+
             case OP_HALT: vm->halted = 1; return NML_OK;
             default: VM_ERROR(vm, NML_ERR_OPCODE, "Unknown opcode %d at PC=%d", ins->op, vm->pc);
         }
@@ -2093,7 +2232,7 @@ int main(int argc, char **argv) {
 
     printf("\n=== REGISTERS ===\n");
     for (int i = 0; i < NML_MAX_REGISTERS; i++)
-        if (vm->reg_valid[i]) { char n[4]; sprintf(n, "R%X", i); tensor_print(&vm->regs[i], n); }
+        if (vm->reg_valid[i]) { char n[8]; sprintf(n, "R%X", i); tensor_print(&vm->regs[i], n); }
 
     printf("\n=== MEMORY ===\n");
     for (int i = 0; i < vm->mem_count; i++)

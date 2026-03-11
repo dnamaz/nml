@@ -61,15 +61,21 @@ class GrammarReport:
 _NUMBERED_LIST = [
     "R0", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
     "RA", "RB", "RC", "RD", "RE", "RF",
+    "RG", "RH", "RI", "RJ", "RK", "RL", "RM", "RN",
+    "RO", "RP", "RQ", "RR", "RS", "RT", "RU", "RV",
 ]
 _GREEK_LIST = [
     "ι", "κ", "λ", "μ", "ν", "ξ", "ο", "π", "ρ", "ς",
     "α", "β", "γ", "δ", "φ", "ψ",
+    "η", "θ", "ζ", "ω", "χ", "υ", "ε", "RN",
+    "RO", "RP", "RQ", "RR", "RS", "RT", "RU", "RV",
 ]
 _VERBOSE_REG_LIST = [
     "INPUT", "KERNEL", "LAYER", "MOMENTUM", "NORM", "XI",
     "OMICRON", "PI", "RHO", "SIGMA",
     "ACCUMULATOR", "GENERAL", "SCRATCH", "COUNTER", "FLAG", "STACK",
+    "GRAD1", "GRAD2", "GRAD3", "LRATE", "RK", "RL", "RM", "RN",
+    "RO", "RP", "RQ", "RR", "RS", "RT", "RU", "RV",
 ]
 
 NUMBERED_REGISTERS = set(_NUMBERED_LIST)
@@ -101,6 +107,7 @@ _CLASSIC_OPCODES = [
     "META", "FRAG", "ENDF", "LINK", "PTCH", "SIGN", "VRFY", "VOTE",
     "PROJ", "DIST", "GATH", "SCAT",
     "SYS", "MOD", "ITOF", "FTOI", "BNOT",
+    "BKWD", "WUPD", "LOSS",
 ]
 for _op in _CLASSIC_OPCODES:
     _OPCODE_TO_CANONICAL[_op] = _op
@@ -138,6 +145,7 @@ _SYMBOLIC_TO_CANONICAL = {
     "⊿": "PTCH", "✦": "SIGN", "✓": "VRFY",
     "⚖": "VOTE", "⟐": "PROJ", "⟂": "DIST", "⊃": "GATH", "⊂": "SCAT",
     "⚙": "SYS", "%": "MOD", "⊶": "ITOF", "⊷": "FTOI", "¬": "BNOT",
+    "∇": "BKWD", "⟳": "WUPD", "△": "LOSS",
 }
 _OPCODE_TO_CANONICAL.update(_SYMBOLIC_TO_CANONICAL)
 
@@ -176,6 +184,7 @@ _VERBOSE_TO_CANONICAL = {
     "SIGN_PROGRAM": "SIGN", "VERIFY_SIGNATURE": "VRFY",
     "CONSENSUS": "VOTE", "PROJECT": "PROJ", "DISTANCE": "DIST", "GATHER": "GATH", "SCATTER": "SCAT",
     "SYSTEM": "SYS", "MODULO": "MOD", "INT_TO_FLOAT": "ITOF", "FLOAT_TO_INT": "FTOI", "BITWISE_NOT": "BNOT",
+    "BACKWARD": "BKWD", "WEIGHT_UPDATE": "WUPD", "COMPUTE_LOSS": "LOSS",
 }
 _OPCODE_TO_CANONICAL.update(_VERBOSE_TO_CANONICAL)
 
@@ -257,6 +266,9 @@ _OPERAND_COUNTS: dict[str, tuple[int, int]] = {
     "ITOF": (2, 2),
     "FTOI": (2, 2),
     "BNOT": (2, 2),
+    "BKWD": (3, 4),
+    "WUPD": (3, 3),
+    "LOSS": (3, 4),
 }
 
 _STRUCTURAL_OPCODES = {"META", "PTCH", "SIGN"}

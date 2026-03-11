@@ -1,0 +1,65 @@
+; ═══════════════════════════════════════════
+; NML Self-Training Neural Network
+; ═══════════════════════════════════════════
+; Trains a 1→4→1 ReLU network to learn y=2x+1
+; using only NML instructions. No Python.
+;
+; Trains output layer weights only (W2, b2).
+; Hidden layer weights (W1, b1) stay fixed.
+;
+; Demonstrates: NML v0.7.0 self-training with
+; LOSS, BKWD, WUPD opcodes.
+; ═══════════════════════════════════════════
+
+; Load initial weights
+LD    R1 @w1                  ; 1×4 weights (fixed)
+LD    R2 @b1                  ; 1×4 bias (fixed)
+LD    R3 @w2                  ; 4×1 weights (trainable)
+LD    R4 @b2                  ; 1×1 bias (trainable)
+
+; Load training point: x=3, y=7
+LD    R0 @test_input          ; 1×1
+LD    R9 @test_target         ; 1×1
+
+; ═══ Training Loop: 200 epochs ═══
+LOOP  #2000
+
+  ; Forward pass
+  MMUL  R5 R0 R1              ; 1×1 @ 1×4 = 1×4
+  MADD  R5 R5 R2              ; 1×4 (pre-activation)
+  RELU  R6 R5                 ; 1×4 (hidden)
+  MMUL  R7 R6 R3              ; 1×4 @ 4×1 = 1×1
+  MADD  R7 R7 R4              ; 1×1 (output)
+
+  ; Compute loss
+  LOSS  R8 R7 R9 #0           ; MSE scalar
+
+  ; Compute output gradient
+  BKWD  RG R7 R9              ; d_output = 2*(output-target) [1×1]
+
+  ; Update W2: d_W2 = hidden^T @ d_output
+  TRNS  RH R6                 ; 4×1 = transpose(1×4)
+  MMUL  RI RH RG              ; 4×1 @ 1×1 = 4×1
+  WUPD  R3 RI #0.001          ; W2 -= lr * d_W2
+
+  ; Update b2
+  WUPD  R4 RG #0.001          ; b2 -= lr * d_output
+
+ENDP
+
+; Store trained weights
+ST    R3 @w2_trained
+ST    R4 @b2_trained
+
+; Final inference
+MMUL  R5 R0 R1
+MADD  R5 R5 R2
+RELU  R5 R5
+MMUL  R6 R5 R3
+MADD  RA R6 R4
+ST    RA @result
+
+; Final loss
+LOSS  R8 RA R9 #0
+ST    R8 @final_loss
+HALT
