@@ -406,33 +406,7 @@ function RunButton({ code, onResult }) {
   const btnLabel = { idle: "▶ RUN", validating: "VALIDATING...", executing: "EXECUTING...", done: "▶ RE-RUN", error: "▶ RETRY" };
 
   return (
-    <div>
-      {needsInputs && (
-        <div style={{
-          margin: "6px 0", padding: "8px 10px", borderRadius: 4,
-          background: "rgba(0,180,255,0.04)", border: "1px solid rgba(0,180,255,0.15)",
-          fontSize: 11, fontFamily: FONT,
-        }}>
-          <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: 2, color: "#00b4ff", marginBottom: 6 }}>
-            INPUT VALUES
-          </div>
-          {needsInputs.map(name => (
-            <div key={name} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-              <span style={{ color: "#ffcc00", minWidth: 80 }}>@{name}</span>
-              <input
-                value={inputs[name] || ""}
-                onChange={e => setInputs(prev => ({ ...prev, [name]: e.target.value }))}
-                placeholder="0.0 or 1.0,2.0,3.0"
-                style={{
-                  background: COLORS.bg, color: COLORS.text, border: `1px solid ${COLORS.border}`,
-                  borderRadius: 3, padding: "3px 8px", fontFamily: FONT, fontSize: 11,
-                  flex: 1, outline: "none",
-                }}
-              />
-            </div>
-          ))}
-        </div>
-      )}
+    <div style={{ display: "inline-flex", flexDirection: "column", gap: 4 }}>
       <button onClick={handleRun} disabled={state === "validating" || state === "executing"} style={{
         background: s.bg, border: `1px solid ${s.border}`, color: s.color,
         padding: "3px 8px", borderRadius: 4, fontSize: 9,
@@ -441,40 +415,77 @@ function RunButton({ code, onResult }) {
       }}>
         {btnLabel[state]}
       </button>
-      {result && (
+      {needsInputs && state === "idle" && (
         <div style={{
-          marginTop: 6, padding: "8px 12px", borderRadius: 4,
-          background: result.status === "HALTED" ? "rgba(0,255,157,0.06)" : "rgba(255,68,68,0.06)",
-          border: `1px solid ${result.status === "HALTED" ? COLORS.accent : COLORS.error}`,
-          fontSize: 11, fontFamily: FONT,
+          padding: "6px 8px", borderRadius: 4,
+          background: "rgba(0,180,255,0.04)", border: "1px solid rgba(0,180,255,0.15)",
+          fontSize: 10, fontFamily: FONT, minWidth: 200,
         }}>
-          <div style={{
-            fontSize: 9, fontWeight: 700, letterSpacing: 2, marginBottom: 4,
-            color: result.status === "HALTED" ? COLORS.accent : COLORS.error,
-          }}>
-            {result.status || "RESULT"}
-            {result.cycles != null && <span style={{ fontWeight: 400, marginLeft: 8, color: COLORS.textDim }}>{result.cycles} cycles</span>}
-            {result.time_us != null && <span style={{ fontWeight: 400, marginLeft: 8, color: COLORS.textDim }}>{result.time_us} µs</span>}
+          <div style={{ fontSize: 7, fontWeight: 700, letterSpacing: 2, color: "#00b4ff", marginBottom: 4 }}>
+            INPUTS
           </div>
-          {result.outputs && Object.keys(result.outputs).length > 0 && (
-            <div style={{ color: COLORS.text }}>
-              {Object.entries(result.outputs).map(([k, v]) => (
-                <div key={k}>
-                  <span style={{ color: "#ffcc00" }}>@{k}</span>
-                  <span style={{ color: COLORS.textDim }}> = </span>
-                  <span style={{ color: COLORS.accent, fontWeight: 700 }}>
-                    {Array.isArray(v) ? `[${v.map(n => n.toFixed(4)).join(", ")}]` : typeof v === "number" ? v.toFixed(4) : String(v)}
-                  </span>
-                </div>
-              ))}
+          {needsInputs.map(name => (
+            <div key={name} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+              <span style={{ color: "#ffcc00", fontSize: 10 }}>@{name}</span>
+              <input
+                value={inputs[name] || ""}
+                onChange={e => setInputs(prev => ({ ...prev, [name]: e.target.value }))}
+                placeholder="0.0"
+                style={{
+                  background: COLORS.bg, color: COLORS.text, border: `1px solid ${COLORS.border}`,
+                  borderRadius: 3, padding: "2px 6px", fontFamily: FONT, fontSize: 10,
+                  width: 80, outline: "none",
+                }}
+              />
             </div>
-          )}
-          {result.errors && (
-            <div style={{ color: COLORS.error }}>
-              {result.errors.map((e, i) => <div key={i}>{e}</div>)}
-            </div>
-          )}
-          {result.stderr && <div style={{ color: COLORS.error, fontSize: 10 }}>{result.stderr}</div>}
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ExecutionResult({ content, defaultCollapsed = true }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const isError = content.includes("failed") || content.includes("ERROR");
+
+  return (
+    <div style={{
+      maxWidth: 720, margin: "0 auto 8px",
+      borderRadius: 6, overflow: "hidden",
+      border: `1px solid ${isError ? "rgba(255,68,68,0.3)" : "rgba(0,255,157,0.3)"}`,
+    }}>
+      <div
+        onClick={() => setCollapsed(c => !c)}
+        style={{
+          padding: "8px 16px",
+          background: isError ? "rgba(255,68,68,0.06)" : "rgba(0,255,157,0.06)",
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          cursor: "pointer", userSelect: "none",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{
+            fontSize: 9, fontWeight: 700, letterSpacing: 2,
+            color: isError ? COLORS.error : COLORS.accent,
+          }}>
+            EXECUTION OUTPUT
+          </span>
+          <span style={{ fontSize: 10, color: COLORS.textDim }}>
+            {content.includes("cycles") ? content.match(/\(([^)]+)\)/)?.[1] || "" : ""}
+          </span>
+        </div>
+        <span style={{ fontSize: 10, color: COLORS.textDim, fontFamily: FONT }}>
+          {collapsed ? "▶ SHOW" : "▼ HIDE"}
+        </span>
+      </div>
+      {!collapsed && (
+        <div style={{
+          padding: "10px 16px",
+          background: COLORS.panel,
+          fontSize: 12, lineHeight: "20px", fontFamily: FONT,
+        }}>
+          <MessageContent text={content} />
         </div>
       )}
     </div>
@@ -518,14 +529,14 @@ export default function NMLChat() {
       summary = `**Execution**: ${result.status || "unknown"}${result.stderr ? " — " + result.stderr : ""}`;
     }
 
-    setMessages(prev => [...prev, { role: "assistant", content: summary }]);
+    setMessages(prev => [...prev, { role: "execution", content: summary, collapsed: true }]);
 
     if (result.status === "HALTED" && connected && selectedModel) {
       setGenerating(true);
       setStreamText("");
-      const explainPrompt = `Explain what this NML program does and what the output means:\n\n\`\`\`\n${code}\n\`\`\`\n\nExecution result: ${summary}`;
+      const explainPrompt = `Briefly explain what this NML program does and what the output means in 2-3 sentences:\n\n\`\`\`\n${code}\n\`\`\`\n\nExecution result: ${summary}`;
       const apiMsgs = [
-        { role: "system", content: "You are an NML expert. Explain NML programs concisely. Describe what each instruction does and interpret the output values." },
+        { role: "system", content: "You are an NML expert. Explain NML programs concisely in 2-3 sentences. Describe the computation and interpret output values." },
         { role: "user", content: explainPrompt },
       ];
 
@@ -534,7 +545,7 @@ export default function NMLChat() {
         const r = await fetch(API_BASE + "/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: selectedModel, messages: apiMsgs, stream: true, max_tokens: 512, temperature: 0.3 }),
+          body: JSON.stringify({ model: selectedModel, messages: apiMsgs, stream: true, max_tokens: 256, temperature: 0.3 }),
         });
         const reader = r.body.getReader();
         const decoder = new TextDecoder();
@@ -819,26 +830,31 @@ export default function NMLChat() {
           </div>
         )}
 
-        {messages.map((msg, i) => (
-          <div key={i} style={{
-            maxWidth: 720, margin: "0 auto 12px",
-            padding: "12px 16px", borderRadius: 6,
-            background: msg.role === "user" ? COLORS.userBg : COLORS.panel,
-            border: `1px solid ${msg.role === "user" ? COLORS.userBorder : COLORS.border}`,
-          }}>
-            <div style={{
-              fontSize: 9, fontWeight: 700, letterSpacing: 2, marginBottom: 8,
-              color: msg.role === "user" ? COLORS.accent : COLORS.textDim,
-              display: "flex", justifyContent: "space-between", alignItems: "center",
+        {messages.map((msg, i) => {
+          if (msg.role === "execution") {
+            return <ExecutionResult key={i} content={msg.content} defaultCollapsed={msg.collapsed} />;
+          }
+          return (
+            <div key={i} style={{
+              maxWidth: 720, margin: "0 auto 12px",
+              padding: "12px 16px", borderRadius: 6,
+              background: msg.role === "user" ? COLORS.userBg : COLORS.panel,
+              border: `1px solid ${msg.role === "user" ? COLORS.userBorder : COLORS.border}`,
             }}>
-              <span>{msg.role === "user" ? "YOU" : "ASSISTANT"}</span>
-              {msg.role === "assistant" && <CopyButton text={msg.content} />}
+              <div style={{
+                fontSize: 9, fontWeight: 700, letterSpacing: 2, marginBottom: 8,
+                color: msg.role === "user" ? COLORS.accent : COLORS.textDim,
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+              }}>
+                <span>{msg.role === "user" ? "YOU" : "ASSISTANT"}</span>
+                {msg.role === "assistant" && <CopyButton text={msg.content} />}
+              </div>
+              <div style={{ fontSize: 13, lineHeight: "22px", letterSpacing: 0.3 }}>
+                <MessageContent text={msg.content} onNMLResult={handleNMLResult} />
+              </div>
             </div>
-            <div style={{ fontSize: 13, lineHeight: "22px", letterSpacing: 0.3 }}>
-              <MessageContent text={msg.content} onNMLResult={handleNMLResult} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
 
         {pipelineResult && <PipelineDisplay result={pipelineResult} />}
 
