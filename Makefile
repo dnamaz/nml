@@ -136,23 +136,18 @@ domain-rag-server:
 # Agent services
 # ═══════════════════════════════════════════
 
-agent-services: nml
-	@mkdir -p serve/logs
-	python3 domain/serve/transpiler_service.py &
-	python3 serve/execution_service.py &
-	python3 domain/serve/validation_service.py &
-	@echo "  Agent services starting on ports 8083-8085"
+agent-start: nml
+	bash serve/start_agents.sh
+
+agent-start-headless: nml
+	bash serve/start_agents.sh --no-ui
 
 agent-gateway: nml
 	cd domain/transpilers && python3 domain_rag_server.py --domains tax
 
-agent-all: nml
-	bash serve/start_agents.sh --with-gateway
-
 agent-status:
-	@curl -s localhost:8083/health 2>/dev/null | python3 -m json.tool || echo "  Transpiler: OFFLINE"
-	@curl -s localhost:8084/health 2>/dev/null | python3 -m json.tool || echo "  Validator: OFFLINE"
-	@curl -s localhost:8085/health 2>/dev/null | python3 -m json.tool || echo "  Engine: OFFLINE"
+	@curl -s localhost:8082/health 2>/dev/null | python3 -m json.tool || echo "  NML Server: OFFLINE"
+	@curl -s localhost:8083/health 2>/dev/null | python3 -m json.tool || echo "  Gateway: OFFLINE"
 
 # ═══════════════════════════════════════════
 # Clean
@@ -194,10 +189,10 @@ help:
 	@echo "    make domain-finetune-merge             Merge LoRA adapters into base model"
 	@echo "    make domain-rag-server                 Start multi-domain RAG server"
 	@echo ""
-	@echo "  Agent services:"
-	@echo "    make agent-services   Start transpiler + validator + engine"
-	@echo "    make agent-gateway    Start domain RAG gateway"
-	@echo "    make agent-all        Start all agents + gateway"
+    @echo "  Agent services:"
+	@echo "    make agent-start      Start NML server + gateway + chat UI"
+	@echo "    make agent-start-headless  Start NML server + gateway (no UI)"
+	@echo "    make agent-gateway    Start domain RAG gateway only"
 	@echo "    make agent-status     Check health of running services"
 	@echo ""
 	@echo "  Other:"
@@ -205,4 +200,4 @@ help:
 	@echo "    make help             Show this message"
 	@echo ""
 
-.PHONY: nml release test test-anomaly test-extensions test-symbolic test-verbose test-features test-hello test-fibonacci test-fizzbuzz test-primes test-gp domain-test-tax domain-transpile-scan domain-transpile-library domain-transpile-library-symbolic domain-train domain-benchmark domain-prepare-training domain-finetune domain-finetune-merge domain-rag-server agent-services agent-gateway agent-all agent-status clean help
+.PHONY: nml release test test-anomaly test-extensions test-symbolic test-verbose test-features test-hello test-fibonacci test-fizzbuzz test-primes test-gp domain-test-tax domain-transpile-scan domain-transpile-library domain-transpile-library-symbolic domain-train domain-benchmark domain-prepare-training domain-finetune domain-finetune-merge domain-rag-server agent-start agent-start-headless agent-gateway agent-status clean help
