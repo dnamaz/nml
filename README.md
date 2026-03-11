@@ -223,6 +223,83 @@ RET
 ◼
 ```
 
+## Three Ways to Compute
+
+NML supports multiple approaches to the same computation. These three programs all compute a progressive rate on an input of 100,000 with a deduction of 8,600:
+
+### Approach 1: Cascade (66 instructions, 24 cycles)
+
+Cascading threshold comparisons — the traditional approach. Each tier checks if the input exceeds a threshold and computes the marginal amount. Exact results.
+
+```
+CMPI  RE R7 #54875.0       ; input < 54875?
+JMPF  #18                  ; no → check next tier
+...
+LEAF  RA #5578.50           ; base amount at this tier
+LEAF  RC #54875.0           ; tier threshold
+MSUB  R8 R7 RC              ; marginal = input - threshold
+SCLR  R8 R8 #0.22           ; marginal * rate
+TACC  RA RA R8              ; total = base + marginal
+```
+
+### Approach 2: Tensor Table Lookup (31 instructions, 61 cycles)
+
+Rate table stored as three tensors (thresholds, rates, base amounts). GATH looks up the correct tier in a loop. Same exact result, but the program never changes — only the data tensors do.
+
+```
+LD    R3 @thresholds        ; [6400, 18325, 54875, ...]
+LD    R4 @rates             ; [0.10, 0.12, 0.22, ...]
+LD    R5 @base_amounts      ; [0, 1192.5, 5578.5, ...]
+LOOP  #7
+GATH  RC R3 RB              ; threshold[i]
+CMP   RC R2                 ; input < threshold?
+...
+GATH  R8 R4 R7              ; rate for matching tier
+GATH  R9 R5 R7              ; base for matching tier
+MSUB  RB R2 RC              ; marginal = input - threshold
+EMUL  RA RB R8              ; marginal * rate
+TACC  RA RA R9              ; total = base + marginal
+```
+
+### Approach 3: Neural Network (12 instructions, 12 cycles)
+
+A 32-neuron ReLU network trained to approximate the rate function. Smallest program, fewest cycles, but the result is approximate (within ~$373 of exact).
+
+```
+LD    R0 @input_value
+LD    R1 @w1                ; 1×32 weights
+LD    R2 @b1                ; 1×32 bias
+MMUL  R3 R0 R1              ; forward pass
+MADD  R3 R3 R2              ; add bias
+RELU  R3 R3                 ; activate
+LD    R4 @w2                ; 32×1 weights
+LD    R5 @b2                ; 1×1 bias
+MMUL  R6 R3 R4              ; output layer
+MADD  RA R6 R5
+ST    RA @result
+HALT
+```
+
+### Comparison (input = 100,000)
+
+| | Cascade | Tensor Table | Neural Network |
+|-|---------|-------------|----------------|
+| **Result** | 13,614.00 (exact) | 13,614.00 (exact) | 13,241.49 (approx) |
+| **Instructions** | 66 | 31 | 12 |
+| **Cycles** | 24 | 61 | 12 |
+| **Time** | 202 µs | 200 µs | 194 µs |
+| **Data file** | 2 values | 5 tensors | 5 tensors (weights) |
+| **To update rates** | Rewrite program | Change data tensors | Retrain network |
+| **Accuracy** | Exact | Exact | ~$373 error |
+
+All three programs are in `programs/` with matching `.nml.data` files:
+
+```bash
+./nml programs/rate_cascade.nml programs/rate_cascade.nml.data
+./nml programs/rate_tensor_table.nml programs/rate_tensor_table.nml.data
+./nml programs/rate_neural.nml programs/rate_neural.nml.data
+```
+
 ## Architecture
 
 ```
