@@ -28,11 +28,16 @@ random.seed(42)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 REGS_CLASSIC = ["R0","R1","R2","R3","R4","R5","R6","R7","R8","R9",
-                "RA","RB","RC","RD","RE","RF"]
-REGS_GREEK   = ["ι","κ","λ","μ","ν","ξ","ο","π","ρ","ς","α","β","γ","δ","φ","ψ"]
+                "RA","RB","RC","RD","RE","RF",
+                "RG","RH","RI","RJ","RK","RL","RM","RN",
+                "RO","RP","RQ","RR","RS","RT","RU","RV"]
+REGS_GREEK   = ["ι","κ","λ","μ","ν","ξ","ο","π","ρ","ς","α","β","γ","δ","φ","ψ",
+                "η","θ","ζ","ω","χ","υ","ε","RN","RO","RP","RQ","RR","RS","RT","RU","RV"]
 REGS_VERBOSE = {
     "RA": "ACCUMULATOR", "RB": "GENERAL", "RC": "SCRATCH",
     "RD": "COUNTER", "RE": "FLAG", "RF": "STACK",
+    "RG": "GRADIENT1", "RH": "GRADIENT2", "RI": "GRADIENT3",
+    "RJ": "LEARNING_RATE",
 }
 
 SYM = {
@@ -56,6 +61,7 @@ SYM = {
     "VOTE":"⚖","PROJ":"⟐","DIST":"⟂",
     "GATH":"⊃","SCAT":"⊂",
     "SYS":"⚙","MOD":"%","ITOF":"⊶","FTOI":"⊷","BNOT":"¬",
+    "BKWD":"∇","WUPD":"⟳","LOSS":"△","TNET":"⥁",
 }
 
 VERBOSE = {
@@ -72,6 +78,8 @@ VERBOSE = {
     "HALT":"STOP","RET":"RETURN","TRAP":"FAULT","SYNC":"BARRIER",
     "SYS":"SYSTEM","MOD":"MODULO","ITOF":"INT_TO_FLOAT",
     "FTOI":"FLOAT_TO_INT","BNOT":"BITWISE_NOT",
+    "BKWD":"BACKPROPAGATE","WUPD":"WEIGHT_UPDATE",
+    "LOSS":"COMPUTE_LOSS","TNET":"TRAIN_NETWORK",
 }
 
 INPUT_NAMES = [
@@ -274,6 +282,10 @@ OPCODE_INFO = {
     "ITOF": ("Integer to float conversion", "NML-G", "Rd Rs"),
     "FTOI": ("Float to integer (truncates)", "NML-G", "Rd Rs"),
     "BNOT": ("Bitwise NOT", "NML-G", "Rd Rs"),
+    "BKWD": ("Backpropagation: compute gradient of loss w.r.t. Rs into Rd", "NML-TR", "Rd Rs Rtarget"),
+    "WUPD": ("Weight update: Rd = Rs - lr * Rgrad", "NML-TR", "Rd Rs Rgrad"),
+    "LOSS": ("Loss computation: mode 0=MSE, 1=cross-entropy, 2=MAE", "NML-TR", "Rd Rs Rtarget"),
+    "TNET": ("Self-training loop: train network for N epochs at learning rate", "NML-TR", "#epochs #lr"),
 }
 
 def gen_opcode_reference(count=5000):
@@ -477,6 +489,29 @@ def _make_opcode_example(op):
     if op in ("ITOF","FTOI","BNOT"):
         return [_fmt("LD","R0",f"@{i}"), _fmt(op,"R1","R0"),
                 _fmt("ST","R1",f"@{o}"), "HALT"]
+    if op == "BKWD":
+        return [_fmt("LD","R0",f"@{i}"), _fmt("LD","R1","@weights"),
+                _fmt("LD","R9","@targets"), _fmt("MMUL","R2","R0","R1"),
+                _fmt("BKWD","RG","R2","R9"),
+                _fmt("ST","RG",f"@{o}"), "HALT"]
+    if op == "WUPD":
+        return [_fmt("LD","R1","@weights"), _fmt("LD","RG","@gradients"),
+                _fmt("LEAF","RJ","#0.01"),
+                _fmt("WUPD","R1","R1","RG"),
+                _fmt("ST","R1",f"@{o}"), "HALT"]
+    if op == "LOSS":
+        mode = random.choice(["#0","#1","#2"])
+        return [_fmt("LD","R0","@predictions"), _fmt("LD","R9","@targets"),
+                _fmt("LOSS","RG","R0","R9",mode),
+                _fmt("ST","RG",f"@{o}"), "HALT"]
+    if op == "TNET":
+        epochs = random.choice([100,500,1000,2000])
+        lr = random.choice(["0.01","0.001","0.1","0.005"])
+        return [_fmt("LD","R0",f"@{i}"), _fmt("LD","R9","@targets"),
+                _fmt("LD","R1","@w1"), _fmt("LD","R2","@b1"),
+                _fmt("LD","R3","@w2"), _fmt("LD","R4","@b2"),
+                _fmt("TNET",f"#{epochs}",f"#{lr}"),
+                _fmt("ST","RA",f"@{o}"), "HALT"]
     if op == "SPLT":
         return [_fmt("LD","R0",f"@{i}"),
                 _fmt("SPLT","R1","R2","R0","#0"),
@@ -556,6 +591,10 @@ def _opcode_task(op):
         "ITOF": "convert integer to float",
         "FTOI": "convert float to integer",
         "BNOT": "bitwise NOT",
+        "BKWD": "compute gradients via backpropagation",
+        "WUPD": "update weights using gradients",
+        "LOSS": "compute the loss between predictions and targets",
+        "TNET": "train a neural network end-to-end",
     }
     return tasks.get(op, f"use {op}")
 
@@ -1565,6 +1604,108 @@ def gen_syntax_variants(source_pairs, count=12000):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Category 16: Training Programs NML-TR (target: 5,000)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def gen_training(count=5000):
+    pairs = []
+    topologies = [
+        ("2-4-1", [2,4], [4,1]),
+        ("2-8-1", [2,8], [8,1]),
+        ("1-16-1", [1,16], [16,1]),
+        ("1-64-1", [1,64], [64,1]),
+        ("4-16-8-1", [4,16], [16,1]),
+        ("3-8-1", [3,8], [8,1]),
+    ]
+
+    def _tnet_basic():
+        syntax = pick_syntax(); o = _out()
+        epochs = random.choice([100,200,500,1000,2000,5000])
+        lr = random.choice([0.001, 0.005, 0.01, 0.05, 0.1, 0.5])
+        topo_name, _, _ = random.choice(topologies)
+        q = f"Write NML to train a {topo_name} network using TNET for {epochs} epochs at lr {lr}{syntax_tag(syntax)}"
+        lines = [_fmt("LD","R0","@training_inputs"), _fmt("LD","R9","@training_targets"),
+                 _fmt("LD","R1","@w1"), _fmt("LD","R2","@b1"),
+                 _fmt("LD","R3","@w2"), _fmt("LD","R4","@b2"),
+                 _fmt("TNET",f"#{epochs}",f"#{lr}"),
+                 _fmt("ST","RA",f"@{o}"),
+                 _fmt("ST","R1","@trained_w1"), _fmt("ST","R2","@trained_b1"),
+                 _fmt("ST","R3","@trained_w2"), _fmt("ST","R4","@trained_b2"),
+                 "HALT"]
+        return _pair(q, apply_syntax(lines, syntax))
+
+    def _manual_training_loop():
+        syntax = pick_syntax(); o = _out()
+        epochs = random.choice([10,50,100,500])
+        lr = random.choice([0.001, 0.01, 0.1])
+        q = f"Write NML to manually train a network for {epochs} epochs using BKWD and WUPD{syntax_tag(syntax)}"
+        lines = [_fmt("LD","R0","@training_inputs"), _fmt("LD","R9","@training_targets"),
+                 _fmt("LD","R1","@w1"), _fmt("LD","R2","@b1"),
+                 _fmt("LEAF","RJ",f"#{lr}"),
+                 _fmt("LEAF","RD",f"#{epochs}"), _fmt("LOOP","RD"),
+                 _fmt("MMUL","R5","R0","R1"), _fmt("MADD","R5","R5","R2"),
+                 _fmt("RELU","R5","R5"),
+                 _fmt("LOSS","RG","R5","R9","#0"),
+                 _fmt("BKWD","RH","R5","R9"),
+                 _fmt("WUPD","R1","R1","RH"),
+                 "ENDP",
+                 _fmt("ST","R1","@trained_w1"), _fmt("ST","RG",f"@{o}"), "HALT"]
+        return _pair(q, apply_syntax(lines, syntax))
+
+    def _loss_comparison():
+        syntax = pick_syntax(); o = _out()
+        q = f"Write NML to compute MSE, cross-entropy, and MAE loss{syntax_tag(syntax)}"
+        lines = [_fmt("LD","R0","@predictions"), _fmt("LD","R9","@targets"),
+                 _fmt("LOSS","RG","R0","R9","#0"),
+                 _fmt("LOSS","RH","R0","R9","#1"),
+                 _fmt("LOSS","RI","R0","R9","#2"),
+                 _fmt("ST","RG","@mse_loss"), _fmt("ST","RH","@ce_loss"),
+                 _fmt("ST","RI","@mae_loss"), "HALT"]
+        return _pair(q, apply_syntax(lines, syntax))
+
+    def _train_and_infer():
+        syntax = pick_syntax(); o = _out()
+        epochs = random.choice([500,1000,2000])
+        lr = random.choice([0.01, 0.05, 0.1])
+        q = f"Write NML to train a network with TNET then run inference on new data{syntax_tag(syntax)}"
+        lines = [_fmt("LD","R0","@training_inputs"), _fmt("LD","R9","@training_targets"),
+                 _fmt("LD","R1","@w1"), _fmt("LD","R2","@b1"),
+                 _fmt("LD","R3","@w2"), _fmt("LD","R4","@b2"),
+                 _fmt("TNET",f"#{epochs}",f"#{lr}"),
+                 _fmt("LD","R0","@new_input"),
+                 _fmt("MMUL","R5","R0","R1"), _fmt("MADD","R5","R5","R2"),
+                 _fmt("RELU","R5","R5"),
+                 _fmt("MMUL","R6","R5","R3"), _fmt("MADD","R6","R6","R4"),
+                 _fmt("SIGM","R6","R6"),
+                 _fmt("ST","R6",f"@{o}"), "HALT"]
+        return _pair(q, apply_syntax(lines, syntax))
+
+    def _gradient_registers():
+        syntax = pick_syntax(); o = _out()
+        q = f"Write NML that uses gradient registers RG-RI and learning rate RJ{syntax_tag(syntax)}"
+        lines = [_fmt("LD","R0","@data"), _fmt("LD","R1","@weights"),
+                 _fmt("LD","R9","@targets"),
+                 _fmt("LEAF","RJ","#0.01"),
+                 _fmt("MMUL","R5","R0","R1"),
+                 _fmt("LOSS","RG","R5","R9","#0"),
+                 _fmt("BKWD","RH","R5","R9"),
+                 _fmt("WUPD","R1","R1","RH"),
+                 _fmt("ST","R1","@updated_weights"),
+                 _fmt("ST","RG",f"@{o}"), "HALT"]
+        return _pair(q, apply_syntax(lines, syntax))
+
+    generators = [
+        (0.25, _tnet_basic), (0.25, _manual_training_loop),
+        (0.15, _loss_comparison), (0.20, _train_and_infer),
+        (0.15, _gradient_registers),
+    ]
+    weights = [g[0] for g in generators]; fns = [g[1] for g in generators]
+    while len(pairs) < count:
+        pairs.append(random.choices(fns, weights=weights, k=1)[0]())
+    return pairs[:count]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1583,6 +1724,7 @@ TARGETS = {
     "general_purpose":    5000,
     "debugging":          8000,
     "explanation":        8000,
+    "training":           5000,
     "syntax_variants":   12000,
 }
 
@@ -1645,7 +1787,10 @@ def main():
     cat14 = gen_explanation(targets["explanation"])
     print(f"  Cat 14  Explanation:                {len(cat14):>6}")
 
-    classic_pairs = cat1+cat2+cat3+cat4+cat5+cat6+cat7+cat8+cat9+cat10+cat11+cat12+cat13+cat14
+    cat16 = gen_training(targets["training"])
+    print(f"  Cat 16  Training (NML-TR):          {len(cat16):>6}")
+
+    classic_pairs = cat1+cat2+cat3+cat4+cat5+cat6+cat7+cat8+cat9+cat10+cat11+cat12+cat13+cat14+cat16
     cat15 = gen_syntax_variants(classic_pairs, targets["syntax_variants"])
     print(f"  Cat 15  Syntax Variants:            {len(cat15):>6}")
 

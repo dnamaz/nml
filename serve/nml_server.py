@@ -498,7 +498,7 @@ Examples:
   python3 nml_server.py --http --port 8082
 
   # HTTP + LLM chat
-  python3 nml_server.py --http --port 8082 --model ../domain/output/model/nml-core-r7-merged
+  python3 nml_server.py --http --port 8082 --model ../domain/output/model/nml-equalized-merged
         """,
     )
     parser.add_argument("--transport", choices=["stdio"], default=None,
