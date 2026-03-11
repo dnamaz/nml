@@ -2060,7 +2060,7 @@ static int vm_execute(VM *vm) {
              */
             int epochs = (int)ins->imm;
             double lr = ins->int_params[0] / 1e6;
-            /* int arch = ins->int_params[1]; */
+            int use_adam = ins->int_params[1];  /* 0=SGD, 1=Adam */
 
             Tensor *input  = &REG(0);    /* R0 */
             Tensor *w1     = &REG(1);    /* R1: 1×H */
@@ -2081,6 +2081,19 @@ static int vm_execute(VM *vm) {
             double d_hidden[NML_MAX_TENSOR_SIZE];
             double d_w1[NML_MAX_TENSOR_SIZE];
             double loss = 0;
+
+            /* Adam optimizer state (zero-initialized) */
+            double m_w1[NML_MAX_TENSOR_SIZE], v_w1[NML_MAX_TENSOR_SIZE];
+            double m_w2[NML_MAX_TENSOR_SIZE], v_w2[NML_MAX_TENSOR_SIZE];
+            double m_b2 = 0, v_b2 = 0;
+            int K_w1 = w1->shape[0];
+            if (use_adam) {
+                memset(m_w1, 0, K_w1 * H * sizeof(double));
+                memset(v_w1, 0, K_w1 * H * sizeof(double));
+                memset(m_w2, 0, H * sizeof(double));
+                memset(v_w2, 0, H * sizeof(double));
+            }
+            const double adam_b1 = 0.9, adam_b2 = 0.999, adam_eps = 1e-8;
 
             for (int epoch = 0; epoch < epochs; epoch++) {
                 /* Forward: pre_h = input @ w1 + b1 */
@@ -2126,9 +2139,24 @@ static int vm_execute(VM *vm) {
                 for (int i = 0; i < N; i++) d_b2_val += d_out[i];
 
                 /* Update w2, b2 */
-                for (int j = 0; j < H; j++)
-                    tensor_setd(w2, j, tensor_getd(w2, j) - lr * d_w2[j]);
-                tensor_setd(b2, 0, tensor_getd(b2, 0) - lr * d_b2_val);
+                if (use_adam) {
+                    double b1c = 1.0 - pow(adam_b1, epoch + 1);
+                    double b2c = 1.0 - pow(adam_b2, epoch + 1);
+                    for (int j = 0; j < H; j++) {
+                        m_w2[j] = adam_b1 * m_w2[j] + (1 - adam_b1) * d_w2[j];
+                        v_w2[j] = adam_b2 * v_w2[j] + (1 - adam_b2) * d_w2[j] * d_w2[j];
+                        double mh = m_w2[j] / b1c, vh = v_w2[j] / b2c;
+                        tensor_setd(w2, j, tensor_getd(w2, j) - lr * mh / (sqrt(vh) + adam_eps));
+                    }
+                    m_b2 = adam_b1 * m_b2 + (1 - adam_b1) * d_b2_val;
+                    v_b2 = adam_b2 * v_b2 + (1 - adam_b2) * d_b2_val * d_b2_val;
+                    double mh_b2 = m_b2 / b1c, vh_b2 = v_b2 / b2c;
+                    tensor_setd(b2, 0, tensor_getd(b2, 0) - lr * mh_b2 / (sqrt(vh_b2) + adam_eps));
+                } else {
+                    for (int j = 0; j < H; j++)
+                        tensor_setd(w2, j, tensor_getd(w2, j) - lr * d_w2[j]);
+                    tensor_setd(b2, 0, tensor_getd(b2, 0) - lr * d_b2_val);
+                }
 
                 /* d_hidden = d_out @ w2^T * relu'(pre_h) */
                 for (int i = 0; i < N; i++)
@@ -2148,8 +2176,19 @@ static int vm_execute(VM *vm) {
                     }
 
                 /* Update w1 */
-                for (int idx = 0; idx < K * H; idx++)
-                    tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * d_w1[idx]);
+                if (use_adam) {
+                    double b1c = 1.0 - pow(adam_b1, epoch + 1);
+                    double b2c = 1.0 - pow(adam_b2, epoch + 1);
+                    for (int idx = 0; idx < K * H; idx++) {
+                        m_w1[idx] = adam_b1 * m_w1[idx] + (1 - adam_b1) * d_w1[idx];
+                        v_w1[idx] = adam_b2 * v_w1[idx] + (1 - adam_b2) * d_w1[idx] * d_w1[idx];
+                        double mh = m_w1[idx] / b1c, vh = v_w1[idx] / b2c;
+                        tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * mh / (sqrt(vh) + adam_eps));
+                    }
+                } else {
+                    for (int idx = 0; idx < K * H; idx++)
+                        tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * d_w1[idx]);
+                }
             }
 
             /* Store final loss in R8 */
