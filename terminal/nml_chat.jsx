@@ -117,7 +117,7 @@ function renderMarkdown(text) {
   return merged;
 }
 
-function MessageContent({ text }) {
+function MessageContent({ text, onNMLResult }) {
   const blocks = renderMarkdown(text);
   return blocks.map((block, i) => {
     if (block.type === "code") {
@@ -125,7 +125,7 @@ function MessageContent({ text }) {
       return (
         <div key={i} style={{ position: "relative", margin: "8px 0" }}>
           <div style={{ position: "absolute", top: 4, right: 4, zIndex: 1, display: "flex", gap: 4 }}>
-            {nml && <RunButton code={block.content} />}
+            {nml && <RunButton code={block.content} onResult={onNMLResult} />}
             <CopyButton text={block.content} />
           </div>
           {nml && (
@@ -315,9 +315,47 @@ function CopyButton({ text }) {
   );
 }
 
-function RunButton({ code }) {
+function detectInputs(code) {
+  const loads = new Set();
+  const stores = new Set();
+  for (const line of code.split("\n")) {
+    const tokens = line.trim().split(/\s+/);
+    const op = tokens[0]?.toUpperCase();
+    if ((op === "LD" || tokens[0] === "↓" || op === "LOAD") && tokens.length >= 3) {
+      const addr = tokens.find(t => t.startsWith("@"));
+      if (addr) loads.add(addr.slice(1));
+    }
+    if ((op === "ST" || tokens[0] === "↑" || op === "STORE") && tokens.length >= 3) {
+      const addr = tokens.find(t => t.startsWith("@"));
+      if (addr) stores.add(addr.slice(1));
+    }
+  }
+  return [...loads].filter(a => !stores.has(a));
+}
+
+function RunButton({ code, onResult }) {
   const [state, setState] = useState("idle");
   const [result, setResult] = useState(null);
+  const [inputs, setInputs] = useState({});
+  const [needsInputs, setNeedsInputs] = useState(null);
+
+  useEffect(() => {
+    const needed = detectInputs(code);
+    setNeedsInputs(needed.length > 0 ? needed : null);
+    const init = {};
+    for (const name of needed) init[name] = "";
+    setInputs(init);
+  }, [code]);
+
+  const buildDataContent = () => {
+    if (!needsInputs) return "";
+    return needsInputs.map(name => {
+      const val = inputs[name]?.trim() || "0.0";
+      const nums = val.split(",").map(v => v.trim());
+      const shape = nums.length > 1 ? `1,${nums.length}` : "1";
+      return `@${name} shape=${shape} data=${nums.join(",")}`;
+    }).join("\n");
+  };
 
   const handleRun = async () => {
     setState("validating");
@@ -332,46 +370,76 @@ function RunButton({ code }) {
 
       if (!valData.valid) {
         setState("error");
-        setResult({
-          status: "GRAMMAR ERROR",
-          errors: valData.errors?.map(e => e.message) || ["Invalid NML"],
-        });
+        const r = { status: "GRAMMAR ERROR", errors: valData.errors?.map(e => e.message) || ["Invalid NML"] };
+        setResult(r);
+        if (onResult) onResult(r, code);
         return;
       }
 
       setState("executing");
+      const dataContent = buildDataContent();
       const execR = await fetch(EXEC_BASE + "/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nml_program: code, data: "" }),
+        body: JSON.stringify({ nml_program: code, data: dataContent }),
       });
       const execData = await execR.json();
       setState("done");
       setResult(execData);
+      if (onResult) onResult(execData, code);
     } catch (e) {
       setState("error");
-      setResult({ status: "CONNECTION ERROR", errors: [e.message] });
+      const r = { status: "CONNECTION ERROR", errors: [e.message] };
+      setResult(r);
+      if (onResult) onResult(r, code);
     }
   };
 
   const btnColors = {
-    idle: { bg: "transparent", border: "#00b4ff", color: "#00b4ff", text: "RUN" },
-    validating: { bg: "rgba(0,180,255,0.1)", border: "#00b4ff", color: "#00b4ff", text: "VALIDATING..." },
-    executing: { bg: "rgba(0,180,255,0.1)", border: "#00b4ff", color: "#00b4ff", text: "EXECUTING..." },
-    done: { bg: "rgba(0,255,157,0.1)", border: COLORS.accent, color: COLORS.accent, text: "RAN" },
-    error: { bg: "rgba(255,68,68,0.1)", border: COLORS.error, color: COLORS.error, text: "ERROR" },
+    idle: { bg: "transparent", border: "#00b4ff", color: "#00b4ff" },
+    validating: { bg: "rgba(0,180,255,0.1)", border: "#00b4ff", color: "#00b4ff" },
+    executing: { bg: "rgba(0,180,255,0.1)", border: "#00b4ff", color: "#00b4ff" },
+    done: { bg: "rgba(0,255,157,0.1)", border: COLORS.accent, color: COLORS.accent },
+    error: { bg: "rgba(255,68,68,0.1)", border: COLORS.error, color: COLORS.error },
   };
   const s = btnColors[state];
+  const btnLabel = { idle: "▶ RUN", validating: "VALIDATING...", executing: "EXECUTING...", done: "▶ RE-RUN", error: "▶ RETRY" };
 
   return (
     <div>
+      {needsInputs && (
+        <div style={{
+          margin: "6px 0", padding: "8px 10px", borderRadius: 4,
+          background: "rgba(0,180,255,0.04)", border: "1px solid rgba(0,180,255,0.15)",
+          fontSize: 11, fontFamily: FONT,
+        }}>
+          <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: 2, color: "#00b4ff", marginBottom: 6 }}>
+            INPUT VALUES
+          </div>
+          {needsInputs.map(name => (
+            <div key={name} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={{ color: "#ffcc00", minWidth: 80 }}>@{name}</span>
+              <input
+                value={inputs[name] || ""}
+                onChange={e => setInputs(prev => ({ ...prev, [name]: e.target.value }))}
+                placeholder="0.0 or 1.0,2.0,3.0"
+                style={{
+                  background: COLORS.bg, color: COLORS.text, border: `1px solid ${COLORS.border}`,
+                  borderRadius: 3, padding: "3px 8px", fontFamily: FONT, fontSize: 11,
+                  flex: 1, outline: "none",
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
       <button onClick={handleRun} disabled={state === "validating" || state === "executing"} style={{
         background: s.bg, border: `1px solid ${s.border}`, color: s.color,
         padding: "3px 8px", borderRadius: 4, fontSize: 9,
         cursor: state === "validating" || state === "executing" ? "wait" : "pointer",
         fontFamily: FONT, letterSpacing: 0.5, transition: "all 0.2s",
       }}>
-        {state === "idle" ? "▶ RUN" : s.text}
+        {btnLabel[state]}
       </button>
       {result && (
         <div style={{
@@ -395,7 +463,7 @@ function RunButton({ code }) {
                   <span style={{ color: "#ffcc00" }}>@{k}</span>
                   <span style={{ color: COLORS.textDim }}> = </span>
                   <span style={{ color: COLORS.accent, fontWeight: 700 }}>
-                    {Array.isArray(v) ? `[${v.map(n => n.toFixed(4)).join(", ")}]` : v.toFixed(4)}
+                    {Array.isArray(v) ? `[${v.map(n => n.toFixed(4)).join(", ")}]` : typeof v === "number" ? v.toFixed(4) : String(v)}
                   </span>
                 </div>
               ))}
@@ -435,6 +503,63 @@ export default function NMLChat() {
   }, []);
 
   useEffect(() => { scrollBottom(); }, [messages, streamText, scrollBottom]);
+
+  const handleNMLResult = useCallback(async (result, code) => {
+    let summary = "";
+    if (result.status === "HALTED") {
+      const outputs = result.outputs || {};
+      const outputLines = Object.entries(outputs).map(([k, v]) =>
+        `@${k} = ${Array.isArray(v) ? `[${v.map(n => n.toFixed(4)).join(", ")}]` : v.toFixed(4)}`
+      );
+      summary = `**Execution result** (${result.cycles} cycles, ${result.time_us} µs):\n${outputLines.join("\n")}`;
+    } else if (result.errors) {
+      summary = `**Execution failed**: ${result.errors.join(", ")}`;
+    } else {
+      summary = `**Execution**: ${result.status || "unknown"}${result.stderr ? " — " + result.stderr : ""}`;
+    }
+
+    setMessages(prev => [...prev, { role: "assistant", content: summary }]);
+
+    if (result.status === "HALTED" && connected && selectedModel) {
+      setGenerating(true);
+      setStreamText("");
+      const explainPrompt = `Explain what this NML program does and what the output means:\n\n\`\`\`\n${code}\n\`\`\`\n\nExecution result: ${summary}`;
+      const apiMsgs = [
+        { role: "system", content: "You are an NML expert. Explain NML programs concisely. Describe what each instruction does and interpret the output values." },
+        { role: "user", content: explainPrompt },
+      ];
+
+      let full = "";
+      try {
+        const r = await fetch(API_BASE + "/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: selectedModel, messages: apiMsgs, stream: true, max_tokens: 512, temperature: 0.3 }),
+        });
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          for (const line of decoder.decode(value).split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6);
+            if (data === "[DONE]") break;
+            try {
+              const token = JSON.parse(data).choices?.[0]?.delta?.content;
+              if (token) { full += token; setStreamText(full); }
+            } catch {}
+          }
+        }
+      } catch {}
+
+      if (full) {
+        setMessages(prev => [...prev, { role: "assistant", content: full }]);
+      }
+      setStreamText("");
+      setGenerating(false);
+    }
+  }, [connected, selectedModel]);
 
   const checkServer = useCallback(async () => {
     try {
@@ -710,7 +835,7 @@ export default function NMLChat() {
               {msg.role === "assistant" && <CopyButton text={msg.content} />}
             </div>
             <div style={{ fontSize: 13, lineHeight: "22px", letterSpacing: 0.3 }}>
-              <MessageContent text={msg.content} />
+              <MessageContent text={msg.content} onNMLResult={handleNMLResult} />
             </div>
           </div>
         ))}
@@ -730,7 +855,7 @@ export default function NMLChat() {
               ASSISTANT
             </div>
             <div style={{ fontSize: 13, lineHeight: "20px" }}>
-              <MessageContent text={streamText} />
+              <MessageContent text={streamText} onNMLResult={handleNMLResult} />
             </div>
           </div>
         )}
