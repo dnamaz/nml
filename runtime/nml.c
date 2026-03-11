@@ -183,19 +183,24 @@ typedef struct {
 } Tensor;
 
 static inline double tensor_getd(const Tensor *t, int i) {
+    if (__builtin_expect(t->dtype == NML_F64, 1))
+        return t->data.f64[i];
     switch (t->dtype) {
         case NML_F32: return (double)t->data.f32[i];
-        case NML_F64: return t->data.f64[i];
         case NML_I32: return (double)t->data.i32[i];
+        default: return 0.0;
     }
-    return 0.0;
 }
 
 static inline void tensor_setd(Tensor *t, int i, double val) {
+    if (__builtin_expect(t->dtype == NML_F64, 1)) {
+        t->data.f64[i] = val;
+        return;
+    }
     switch (t->dtype) {
         case NML_F32: t->data.f32[i] = (float)val; break;
-        case NML_F64: t->data.f64[i] = val; break;
         case NML_I32: t->data.i32[i] = (int)val; break;
+        default: break;
     }
 }
 
@@ -740,8 +745,8 @@ typedef enum {
     OP_SYS, OP_MOD, OP_ITOF, OP_FTOI, OP_BNOT,
 #endif
 #ifndef NML_NO_TRAINING
-    /* Extension: NML-T Training (3) — v0.7 */
-    OP_BKWD, OP_WUPD, OP_LOSS,
+    /* Extension: NML-TR Training (4) — v0.7 */
+    OP_BKWD, OP_WUPD, OP_LOSS, OP_TNET,
 #endif
     OP_COUNT
 } Opcode;
@@ -955,14 +960,17 @@ static const OpcodeEntry OPCODE_TABLE[] = {
     {"BKWD", OP_BKWD, "NML-TR"},
     {"WUPD", OP_WUPD, "NML-TR"},
     {"LOSS", OP_LOSS, "NML-TR"},
+    {"TNET", OP_TNET, "NML-TR"},
     /* NML-TR Symbolic */
     {"\xe2\x88\x87", OP_BKWD, "NML-TR"},   /* ∇ nabla */
     {"\xe2\x9f\xb3", OP_WUPD, "NML-TR"},   /* ⟳ clockwise */
     {"\xe2\x96\xb3", OP_LOSS, "NML-TR"},   /* △ triangle */
+    {"\xe2\xa5\x81", OP_TNET, "NML-TR"},   /* ⥁ closed circle */
     /* NML-TR Verbose */
     {"BACKWARD",       OP_BKWD, "NML-TR"},
     {"WEIGHT_UPDATE",  OP_WUPD, "NML-TR"},
     {"COMPUTE_LOSS",   OP_LOSS, "NML-TR"},
+    {"TRAIN_NETWORK",  OP_TNET, "NML-TR"},
 #endif
     {NULL, 0, NULL}
 };
@@ -1500,6 +1508,14 @@ static int vm_assemble(VM *vm, const char *source) {
                 instr->reg[2] = parse_register(tokens[3]);
                 instr->int_params[0] = ntokens > 4 ? (int)parse_imm(tokens[4]) : 0;
                 break;
+            case OP_TNET:
+                /* TNET #epochs #lr #arch
+                 * Register convention: R0=input, R1=w1, R2=b1, R3=w2, R4=b2, R9=target
+                 * Writes: R1,R3,R4 updated, R8=final_loss */
+                instr->imm = parse_imm(tokens[1]);           /* epochs */
+                instr->int_params[0] = ntokens > 2 ? (int)(parse_imm(tokens[2]) * 1e6) : 1000; /* lr * 1e6 (stored as int to preserve precision) */
+                instr->int_params[1] = ntokens > 3 ? (int)parse_imm(tokens[3]) : 0;  /* arch */
+                break;
 #endif
             default:
                 fprintf(stderr, "ERROR: Unhandled opcode in assembler: %d\n", instr->op);
@@ -2033,6 +2049,115 @@ static int vm_execute(VM *vm) {
                 /* For 1->N->1 architectures, manual TRNS+MMUL in NML suffices */
                 (void)ins->int_params[0];
             }
+            break;
+        }
+        case OP_TNET: {
+            /* Fused training loop — entire forward/backward/update in C.
+             * Register convention:
+             *   R0 = training input    R1 = w1 (1×H)    R2 = b1 (1×H)
+             *   R3 = w2 (H×1)         R4 = b2 (1×1)    R9 = target (N×1)
+             * Writes: R1,R3,R4 updated weights; R8 = final loss
+             */
+            int epochs = (int)ins->imm;
+            double lr = ins->int_params[0] / 1e6;
+            /* int arch = ins->int_params[1]; */
+
+            Tensor *input  = &REG(0);    /* R0 */
+            Tensor *w1     = &REG(1);    /* R1: 1×H */
+            Tensor *b1     = &REG(2);    /* R2: 1×H */
+            Tensor *w2     = &REG(3);    /* R3: H×1 */
+            Tensor *b2     = &REG(4);    /* R4: 1×1 */
+            Tensor *target = &REG(9);    /* R9 */
+
+            int H = w1->shape[w1->ndim - 1]; /* hidden size */
+            int N = input->shape[0];          /* batch/sample count */
+
+            /* Allocate working buffers on stack */
+            double pre_h[NML_MAX_TENSOR_SIZE];
+            double hidden[NML_MAX_TENSOR_SIZE];
+            double output_buf[NML_MAX_TENSOR_SIZE];
+            double d_out[NML_MAX_TENSOR_SIZE];
+            double d_w2[NML_MAX_TENSOR_SIZE];
+            double d_hidden[NML_MAX_TENSOR_SIZE];
+            double d_w1[NML_MAX_TENSOR_SIZE];
+            double loss = 0;
+
+            for (int epoch = 0; epoch < epochs; epoch++) {
+                /* Forward: pre_h = input @ w1 + b1 */
+                for (int i = 0; i < N; i++)
+                    for (int j = 0; j < H; j++) {
+                        double sum = 0;
+                        for (int p = 0; p < w1->shape[0]; p++)
+                            sum += tensor_getd(input, i * w1->shape[0] + p) * tensor_getd(w1, p * H + j);
+                        pre_h[i * H + j] = sum + tensor_getd(b1, j);
+                    }
+
+                /* ReLU */
+                for (int i = 0; i < N * H; i++)
+                    hidden[i] = pre_h[i] > 0 ? pre_h[i] : 0;
+
+                /* Output: output = hidden @ w2 + b2 */
+                for (int i = 0; i < N; i++) {
+                    double sum = 0;
+                    for (int j = 0; j < H; j++)
+                        sum += hidden[i * H + j] * tensor_getd(w2, j);
+                    output_buf[i] = sum + tensor_getd(b2, 0);
+                }
+
+                /* MSE loss */
+                loss = 0;
+                for (int i = 0; i < N; i++) {
+                    double diff = output_buf[i] - tensor_getd(target, i);
+                    loss += diff * diff;
+                    d_out[i] = 2.0 * diff / N;
+                }
+                loss /= N;
+
+                /* Backward: d_w2 = hidden^T @ d_out */
+                for (int j = 0; j < H; j++) {
+                    double sum = 0;
+                    for (int i = 0; i < N; i++)
+                        sum += hidden[i * H + j] * d_out[i];
+                    d_w2[j] = sum;
+                }
+
+                /* d_b2 = sum(d_out) */
+                double d_b2_val = 0;
+                for (int i = 0; i < N; i++) d_b2_val += d_out[i];
+
+                /* Update w2, b2 */
+                for (int j = 0; j < H; j++)
+                    tensor_setd(w2, j, tensor_getd(w2, j) - lr * d_w2[j]);
+                tensor_setd(b2, 0, tensor_getd(b2, 0) - lr * d_b2_val);
+
+                /* d_hidden = d_out @ w2^T * relu'(pre_h) */
+                for (int i = 0; i < N; i++)
+                    for (int j = 0; j < H; j++) {
+                        double g = d_out[i] * tensor_getd(w2, j);
+                        d_hidden[i * H + j] = pre_h[i * H + j] > 0 ? g : 0;
+                    }
+
+                /* d_w1 = input^T @ d_hidden */
+                int K = w1->shape[0];
+                for (int p = 0; p < K; p++)
+                    for (int j = 0; j < H; j++) {
+                        double sum = 0;
+                        for (int i = 0; i < N; i++)
+                            sum += tensor_getd(input, i * K + p) * d_hidden[i * H + j];
+                        d_w1[p * H + j] = sum;
+                    }
+
+                /* Update w1 */
+                for (int idx = 0; idx < K * H; idx++)
+                    tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * d_w1[idx]);
+            }
+
+            /* Store final loss in R8 */
+            int ls[] = {1};
+            tensor_init_typed(&REG(8), 1, ls, NML_F64);
+            tensor_setd(&REG(8), 0, loss);
+            RVALID(8) = 1;
+
             break;
         }
 #endif /* NML_NO_TRAINING */
