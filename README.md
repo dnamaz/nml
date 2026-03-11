@@ -29,6 +29,7 @@ ONNX handles neural networks. XGBoost has its own runtime. Decision trees need a
 
 - **Neural networks**: `MMUL`, `MADD`, `RELU`, `SIGM`, `SOFT`, `ATTN`, `NORM`, `GELU`
 - **Decision trees**: `CMPF` (feature compare), `LEAF` (leaf value), `TACC` (accumulate)
+- **Training**: `BKWD` (backprop), `WUPD` (weight update), `LOSS`, `TNET` (fused training loop)
 - **Signal processing**: `FFT`, `FILT`
 - **Vision**: `CONV`, `POOL`, `UPSC`, `PADZ`
 - **General computation**: `LOOP`, `CALL`/`RET`, `SYS`, `MOD`
@@ -47,9 +48,13 @@ The M2M extensions turn NML from an execution runtime into a machine-to-machine 
 
 Classic (`MMUL`) for machines and compilers. Symbolic (`×`) for token-efficient LLM communication. Verbose (`MATRIX_MULTIPLY`) for human auditors and regulators. All three compile to identical bytecode and can be mixed freely in the same program. No other ISA offers interchangeable syntax tiers.
 
+### Self-Training as an Opcode
+
+Most ISAs separate inference from training — you train in Python, export weights, run inference elsewhere. NML collapses this: `TNET #2000 #0.01` trains a neural network for 2,000 epochs at learning rate 0.01, using the current register state as the network. A program can arrive at a new machine, train on local data, and immediately run inference — no external framework, no Python, no GPU driver. The entire training loop compiles to the same 83 KB binary.
+
 ### Designed for LLM Generation
 
-NML's zero-ambiguity grammar exists specifically so that language models can learn to generate correct programs. With 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7-9B parameter model achieves 93-95% valid code generation. The design decision — one way to do everything, no syntactic sugar, no implicit behavior — is driven by learnability, not programmer convenience.
+NML's zero-ambiguity grammar exists specifically so that language models can learn to generate correct programs. With 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7-9B parameter model achieves 93% valid code generation after training on 436K pairs. The design decision — one way to do everything, no syntactic sugar, no implicit behavior — is driven by learnability, not programmer convenience.
 
 ## Use Cases
 
@@ -73,9 +78,13 @@ Multiple AI models independently generate NML programs for the same task. Each p
 
 Replace opaque model inference with verifiable instruction sequences. If two systems run the same NML program on the same data, they produce identical results — bit-for-bit reproducible across platforms. This matters for regulated industries (finance, healthcare, insurance) where "the model said so" is not an acceptable audit trail, but "here is the 18-instruction program and its output" is.
 
+### Self-Training at the Edge
+
+An NML program can train its own neural network, then immediately run inference — on the same device, in the same runtime, with zero external dependencies. A sensor node receives a `TNET` program, trains on local calibration data, and starts classifying. An agent in a hive collective receives training data from the coordinator, runs gradient descent via `BKWD`/`WUPD`, and reports back trained weights. No Python. No GPU driver. No network round-trip to a training server.
+
 ### Training LLMs to Generate Structured Code
 
-NML's zero-ambiguity grammar makes it dramatically easier to train models to write correct code. With only 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7-9B parameter model can learn to generate valid NML programs with 93-95% accuracy. Compare this to Python, where the same model must learn thousands of library APIs, multiple coding styles, and ambiguous syntax.
+NML's zero-ambiguity grammar makes it dramatically easier to train models to write correct code. With only 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7-9B parameter model can learn to generate valid NML programs with 93% accuracy after training on 436K pairs. Compare this to Python, where the same model must learn thousands of library APIs, multiple coding styles, and ambiguous syntax.
 
 ## Quick Start
 
@@ -201,6 +210,22 @@ ST    R0 @result
 HALT
 SCLR  R0 R0 #2.0
 RET
+```
+
+### Self-Training Network (TNET)
+
+```
+LD    R0 @training_inputs
+LD    R9 @training_targets
+LD    R1 @w1
+LD    R2 @b1
+LD    R3 @w2
+LD    R4 @b2
+TNET  #2000 #0.01
+ST    RA @predictions
+ST    R1 @trained_w1
+ST    R3 @trained_w2
+HALT
 ```
 
 ### Symbolic Anomaly Detector
@@ -345,8 +370,8 @@ runtime/nml.c        Single-file C99 runtime (~2,100 lines, 83 KB binary)
                      Assembler + validator + VM in one file
                      Parses all three syntax forms natively
 
-transpilers/         Python tools for grammar validation, semantic analysis,
-                     training data generation, formatting, and diffing
+transpilers/         Grammar validator, training data generators (core, equalize,
+                     self-training, tensor table, cascade, library), formatting
 
 serve/               MCP server, protocol definitions, cryptographic signing,
                      provenance tracking, and multi-agent orchestration
