@@ -534,9 +534,12 @@ export default function NMLChat() {
     if (result.status === "HALTED" && connected && selectedModel) {
       setGenerating(true);
       setStreamText("");
-      const explainPrompt = `Briefly explain what this NML program does and what the output means in 2-3 sentences:\n\n\`\`\`\n${code}\n\`\`\`\n\nExecution result: ${summary}`;
+      const outputDetail = Object.entries(result.outputs || {}).map(([k, v]) =>
+        `@${k} = ${Array.isArray(v) ? `[${v.map(n => n.toFixed(4)).join(", ")}]` : v.toFixed(4)}`
+      ).join("\n");
+      const explainPrompt = `Explain this NML program step by step, then explain each output register value and what it represents.\n\nProgram:\n\`\`\`\n${code}\n\`\`\`\n\nExecution completed in ${result.cycles} cycles (${result.time_us} µs).\n\nOutput values:\n${outputDetail}\n\nFor each output, explain: what computation produced this value, and what it means.`;
       const apiMsgs = [
-        { role: "system", content: "You are an NML expert. Explain NML programs concisely in 2-3 sentences. Describe the computation and interpret output values." },
+        { role: "system", content: "You are an NML expert. Walk through the program instruction by instruction, then explain each output register value: what computation produced it, what the numeric value represents, and why it has that value. Be specific about the numbers." },
         { role: "user", content: explainPrompt },
       ];
 
@@ -545,7 +548,7 @@ export default function NMLChat() {
         const r = await fetch(API_BASE + "/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: selectedModel, messages: apiMsgs, stream: true, max_tokens: 256, temperature: 0.3 }),
+          body: JSON.stringify({ model: selectedModel, messages: apiMsgs, stream: true, max_tokens: 512, temperature: 0.3 }),
         });
         const reader = r.body.getReader();
         const decoder = new TextDecoder();
