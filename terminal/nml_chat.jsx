@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 const API_BASE = "http://localhost:8082/v1";
+const EXEC_BASE = "http://localhost:8082";
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Source Code Pro', monospace";
 const COLORS = {
@@ -52,17 +53,27 @@ function MessageContent({ text }) {
   const blocks = renderMarkdown(text);
   return blocks.map((block, i) => {
     if (block.type === "code") {
+      const nml = isNMLCode(block.content);
       return (
         <div key={i} style={{ position: "relative", margin: "8px 0" }}>
-          <div style={{ position: "absolute", top: 4, right: 4, zIndex: 1 }}>
+          <div style={{ position: "absolute", top: 4, right: 4, zIndex: 1, display: "flex", gap: 4 }}>
+            {nml && <RunButton code={block.content} />}
             <CopyButton text={block.content} />
           </div>
+          {nml && (
+            <div style={{
+              position: "absolute", top: 4, left: 8, fontSize: 8, fontWeight: 700,
+              letterSpacing: 2, color: "#00b4ff", opacity: 0.6,
+            }}>
+              NML
+            </div>
+          )}
           <pre style={{
             background: COLORS.bg,
-            border: `1px solid ${COLORS.border}`,
+            border: `1px solid ${nml ? "rgba(0,180,255,0.3)" : COLORS.border}`,
             borderRadius: 4,
-            padding: "10px 14px",
-            paddingRight: 60,
+            padding: nml ? "22px 14px 10px" : "10px 14px",
+            paddingRight: 120,
             fontSize: 12.5,
             lineHeight: "19px",
             fontFamily: FONT,
@@ -233,6 +244,136 @@ function CopyButton({ text }) {
     }}>
       {copied ? "COPIED" : "COPY"}
     </button>
+  );
+}
+
+const NML_OPCODES = new Set([
+  "MMUL","MADD","MSUB","EMUL","EDIV","SDOT","DOT","SCLR","SDIV",
+  "RELU","SIGM","TANH","SOFT","GELU",
+  "LD","ST","MOV","ALLC","RSHP","TRNS","SPLT","MERG",
+  "CMPF","CMP","CMPI","JMPT","JMPF","JUMP","JMP","LOOP","ENDP",
+  "CALL","RET","LEAF","TACC","SYNC","HALT","TRAP",
+  "CONV","POOL","UPSC","PADZ","ATTN","NORM","EMBD",
+  "RDUC","WHER","CLMP","CMPR","FFT","FILT",
+  "META","FRAG","ENDF","LINK","VOTE","PROJ","DIST","GATH","SCAT","SCTR",
+  "SYS","MOD","ITOF","FTOI","BNOT","SIGN","VRFY","PTCH",
+]);
+const NML_SYMBOLIC = new Set([
+  "×","⊕","⊖","⊗","⊘","·","∗","÷","⌐","σ","τ","Σ","ℊ",
+  "↓","↑","←","□","⊞","⊤","⊢","⊣","⋈","≶","≺","ϟ",
+  "↗","↘","→","↻","↺","∎","∑","⇒","⇐","⏸","◼","⚠",
+  "⊛","⊓","⊔","⊡","⊙","‖","⊏","⊥","ϛ","⊻","⊧","⊜",
+  "∿","⋐","§","◆","◇","⚖","✦","✓","⟐","⟂","⊃","⊂","⚙",
+]);
+
+function isNMLCode(text) {
+  const lines = text.trim().split("\n").filter(l => l.trim() && !l.trim().startsWith(";"));
+  if (lines.length === 0) return false;
+  let nmlLines = 0;
+  for (const line of lines) {
+    const firstToken = line.trim().split(/\s+/)[0];
+    if (NML_OPCODES.has(firstToken) || NML_OPCODES.has(firstToken.toUpperCase()) || NML_SYMBOLIC.has(firstToken)) {
+      nmlLines++;
+    }
+  }
+  return nmlLines >= lines.length * 0.5 && nmlLines >= 2;
+}
+
+function RunButton({ code }) {
+  const [state, setState] = useState("idle");
+  const [result, setResult] = useState(null);
+
+  const handleRun = async () => {
+    setState("validating");
+    setResult(null);
+    try {
+      const valR = await fetch(EXEC_BASE + "/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nml_program: code }),
+      });
+      const valData = await valR.json();
+
+      if (!valData.valid) {
+        setState("error");
+        setResult({
+          status: "GRAMMAR ERROR",
+          errors: valData.errors?.map(e => e.message) || ["Invalid NML"],
+        });
+        return;
+      }
+
+      setState("executing");
+      const execR = await fetch(EXEC_BASE + "/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nml_program: code, data: "" }),
+      });
+      const execData = await execR.json();
+      setState("done");
+      setResult(execData);
+    } catch (e) {
+      setState("error");
+      setResult({ status: "CONNECTION ERROR", errors: [e.message] });
+    }
+  };
+
+  const btnColors = {
+    idle: { bg: "transparent", border: "#00b4ff", color: "#00b4ff", text: "RUN" },
+    validating: { bg: "rgba(0,180,255,0.1)", border: "#00b4ff", color: "#00b4ff", text: "VALIDATING..." },
+    executing: { bg: "rgba(0,180,255,0.1)", border: "#00b4ff", color: "#00b4ff", text: "EXECUTING..." },
+    done: { bg: "rgba(0,255,157,0.1)", border: COLORS.accent, color: COLORS.accent, text: "RAN" },
+    error: { bg: "rgba(255,68,68,0.1)", border: COLORS.error, color: COLORS.error, text: "ERROR" },
+  };
+  const s = btnColors[state];
+
+  return (
+    <div>
+      <button onClick={handleRun} disabled={state === "validating" || state === "executing"} style={{
+        background: s.bg, border: `1px solid ${s.border}`, color: s.color,
+        padding: "3px 8px", borderRadius: 4, fontSize: 9,
+        cursor: state === "validating" || state === "executing" ? "wait" : "pointer",
+        fontFamily: FONT, letterSpacing: 0.5, transition: "all 0.2s",
+      }}>
+        {state === "idle" ? "▶ RUN" : s.text}
+      </button>
+      {result && (
+        <div style={{
+          marginTop: 6, padding: "8px 12px", borderRadius: 4,
+          background: result.status === "HALTED" ? "rgba(0,255,157,0.06)" : "rgba(255,68,68,0.06)",
+          border: `1px solid ${result.status === "HALTED" ? COLORS.accent : COLORS.error}`,
+          fontSize: 11, fontFamily: FONT,
+        }}>
+          <div style={{
+            fontSize: 9, fontWeight: 700, letterSpacing: 2, marginBottom: 4,
+            color: result.status === "HALTED" ? COLORS.accent : COLORS.error,
+          }}>
+            {result.status || "RESULT"}
+            {result.cycles != null && <span style={{ fontWeight: 400, marginLeft: 8, color: COLORS.textDim }}>{result.cycles} cycles</span>}
+            {result.time_us != null && <span style={{ fontWeight: 400, marginLeft: 8, color: COLORS.textDim }}>{result.time_us} µs</span>}
+          </div>
+          {result.outputs && Object.keys(result.outputs).length > 0 && (
+            <div style={{ color: COLORS.text }}>
+              {Object.entries(result.outputs).map(([k, v]) => (
+                <div key={k}>
+                  <span style={{ color: "#ffcc00" }}>@{k}</span>
+                  <span style={{ color: COLORS.textDim }}> = </span>
+                  <span style={{ color: COLORS.accent, fontWeight: 700 }}>
+                    {Array.isArray(v) ? `[${v.map(n => n.toFixed(4)).join(", ")}]` : v.toFixed(4)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {result.errors && (
+            <div style={{ color: COLORS.error }}>
+              {result.errors.map((e, i) => <div key={i}>{e}</div>)}
+            </div>
+          )}
+          {result.stderr && <div style={{ color: COLORS.error, fontSize: 10 }}>{result.stderr}</div>}
+        </div>
+      )}
+    </div>
   );
 }
 
