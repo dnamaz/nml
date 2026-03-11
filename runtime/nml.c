@@ -2052,146 +2052,138 @@ static int vm_execute(VM *vm) {
             break;
         }
         case OP_TNET: {
-            /* Fused training loop — entire forward/backward/update in C.
+            /* Fused mini-batch training loop in C.
              * Register convention:
-             *   R0 = training input    R1 = w1 (1×H)    R2 = b1 (1×H)
-             *   R3 = w2 (H×1)         R4 = b2 (1×1)    R9 = target (N×1)
-             * Writes: R1,R3,R4 updated weights; R8 = final loss
+             *   R0 = training input (N×K)  R1 = w1 (K×H)   R2 = b1 (1×H)
+             *   R3 = w2 (H×1)             R4 = b2 (1×1)    R9 = target (N×1)
+             * Writes: R1,R2,R3,R4 updated weights; R8 = final loss
              */
             int epochs = (int)ins->imm;
             double lr = ins->int_params[0] / 1e6;
             int use_adam = ins->int_params[1];  /* 0=SGD, 1=Adam */
 
-            Tensor *input  = &REG(0);    /* R0 */
-            Tensor *w1     = &REG(1);    /* R1: 1×H */
-            Tensor *b1     = &REG(2);    /* R2: 1×H */
-            Tensor *w2     = &REG(3);    /* R3: H×1 */
-            Tensor *b2     = &REG(4);    /* R4: 1×1 */
-            Tensor *target = &REG(9);    /* R9 */
+            Tensor *input  = &REG(0);
+            Tensor *w1     = &REG(1);
+            Tensor *bias1  = &REG(2);
+            Tensor *w2     = &REG(3);
+            Tensor *bias2  = &REG(4);
+            Tensor *target = &REG(9);
 
-            int H = w1->shape[w1->ndim - 1]; /* hidden size */
-            int N = input->shape[0];          /* batch/sample count */
+            int H = w1->shape[w1->ndim - 1];
+            int N = input->shape[0];
+            int K = w1->shape[0];
+            int B = (N <= 64) ? N : 64;
+            int nbatch = (N + B - 1) / B;
 
-            /* Allocate working buffers on stack */
-            double pre_h[NML_MAX_TENSOR_SIZE];
-            double hidden[NML_MAX_TENSOR_SIZE];
-            double output_buf[NML_MAX_TENSOR_SIZE];
-            double d_out[NML_MAX_TENSOR_SIZE];
-            double d_w2[NML_MAX_TENSOR_SIZE];
-            double d_hidden[NML_MAX_TENSOR_SIZE];
-            double d_w1[NML_MAX_TENSOR_SIZE];
+            /* Heap-allocate: batch-sized working buffers + weight-sized gradient/Adam buffers */
+            size_t bh = (size_t)B * H, kh = (size_t)K * H;
+            size_t need = 3 * bh + 2 * (size_t)B + (size_t)H + kh;
+            if (use_adam) need += 2 * kh + 2 * (size_t)H;
+            double *buf = (double *)calloc(need, sizeof(double));
+            if (!buf) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET: alloc failed (%zu doubles)", need);
+
+            double *pre_h = buf, *hidden = pre_h + bh, *d_hidden = hidden + bh;
+            double *out_buf = d_hidden + bh, *d_out = out_buf + B;
+            double *d_w2 = d_out + B, *d_w1 = d_w2 + H;
+            double *m_w1 = NULL, *v_w1 = NULL, *m_w2 = NULL, *v_w2 = NULL;
+            if (use_adam) {
+                m_w1 = d_w1 + kh; v_w1 = m_w1 + kh;
+                m_w2 = v_w1 + kh;  v_w2 = m_w2 + H;
+            }
+            double m_b2 = 0, v_b2 = 0;
+            const double BETA1 = 0.9, BETA2 = 0.999, EPS = 1e-8;
+            int adam_t = 0;
             double loss = 0;
 
-            /* Adam optimizer state (zero-initialized) */
-            double m_w1[NML_MAX_TENSOR_SIZE], v_w1[NML_MAX_TENSOR_SIZE];
-            double m_w2[NML_MAX_TENSOR_SIZE], v_w2[NML_MAX_TENSOR_SIZE];
-            double m_b2 = 0, v_b2 = 0;
-            int K_w1 = w1->shape[0];
-            if (use_adam) {
-                memset(m_w1, 0, K_w1 * H * sizeof(double));
-                memset(v_w1, 0, K_w1 * H * sizeof(double));
-                memset(m_w2, 0, H * sizeof(double));
-                memset(v_w2, 0, H * sizeof(double));
-            }
-            const double adam_b1 = 0.9, adam_b2 = 0.999, adam_eps = 1e-8;
-
             for (int epoch = 0; epoch < epochs; epoch++) {
-                /* Forward: pre_h = input @ w1 + b1 */
-                for (int i = 0; i < N; i++)
-                    for (int j = 0; j < H; j++) {
+                loss = 0;
+                for (int batch = 0; batch < nbatch; batch++) {
+                    int s = batch * B;
+                    int Bn = (s + B <= N) ? B : N - s;
+
+                    /* Forward: pre_h = input[s:s+Bn] @ w1 + b1 */
+                    for (int i = 0; i < Bn; i++)
+                        for (int j = 0; j < H; j++) {
+                            double sum = 0;
+                            for (int p = 0; p < K; p++)
+                                sum += tensor_getd(input, (s + i) * K + p) * tensor_getd(w1, p * H + j);
+                            pre_h[i * H + j] = sum + tensor_getd(bias1, j);
+                        }
+
+                    for (int i = 0; i < Bn * H; i++)
+                        hidden[i] = pre_h[i] > 0 ? pre_h[i] : 0;
+
+                    for (int i = 0; i < Bn; i++) {
                         double sum = 0;
-                        for (int p = 0; p < w1->shape[0]; p++)
-                            sum += tensor_getd(input, i * w1->shape[0] + p) * tensor_getd(w1, p * H + j);
-                        pre_h[i * H + j] = sum + tensor_getd(b1, j);
+                        for (int j = 0; j < H; j++)
+                            sum += hidden[i * H + j] * tensor_getd(w2, j);
+                        out_buf[i] = sum + tensor_getd(bias2, 0);
                     }
 
-                /* ReLU */
-                for (int i = 0; i < N * H; i++)
-                    hidden[i] = pre_h[i] > 0 ? pre_h[i] : 0;
+                    /* MSE loss + output gradient (normalized per batch) */
+                    for (int i = 0; i < Bn; i++) {
+                        double diff = out_buf[i] - tensor_getd(target, s + i);
+                        loss += diff * diff;
+                        d_out[i] = 2.0 * diff / Bn;
+                    }
 
-                /* Output: output = hidden @ w2 + b2 */
-                for (int i = 0; i < N; i++) {
-                    double sum = 0;
-                    for (int j = 0; j < H; j++)
-                        sum += hidden[i * H + j] * tensor_getd(w2, j);
-                    output_buf[i] = sum + tensor_getd(b2, 0);
-                }
+                    /* Backward: d_w2 = hidden^T @ d_out */
+                    for (int j = 0; j < H; j++) {
+                        double sum = 0;
+                        for (int i = 0; i < Bn; i++)
+                            sum += hidden[i * H + j] * d_out[i];
+                        d_w2[j] = sum;
+                    }
+                    double d_b2_val = 0;
+                    for (int i = 0; i < Bn; i++) d_b2_val += d_out[i];
 
-                /* MSE loss */
-                loss = 0;
-                for (int i = 0; i < N; i++) {
-                    double diff = output_buf[i] - tensor_getd(target, i);
-                    loss += diff * diff;
-                    d_out[i] = 2.0 * diff / N;
+                    /* d_hidden = d_out @ w2^T * relu'(pre_h) */
+                    for (int i = 0; i < Bn; i++)
+                        for (int j = 0; j < H; j++) {
+                            double g = d_out[i] * tensor_getd(w2, j);
+                            d_hidden[i * H + j] = pre_h[i * H + j] > 0 ? g : 0;
+                        }
+
+                    /* d_w1 = input[s:s+Bn]^T @ d_hidden */
+                    for (int p = 0; p < K; p++)
+                        for (int j = 0; j < H; j++) {
+                            double sum = 0;
+                            for (int i = 0; i < Bn; i++)
+                                sum += tensor_getd(input, (s + i) * K + p) * d_hidden[i * H + j];
+                            d_w1[p * H + j] = sum;
+                        }
+
+                    /* Weight update (per mini-batch) */
+                    if (use_adam) {
+                        adam_t++;
+                        double bc1 = 1.0 - pow(BETA1, adam_t);
+                        double bc2 = 1.0 - pow(BETA2, adam_t);
+                        for (int j = 0; j < H; j++) {
+                            m_w2[j] = BETA1 * m_w2[j] + (1 - BETA1) * d_w2[j];
+                            v_w2[j] = BETA2 * v_w2[j] + (1 - BETA2) * d_w2[j] * d_w2[j];
+                            tensor_setd(w2, j, tensor_getd(w2, j) - lr * (m_w2[j] / bc1) / (sqrt(v_w2[j] / bc2) + EPS));
+                        }
+                        m_b2 = BETA1 * m_b2 + (1 - BETA1) * d_b2_val;
+                        v_b2 = BETA2 * v_b2 + (1 - BETA2) * d_b2_val * d_b2_val;
+                        tensor_setd(bias2, 0, tensor_getd(bias2, 0) - lr * (m_b2 / bc1) / (sqrt(v_b2 / bc2) + EPS));
+                        for (int idx = 0; idx < K * H; idx++) {
+                            m_w1[idx] = BETA1 * m_w1[idx] + (1 - BETA1) * d_w1[idx];
+                            v_w1[idx] = BETA2 * v_w1[idx] + (1 - BETA2) * d_w1[idx] * d_w1[idx];
+                            tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * (m_w1[idx] / bc1) / (sqrt(v_w1[idx] / bc2) + EPS));
+                        }
+                    } else {
+                        for (int j = 0; j < H; j++)
+                            tensor_setd(w2, j, tensor_getd(w2, j) - lr * d_w2[j]);
+                        tensor_setd(bias2, 0, tensor_getd(bias2, 0) - lr * d_b2_val);
+                        for (int idx = 0; idx < K * H; idx++)
+                            tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * d_w1[idx]);
+                    }
                 }
                 loss /= N;
-
-                /* Backward: d_w2 = hidden^T @ d_out */
-                for (int j = 0; j < H; j++) {
-                    double sum = 0;
-                    for (int i = 0; i < N; i++)
-                        sum += hidden[i * H + j] * d_out[i];
-                    d_w2[j] = sum;
-                }
-
-                /* d_b2 = sum(d_out) */
-                double d_b2_val = 0;
-                for (int i = 0; i < N; i++) d_b2_val += d_out[i];
-
-                /* Update w2, b2 */
-                if (use_adam) {
-                    double b1c = 1.0 - pow(adam_b1, epoch + 1);
-                    double b2c = 1.0 - pow(adam_b2, epoch + 1);
-                    for (int j = 0; j < H; j++) {
-                        m_w2[j] = adam_b1 * m_w2[j] + (1 - adam_b1) * d_w2[j];
-                        v_w2[j] = adam_b2 * v_w2[j] + (1 - adam_b2) * d_w2[j] * d_w2[j];
-                        double mh = m_w2[j] / b1c, vh = v_w2[j] / b2c;
-                        tensor_setd(w2, j, tensor_getd(w2, j) - lr * mh / (sqrt(vh) + adam_eps));
-                    }
-                    m_b2 = adam_b1 * m_b2 + (1 - adam_b1) * d_b2_val;
-                    v_b2 = adam_b2 * v_b2 + (1 - adam_b2) * d_b2_val * d_b2_val;
-                    double mh_b2 = m_b2 / b1c, vh_b2 = v_b2 / b2c;
-                    tensor_setd(b2, 0, tensor_getd(b2, 0) - lr * mh_b2 / (sqrt(vh_b2) + adam_eps));
-                } else {
-                    for (int j = 0; j < H; j++)
-                        tensor_setd(w2, j, tensor_getd(w2, j) - lr * d_w2[j]);
-                    tensor_setd(b2, 0, tensor_getd(b2, 0) - lr * d_b2_val);
-                }
-
-                /* d_hidden = d_out @ w2^T * relu'(pre_h) */
-                for (int i = 0; i < N; i++)
-                    for (int j = 0; j < H; j++) {
-                        double g = d_out[i] * tensor_getd(w2, j);
-                        d_hidden[i * H + j] = pre_h[i * H + j] > 0 ? g : 0;
-                    }
-
-                /* d_w1 = input^T @ d_hidden */
-                int K = w1->shape[0];
-                for (int p = 0; p < K; p++)
-                    for (int j = 0; j < H; j++) {
-                        double sum = 0;
-                        for (int i = 0; i < N; i++)
-                            sum += tensor_getd(input, i * K + p) * d_hidden[i * H + j];
-                        d_w1[p * H + j] = sum;
-                    }
-
-                /* Update w1 */
-                if (use_adam) {
-                    double b1c = 1.0 - pow(adam_b1, epoch + 1);
-                    double b2c = 1.0 - pow(adam_b2, epoch + 1);
-                    for (int idx = 0; idx < K * H; idx++) {
-                        m_w1[idx] = adam_b1 * m_w1[idx] + (1 - adam_b1) * d_w1[idx];
-                        v_w1[idx] = adam_b2 * v_w1[idx] + (1 - adam_b2) * d_w1[idx] * d_w1[idx];
-                        double mh = m_w1[idx] / b1c, vh = v_w1[idx] / b2c;
-                        tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * mh / (sqrt(vh) + adam_eps));
-                    }
-                } else {
-                    for (int idx = 0; idx < K * H; idx++)
-                        tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * d_w1[idx]);
-                }
             }
 
-            /* Store final loss in R8 */
+            free(buf);
+
             int ls[] = {1};
             tensor_init_typed(&REG(8), 1, ls, NML_F64);
             tensor_setd(&REG(8), 0, loss);
