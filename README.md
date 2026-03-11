@@ -21,7 +21,7 @@ NML programs are deterministic, verifiable, and machine-readable. Every program 
 
 ### Tensor Registers, Not Scalar Registers
 
-Traditional ISAs (x86, ARM, RISC-V) operate on scalar values — a matrix multiply requires hundreds of instructions in a loop nest. Graph-based runtimes (ONNX, TVM) operate on abstract nodes. NML's 16 registers each hold an entire tensor. A matrix multiply is one instruction: `MMUL R3 R0 R1`. A full neural network layer — load weights, multiply, add bias, activate, store — is 8 instructions. An anomaly detector is 18.
+Traditional ISAs (x86, ARM, RISC-V) operate on scalar values — a matrix multiply requires hundreds of instructions in a loop nest. Graph-based runtimes (ONNX, TVM) operate on abstract nodes. NML's 32 registers each hold an entire tensor. A matrix multiply is one instruction: `MMUL R3 R0 R1`. A full neural network layer — load weights, multiply, add bias, activate, store — is 8 instructions. An anomaly detector is 18.
 
 ### One ISA for All Model Types
 
@@ -305,26 +305,28 @@ All three programs are in `programs/` with matching `.nml.data` files:
 
 ## Performance
 
-### Self-Training: 10x Faster Than Python
+### Self-Training: 166x Faster Than Python
 
-NML can train its own neural networks using the TNET fused opcode. On a 1→4→1 ReLU network learning y=2x+1 (2,000 epochs):
+NML can train its own neural networks using the TNET fused opcode. Same weights, same data, same hyperparameters — 1-to-1 comparison (20 runs, median time).
 
-| Method | Result | Time | Binary Size |
-|--------|--------|------|-------------|
-| Python/NumPy | 7.0000 (exact) | 20.5 ms | 1.9 GB runtime |
-| NML (interpreted) | 6.8878 | 188.0 ms | 67 KB |
-| NML (TNET) | 7.0000 (exact) | 1.9 ms | 67 KB |
-| NML (TNET + BLAS) | 7.0000 (exact) | 1.9 ms | 83 KB |
+**Small network** — 1→4→1 ReLU, y=2x+1, 2,000 epochs, lr=0.001:
 
-For larger networks (256 neurons, 5,000 epochs):
+| Method | Result | Time | Speedup |
+|--------|--------|------|---------|
+| Python/NumPy SGD | 7.0000 (exact) | 46.9 ms | baseline |
+| NML TNET SGD | 7.0000 (exact) | 0.28 ms | **166x faster** |
+| Python/NumPy Adam | 7.0000 (exact) | 97.4 ms | baseline |
+| NML TNET Adam | 7.0000 (exact) | 0.54 ms | **182x faster** |
 
-| Method | Time | vs Python |
-|--------|------|-----------|
-| Python/NumPy | 133.1 ms | 1x |
-| NML TNET (portable) | 27.4 ms | 4.9x faster |
-| NML TNET (BLAS) | 13.0 ms | 10.2x faster |
+**Medium network** — 1→256→1 ReLU, 396 real FIT bracket samples, Adam, mini-batch=64:
 
-67 KB binary. Zero dependencies. Trains neural networks 10x faster than a 1.9 GB Python installation.
+| Method | 1K epochs | 5K epochs |
+|--------|-----------|-----------|
+| Python/NumPy | 1.15 s | 5.93 s |
+| NML TNET (portable) | 0.85 s (1.3x) | 4.30 s (1.4x) |
+| NML TNET (BLAS) | 0.65 s (1.8x) | 3.52 s (1.7x) |
+
+67 KB binary. Zero dependencies. 166x faster on small networks, 1.3-1.8x on large networks (where BLAS math dominates). Scales to 100K+ training samples with heap-allocated mini-batching.
 
 ### Inference Benchmarks
 
@@ -363,7 +365,7 @@ docs/                Full specification, architecture documents, usage guide,
 
 ## Registers
 
-16 tensor registers with three naming conventions:
+32 tensor registers with three naming conventions:
 
 | Index | Classic | Greek | Purpose |
 |-------|---------|-------|---------|
@@ -374,6 +376,8 @@ docs/                Full specification, architecture documents, usage guide,
 | 13 | RD | δ | Counter |
 | 14 | RE | φ | Condition flag |
 | 15 | RF | ψ | Stack pointer |
+| 16-22 | RG-RM | η θ ζ ω χ υ ε | Training / extended |
+| 23-31 | RN-RV | — | Extended registers |
 
 ## Data Types
 
