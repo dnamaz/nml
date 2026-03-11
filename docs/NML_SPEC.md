@@ -293,8 +293,8 @@ HALT
 | Source | Status | Notes |
 |--------|--------|-------|
 | XGBoost | Validated | 20/20 exact match, tree dump → NML |
-| STE Tax Data | Validated | 1,795/1,795 files transpiled and executed |
-| JSON Tax Rules | Validated | Deterministic bracket-based rules |
+| Domain Data | Validated | Deterministic rule-based transpilation |
+| Domain Rules | Validated | Deterministic rule-based transpilation |
 | LightGBM | Planned | Similar tree structure to XGBoost |
 | scikit-learn RF | Planned | Decision tree export available |
 | PyTorch (NN) | Planned | Layer → NML instruction mapping |
@@ -503,11 +503,9 @@ STORE ς @output        ; verbose opcode + Greek register
 The transpiler and library builder support a `--syntax` flag:
 
 ```bash
-python3 ste_transpiler.py transpile file.json --syntax classic
-python3 ste_transpiler.py transpile file.json --syntax symbolic
-python3 ste_transpiler.py transpile file.json --syntax verbose
-
-python3 ste_build_library.py --syntax symbolic --validate
+python3 nml_transpiler.py transpile file.json --syntax classic
+python3 nml_transpiler.py transpile file.json --syntax symbolic
+python3 nml_transpiler.py transpile file.json --syntax verbose
 ```
 
 ### Compact Form (Single-Line Representation)
@@ -563,7 +561,7 @@ NML v0.5 supports per-tensor data types. Each tensor carries its own type; opera
 | Type | Size | Use Case | Default |
 |------|------|----------|---------|
 | `f32` | 4 bytes | ML inference, neural networks | Yes |
-| `f64` | 8 bytes | Financial calculations, STE matching | No |
+| `f64` | 8 bytes | Financial calculations, high-precision matching | No |
 | `i32` | 4 bytes | Counters, indices, integer math | No |
 
 ### Type Promotion Rules
@@ -715,7 +713,7 @@ Build with NML-G disabled: `gcc -DNML_NO_GENERAL -o nml nml.c -lm`
 | v0.3 | 28 | 14 | 42 | NML-V, NML-T, NML-R, NML-S extensions |
 | v0.4 | 35 | 14 | 49 | SDIV, EDIV, CMP, CMPI, SPLT, MERG, CALL, RET, TRAP; backward jumps; error codes; --trace; vm_validate() |
 | v0.4.1 | 35 | 14 | 49 | Symbolic dual-syntax: Unicode opcode aliases + Greek register aliases for all 16 registers |
-| v0.4.2 | 35 | 14 | 49 | Verbose human-readable aliases; tri-syntax transpiler (`--syntax classic\|symbolic\|verbose`); NML tax library builder |
+| v0.4.2 | 35 | 14 | 49 | Verbose human-readable aliases; tri-syntax transpiler (`--syntax classic\|symbolic\|verbose`); NML library builder |
 | v0.5 | 35 | 14 | 49 | Per-tensor data types (f32, f64, i32); auto type promotion; dtype= in .nml.data; ALLC dtype; NML_F32_ONLY flag |
 | v0.6 | 35 | 14 + 11 M2M | 60 | META (self-describing programs); typed register annotations; FRAG/ENDF/LINK (compositional fragments); PTCH (differential programs); SIGN/VRFY (cryptographic signing); VOTE (consensus); PROJ/DIST (latent space) |
 | v0.6.1 | 35 | 14 + 13 M2M | 62 | GATH (tensor index lookup), SCAT (tensor index write); register aliasing fix in tensor_add/sub/emul/ediv/mmul; f64 MMUL via tensor_getd/setd; RELU/SIGM/TANH/SOFT f64 support |

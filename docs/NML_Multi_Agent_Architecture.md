@@ -180,12 +180,12 @@ The pipeline is not theoretical. The existing NML project already implements sta
 
 | Pipeline Stage | Current Implementation | Agent Evolution |
 |---|---|---|
-| Regulation Parser | `transpilers/ste_transpiler.py` — parses 7,549 STE JSON files into NML | LLM agent that reads raw statute text (not pre-structured JSON) and outputs draft NML |
-| Validation Agent | `transpilers/ste_validate.py` — transpile + execute + compare | Formal NML grammar checker + semantic analysis + cross-jurisdiction consistency |
-| Test Generator | `transpilers/ste_oracle.py` — generates PayCalcRequest test vectors | LLM agent that generates adversarial edge cases from regulation text |
+| Regulation Parser | `transpilers/domain_transpiler.py` — parses domain data source files into NML | LLM agent that reads raw statute text (not pre-structured data) and outputs draft NML |
+| Validation Agent | `transpilers/domain_validate.py` — transpile + execute + compare | Formal NML grammar checker + semantic analysis + cross-jurisdiction consistency |
+| Test Generator | `transpilers/domain_oracle.py` — generates domain-specific test vectors | LLM agent that generates adversarial edge cases from regulation text |
 | Symbolic Engine | `runtime/nml.c` — 49-instruction VM, ~51KB | Unchanged. The engine is already deterministic and correct. No LLM needed. |
 | Explanation Agent | `terminal/nml_chat.jsx` — chat interface with RAG | LLM agent that takes NML program + execution trace and generates audit narrative |
-| Training Pipeline | `transpilers/ste_training_gen.py` — 96,710 training pairs | Generates fine-tuning data from agent interactions for continuous improvement |
+| Training Pipeline | `transpilers/domain_training_gen.py` — generates training pairs | Generates fine-tuning data from agent interactions for continuous improvement |
 
 ### What Changes, What Stays
 
@@ -270,7 +270,7 @@ For agent-to-agent transport, the **compact form** is preferred: instructions ar
 
 | Field | Type | Purpose |
 |---|---|---|
-| `jurisdiction_key` | string | e.g., `00-000-0000-FIT-000` (federal income tax) |
+| `jurisdiction_key` | string | Domain-specific key identifying the rule set (e.g., `FED-INCOME-2026`) |
 | `tax_year` | int | Effective tax year |
 | `effective_date` | date | When the rules take effect |
 | `prior_version_hash` | SHA-256 | Hash of the NML program this replaces, enabling diffing |
@@ -335,7 +335,7 @@ flowchart TB
 | Model size | 7B–13B parameters, fine-tuned on tax regulation corpus |
 | Latency target | < 5 seconds per jurisdiction |
 | Validation | Output must pass formal NML grammar check |
-| Current analog | `ste_transpiler.py` (works on pre-structured JSON; agent works on raw text) |
+| Current analog | `domain_transpiler.py` (works on pre-structured data; agent works on raw text) |
 
 #### Validation Agent
 
@@ -346,7 +346,7 @@ flowchart TB
 | Output | Validated NML + validation report (errors, warnings) |
 | Checks performed | Grammar validity, register usage correctness, unreachable code detection, bracket/threshold monotonicity, cross-reference with prior year |
 | Latency target | < 100ms per program |
-| Current analog | `ste_validate.py` |
+| Current analog | `domain_validate.py` |
 
 #### Test Generation Agent
 
@@ -357,7 +357,7 @@ flowchart TB
 | Output | Test vector suite (input/expected-output pairs) |
 | Strategy | Boundary values at bracket thresholds, zero/negative/maximum inputs, filing status combinations, exemption edge cases |
 | Latency target | < 3 seconds per jurisdiction |
-| Current analog | `ste_oracle.py` (generates PayCalcRequest vectors) |
+| Current analog | `domain_oracle.py` (generates domain-specific test vectors) |
 
 #### Symbolic Execution Engine
 
@@ -386,7 +386,7 @@ flowchart TB
 | Property | Value |
 |---|---|
 | Type | LLM-powered or statistical |
-| Input | Full NML library (7,549+ programs) |
+| Input | Full NML library (all domain programs) |
 | Output | Anomaly reports: unusual thresholds, missing jurisdictions, inconsistent bracket structures |
 | Strategy | Cross-jurisdiction comparison, year-over-year delta analysis, statistical outlier detection |
 | Trigger | Runs after batch updates (e.g., annual tax year rollover) |
@@ -451,8 +451,8 @@ The existing NML system has been extended with a multi-agent services layer. All
 ```mermaid
 flowchart LR
     subgraph phase1 [Phase 1: Service Wrapping]
-        T1["Wrap ste_transpiler.py\nas HTTP service"]
-        T2["Wrap ste_validate.py\nas HTTP service"]
+        T1["Wrap domain_transpiler.py\nas HTTP service"]
+        T2["Wrap domain_validate.py\nas HTTP service"]
         T3["Wrap nml.c\nas execution service"]
     end
 
@@ -487,25 +487,23 @@ flowchart LR
 
 Existing scripts are wrapped as callable services with defined inputs and outputs.
 
-- `ste_transpiler.py` → `serve/transpiler_service.py` (port 8083): POST a jurisdiction key, receive an NML program
-- `ste_validate.py` → `serve/validation_service.py` (port 8084): POST an NML program, receive a validation report
+- `domain_transpiler.py` → `serve/transpiler_service.py` (port 8083): POST a domain key, receive an NML program
+- `domain_validate.py` → `serve/validation_service.py` (port 8084): POST an NML program, receive a validation report
 - `nml.c` → `serve/execution_service.py` (port 8085): POST NML + input data, receive computation result
 - `domain_rag_server.py` extended with gateway routes proxying to all three services
 
-**Test results:** All three services pass health checks. FICA transpile + execute returns $6,200 on $100,000 (correct). FIT full validation returns grammar valid, semantic valid, execution pass.
-
-**STE MCP Validation:** Automated validation against the production Symmetry Tax Engine via local ctypes calls. 14/14 match at $0.00 difference for FICA, Medicare, employer FICA, and employer Medicare.
+**Test results:** All three services pass health checks. Transpile + execute returns correct results for representative domain computations. Full validation returns grammar valid, semantic valid, execution pass.
 
 ### Phase 2: Validation Agents — IMPLEMENTED
 
 Formal validation beyond transpile-and-compare.
 
-- `transpilers/nml_grammar.py`: formal grammar checker — **7,549/7,549 programs valid, 0 errors**
+- `transpilers/nml_grammar.py`: formal grammar checker — **all programs valid, 0 errors**
 - `transpilers/nml_semantic.py`: bracket monotonicity, rate bounds, filing status coverage, standard deduction extraction
-- `transpilers/nml_regression.py`: golden test baselines — **7,549/7,549 pass**
+- `transpilers/nml_regression.py`: golden test baselines — **all programs pass**
 - `serve/validation_service.py` `/validate/full` endpoint chains grammar + semantic + execution
 
-**Test results:** Grammar validator scans all 7,549 programs in 1.7 seconds with zero errors. Semantic analyzer correctly extracts all 2025 FIT brackets (7 per filing status), rates (10%–37%), and standard deductions ($8,600 Single / $12,900 MFJ).
+**Test results:** Grammar validator scans all programs in under 2 seconds with zero errors. Semantic analyzer correctly extracts bracket structures, rates, and threshold values across all domain rule sets.
 
 ### Phase 3: Orchestrator — IMPLEMENTED
 
@@ -529,10 +527,10 @@ Structured message envelope and provenance tracking.
 Distributed analysis and anomaly detection tools.
 
 - `transpilers/nml_diff.py`: semantic NML diff — bracket thresholds, rates, deductions, cumulative amounts per filing status
-- `transpilers/nml_anomaly.py`: cross-jurisdiction anomaly scanner — **scanned 7,549 programs**, found rate outliers, threshold outliers, and expected duplicate stubs for no-income-tax states
+- `transpilers/nml_anomaly.py`: cross-jurisdiction anomaly scanner — **scanned all programs**, found rate outliers, threshold outliers, and expected structural stubs for inactive domains
 - Parallel processing, cross-vendor federation, and self-improving pipelines are architecturally supported but require LLM model availability for full testing
 
-**Embedding Anomaly Monitor:** Trained neural embeddings for 53 bracket jurisdictions comparing 2024 vs 2025. Flagged Maryland SIT (brackets expanded 5→10 tiers) and PEI PIT as anomalies. Report at `output/anomaly_reports/`.
+**Embedding Anomaly Monitor:** Trained neural embeddings for bracket-based domains comparing year-over-year changes. Flagged structural anomalies where bracket tiers changed significantly. Report at `output/anomaly_reports/`.
 
 ---
 

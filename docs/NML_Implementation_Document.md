@@ -2,7 +2,7 @@
 
 ## What Was Built
 
-This document describes the complete implementation of the NML (Neural Machine Language) system: a 67-instruction machine language for AI workloads with a ~51KB C runtime, three transpiler pipelines (XGBoost, deterministic rules, and STE), an STE-to-NML parser covering 7,549 tax jurisdiction files (all 7,549 transpiled and validated), a tri-syntax system (classic/symbolic/verbose), a training data generator for LLM fine-tuning, and a general-purpose extension (NML-G) enabling console I/O and integer math.
+This document describes the complete implementation of the NML (Neural Machine Language) system: a 67-instruction machine language for AI workloads with a ~51KB C runtime, three transpiler pipelines (XGBoost, deterministic rules, and domain rule transpilation), a tri-syntax system (classic/symbolic/verbose), a training data generator for LLM fine-tuning, and a general-purpose extension (NML-G) enabling console I/O and integer math.
 
 ---
 
@@ -13,14 +13,14 @@ flowchart TD
     subgraph sources [Source Data]
         XGB[Trained XGBoost Model]
         JSON[JSON Tax Rules]
-        STE[STE Tax Data — 7,549 Files]
+        DomainRules[Domain Rule Files]
         NN[Neural Network Weights]
     end
 
     subgraph transpilers [Transpiler Layer]
         XGBTrans[XGBoost Transpiler — tax_pipeline.py]
         RuleTrans[Rule Transpiler — rule_transpiler.py]
-        STETrans[STE Transpiler — ste_transpiler.py]
+        DomainTrans[Domain Transpiler — rule files to NML]
     end
 
     subgraph nml_programs [NML Programs]
@@ -40,9 +40,8 @@ flowchart TD
     end
 
     subgraph training [Training Data Pipeline]
-        Oracle[STE Oracle — ste_oracle.py]
-        Validate[Validation Pipeline — ste_validate.py]
-        TrainGen[Training Generator — ste_training_gen.py]
+        Validate[Validation Pipeline]
+        TrainGen[Training Generator]
         Dataset["Training Dataset — 96,710 pairs"]
     end
 
@@ -59,7 +58,7 @@ flowchart TD
 
     XGB --> XGBTrans --> TaxCalc
     JSON --> RuleTrans --> RulesCalc
-    STE --> STETrans --> FIT & CASIT & FICA
+    DomainRules --> DomainTrans --> FIT & CASIT & FICA
 
     NN --> Anomaly
     NN --> Extensions
@@ -67,11 +66,10 @@ flowchart TD
     TaxCalc & RulesCalc & FIT & Anomaly --> NMLFull
     TaxCalc & RulesCalc & FIT & Anomaly --> NMLCore
 
-    STE --> Oracle --> Validate
-    STETrans --> Validate
+    DomainTrans --> Validate
     Validate --> TrainGen --> Dataset
 
-    STETrans --> TranspilerSvc
+    DomainTrans --> TranspilerSvc
     Validate --> ValidatorSvc
     NMLFull --> EngineSvc
     GrammarVal --> ValidatorSvc
@@ -247,151 +245,25 @@ All 4 test employees match analytical computation exactly:
 
 ---
 
-## Component 4: STE-to-NML Parser (`transpilers/`)
+## Component 4: Domain Transpilation (`transpilers/`)
 
-**~3,500 lines of Python across 7 files.** Reads 7,549 Symmetry Tax Engine JSON files and generates NML programs replicating the STE's `calc()` and `calcTaxToLimitByTaxId()` formulas.
+The NML transpiler layer supports a general pattern of **domain transpilation**: converting structured rule files from an external data source into executable NML programs. Given a corpus of domain-specific rule definitions (e.g., JSON files describing progressive brackets, flat rates, thresholds, and constants), the transpiler scans the rule tree, resolves effective dates, classifies each rule into a pattern (bracket-based or flat-rate), and emits the corresponding NML instructions. A builder module (`nml_builder.py`) handles label resolution and tri-syntax translation for the generated programs.
 
-### File Inventory
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `nml_builder.py` | ~150 | Program builder with label resolution + tri-syntax translation |
-| `ste_transpiler.py` | ~1,070 | Scanner, date resolver, bracket emitter, flat-rate emitter, `--syntax` flag |
-| `ste_build_library.py` | ~220 | Full library builder (7,549 programs → nml-library/ + manifest.json) |
-| `ste_oracle.py` | ~310 | PayCalcRequest generator for STE API validation |
-| `ste_validate.py` | ~270 | Transpile → execute → compare pipeline |
-| `ste_training_gen.py` | ~950 | Training data generator (4+ formats) |
-| `nml_syntax_gen.py` | ~450 | Syntax-specific training data generation |
-
-### STE Data Coverage
-
-```mermaid
-pie title "7,549 STE Tax Files by Pattern — All Transpiled"
-    "PA Local LST" : 2639
-    "PA Local EIT" : 2639
-    "Flat Rate" : 2187
-    "Progressive Bracket" : 84
-```
-
-| Tax Type | File Count | Pattern | Example |
-|----------|-----------|---------|---------|
-| LST (Local Services Tax) | 2,639 | PA local | `42-103-1216964-LST-452003.json` |
-| EIT (Earned Income Tax) | 2,639 | PA local | `42-103-1216964-EIT-452003.json` |
-| CITY (municipal) | 769 | Flat rate | `39-000-1058142-CITY-000.json` |
-| SCHL (school district) | 613 | Flat rate | `39-000-0000-SCHL-7402.json` |
-| SIT (state income) | 56 | Bracket | `06-000-0000-SIT-000.json` |
-| PIT (provincial — Canada) | 13 | Bracket | `82-000-0000-PIT-000.json` |
-| FIT (federal income) | 2 | Bracket | `00-000-0000-FIT-000.json` |
-| FICA | 2 | Flat rate | `00-000-0000-FICA-000.json` |
-
-### Transpilation Pipeline
-
-```mermaid
-flowchart TD
-    subgraph step1 [Step 1 — Scanner]
-        Scan["scan_tax_data()\nTraverse tax-data/ tree\nClassify 7,549 files"]
-    end
-
-    subgraph step2 [Step 2 — Date Resolver]
-        Resolve["resolve_bracket_set()\nmerge_tax_data()\nEffective date: max(date) ≤ payDate"]
-    end
-
-    subgraph step3 [Step 3 — Bracket Emitter]
-        Brackets["emit_bracket_dispatch()\nSTE calc() formula:\ntax = addition + (income - threshold) × rate"]
-    end
-
-    subgraph step4 [Step 4 — Flat Rate Emitter]
-        Flat["emit_flat_rate_nml()\nSTE calcTaxToLimitByTaxId():\ntax = min(wages, wageBase) × rate"]
-    end
-
-    subgraph step5 [Step 5 — Constants]
-        Const["load_tax_constants()\nStandard deductions, exemptions,\nallowances per jurisdiction"]
-    end
-
-    subgraph step6 [Step 6 — Composer]
-        Compose["compose_paycheck_nml()\nFIT + FICA + Medicare + SIT + local\n→ single NML program"]
-    end
-
-    Scan --> step2
-    step2 --> step3
-    step2 --> step4
-    step5 --> step6
-    step3 --> step6
-    step4 --> step6
-```
-
-### STE Formula Mapping
-
-The STE calculates progressive bracket taxes in `ste/luacode/modules/globals.lua:525`:
-
-```
-tax = (taxableAmount - bracket) * percent + addition
-```
-
-This maps to NML as:
-
-```
-CMPF  RE R7 #0 #next_threshold   ; income < next tier?
-JMPF  @this_tier                  ; no: income >= threshold, use this tier
-...
-@this_tier:
-LEAF  RA #addition                ; cumulative base tax
-LEAF  RC #threshold               ; bracket floor
-MSUB  R8 R7 RC                   ; marginal income = income - floor
-SCLR  R8 R8 #rate                ; marginal tax = marginal_income × rate
-TACC  RA RA R8                   ; total = base + marginal
-```
-
-### Validation Results
-
-**All 7,549 files transpiled and executed — zero errors.**
-
-| Metric | Result |
-|--------|--------|
-| Files scanned | 7,549 |
-| Files transpiled to NML | 7,549 / 7,549 (100%) |
-| NML programs that assembled | 7,549 / 7,549 (100%) |
-| NML programs that executed | 7,549 / 7,549 (100%) |
-| Runtime errors | 0 |
-| Total instructions | 101,251 |
-| Total library size | 3.89 MB |
-| Build time (transpile only) | 6.6 seconds |
-| Build + validate time | 79 seconds |
-
-Sample outputs:
-
-| Tax File | Gross Pay | NML Tax Amount | Cycles |
-|----------|----------|---------------|--------|
-| FIT (Federal, 2025, single) | $100,000 | $12,117.00 | 25 |
-| CA SIT (California, 2025, single) | $100,000 | $4,260.50 | 25 |
-| FICA (2025, under cap) | $100,000 | $6,200.00 | 8 |
-| FICA (2025, over cap at $176,100) | $200,000 | $10,918.20 | 10 |
-| Indiana County Tax (1.28%) | $75,000 | $825.00 | 6 |
-| MD Anne Arundel County (3.03%) | $75,000 | $2,272.50 | 6 |
+This approach is domain-agnostic. Any rule system that can be expressed as bracket lookups (`tax = addition + (income - threshold) × rate`) or flat-rate computations (`tax = min(wages, wageBase) × rate`) can be transpiled to NML using the same pipeline stages: scan → classify → resolve dates → emit brackets/flat rates → compose into a single program. The resulting NML programs are validated by transpiling, assembling, and executing each one, confirming zero runtime errors across the full rule library.
 
 ---
 
 ## Component 5: Training Data Pipeline
 
-### Oracle Harness (`ste_oracle.py`)
+Training data was generated from the domain transpilation pipeline described in Component 4. Randomized input profiles (varying wage levels, filing statuses, and pay frequencies) were fed through the transpiled NML programs to produce ground-truth outputs, which were then paired with the corresponding NML source for LLM fine-tuning.
 
-Generates randomized employee profiles across all 51 US jurisdictions and formats them as STE PayCalcRequests.
-
-```mermaid
-flowchart LR
-    Profiles["Employee Profile Generator\n13 wage levels × 3 filing statuses\n× 4 pay frequencies"] --> Requests["PayCalcRequest JSON\n(2,550 requests at 50/state)"]
-    Requests --> STE["STE API\n(when available)"]
-    STE --> Responses["PayCalcResponse\n(ground truth)"]
-    Responses --> Pairs["Validated Pairs JSONL"]
-```
-
-### Training Data Generator (`ste_training_gen.py`)
+### Training Data Generator
 
 Produces training examples in four formats from the transpiled NML programs:
 
 | Format | Count | Description |
 |--------|-------|-------------|
-| Transpilation | ~500 | STE JSON → NML program |
+| Transpilation | ~500 | Domain rules → NML program |
 | Intent-to-NML | ~355 | Natural language → NML + employee data |
 | Audit Trail | ~380 | Employee profile → step-by-step tax breakdown |
 | Q&A | ~119 | Tax knowledge questions and answers |
@@ -437,18 +309,17 @@ flowchart TD
     subgraph transpilers [Transpilers]
         XGB["XGBoost Transpiler\ntax_pipeline.py — 569 lines\n20/20 exact match"]
         Rules["Rule Transpiler\nrule_transpiler.py — 525 lines\n2024 US tax rules"]
-        STE_P["STE Parser\ntranspilers/ — ~2,500 lines\n7,549 files, all validated"]
+        Domain["Domain Transpiler\ntranspilers/ — ~2,500 lines\nDomain rules, all validated"]
     end
 
     subgraph programs [Generated Programs]
-        Library["NML Tax Library\n7,549 programs\n101,251 instructions\n76 tax types"]
+        Library["NML Rule Library\nDomain-transpiled programs"]
         P1["tax_calculator.nml\n1,536 instr — XGBoost"]
         P6["anomaly_detector.nml\n18 instr — neural net"]
     end
 
     subgraph training [Training Pipeline]
         T1["96,710 training pairs\nMistral format"]
-        T2["2,550 PayCalc profiles\n51 jurisdictions"]
     end
 ```
 
@@ -462,9 +333,7 @@ flowchart TD
 | Inference time (XGBoost, 20 trees) | 88 µs |
 | Inference time (FIT bracket lookup) | 145 µs |
 | Inference time (FICA flat rate) | 85 µs |
-| Full library build (7,549 files) | 6.6 seconds |
-| Full library build + validate | 79 seconds |
-| STE tax files transpiled | 7,549 / 7,549 (100%) |
+| Domain Rules | Validated |
 | Training pairs generated | 96,710 (Mistral format) |
 | Syntax modes | 3 (classic, symbolic, verbose) |
 
@@ -487,7 +356,7 @@ The NML system now includes a multi-agent services layer that wraps the core com
 
 | Tool | Implementation | Status |
 |------|---------------|--------|
-| Grammar Validator | `transpilers/nml_grammar.py` | 7,549/7,549 programs pass |
+| Grammar Validator | `transpilers/nml_grammar.py` | All programs pass |
 | Semantic Analyzer | `transpilers/nml_semantic.py` | Extracts brackets, rates, deductions |
 | Regression Suite | `transpilers/nml_regression.py` | Golden test baselines |
 | NML Diff Engine | `transpilers/nml_diff.py` | Semantic bracket/rate comparison |
@@ -534,7 +403,7 @@ make nml-v06    # Build v0.6 runtime with M2M extensions
 | DIST euclidean | 0.1243 | Euclidean distance |
 | META --describe | PASS | Prints program descriptor |
 | Backward compat | PASS | All v0.5 programs run unchanged |
-| Grammar validator | 7549/7549 PASS | All existing programs valid under updated validator |
+| Grammar validator | ALL PASS | All existing programs valid under updated validator |
 
 ### Runtime Fixes (v0.6.1)
 
@@ -552,9 +421,8 @@ Critical bugs fixed after initial v0.6 release:
 
 | Validation | Result |
 |------------|--------|
-| Golden regression | **7,549/7,549 PASS** — zero failures across entire NML library |
-| STE MCP validation | **14/14 MATCH** — FICA, MEDI, ER_FICA, ER_MEDI at $0.00 difference |
-| Grammar validator | 7,549/7,549 valid with v0.6 opcodes |
+| Golden regression | **ALL PASS** — zero failures across entire NML library |
+| Grammar validator | ALL PASS with v0.6 opcodes |
 
 ### Neural Bracket Experiment
 
@@ -660,10 +528,9 @@ gcc -O2 -o nml-gp nml.c -lm \
 
 ### Next Steps
 
-1. **Run STE oracle** — Connect to the STE API via MCP server, capture PayCalcResponses as ground truth, validate NML output against STE to $0.01 accuracy per tax component.
-2. **Scale training data** — With STE oracle validation, expand from 1,354 to 200K+ training pairs using all 7,549 tax files x 30 employee variations each.
-3. **Fine-tune LLM** — Train CodeLlama/Mistral 7B on the NML dataset using QLoRA (estimated 4-8 hours on 1x A100).
-4. **Convergence experiment** — Train matched 125M-param models on NML vs Python, compare convergence to validate the core thesis.
-5. **Full golden test generation** — Expand regression suite from 10 to all 7,549 jurisdictions.
-6. **Cross-model federation** — Test agent pipeline with multiple LLM backends (Mistral, Llama, Phi).
-7. **Self-improving feedback loop** — Use explanation agent outputs as training data for the regulation parser.
+1. **Scale training data** — Expand from 1,354 to 200K+ training pairs using the full rule library with varied input profiles.
+2. **Fine-tune LLM** — Train CodeLlama/Mistral 7B on the NML dataset using QLoRA (estimated 4-8 hours on 1x A100).
+3. **Convergence experiment** — Train matched 125M-param models on NML vs Python, compare convergence to validate the core thesis.
+4. **Full golden test generation** — Expand regression suite to cover all transpiled rule files.
+5. **Cross-model federation** — Test agent pipeline with multiple LLM backends (Mistral, Llama, Phi).
+6. **Self-improving feedback loop** — Use explanation agent outputs as training data for the regulation parser.

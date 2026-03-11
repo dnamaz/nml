@@ -66,7 +66,7 @@ META declares program metadata. The runtime parses META lines during assembly an
 §  @invariant    "tax_amount >= 0"
 §  @invariant    "is_exempt == 1 => tax_amount == 0"
 §  @provenance   "IRS Publication 15-T, 2025"
-§  @author       "ste_transpiler v2.3"
+§  @author       "domain_transpiler v2.3"
 §  @created      "2025-06-15T00:00:00Z"
 ↓  ι  @gross_pay
 ...

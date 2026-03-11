@@ -536,7 +536,7 @@ async def nml_scan() -> str:
         return "\n".join(parts)
 
     try:
-        from ste_transpiler import scan_tax_data
+        from domain_transpiler import scan_tax_data
         from collections import Counter
 
         files = scan_tax_data(TAX_DATA_DIR)

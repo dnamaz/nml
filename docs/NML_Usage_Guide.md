@@ -555,7 +555,7 @@ META  @input        is_exempt       bool        "Exempt from withholding"
 META  @output       tax_amount      currency    "FICA tax amount"
 META  @invariant    "tax_amount >= 0"
 META  @provenance   "SSA wage base schedule, 2025"
-META  @author       "ste_transpiler v2.3"
+META  @author       "domain_transpiler v2.3"
 
 LD    R0 @gross_pay
 SCLR  R1 R0 #0.062

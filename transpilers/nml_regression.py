@@ -24,8 +24,8 @@ _PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT / "domain" / "transpilers"))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from ste_validate import run_nml
-from ste_transpiler import scan_tax_data, TAX_DATA_DIR, generate_employee_data
+from domain_validate import run_nml
+from domain_transpiler import scan_tax_data, TAX_DATA_DIR, generate_employee_data
 
 NML_BINARY = _PROJECT_ROOT / "nml"
 NML_LIBRARY_DIR = _PROJECT_ROOT / "domain" / "output" / "nml-library-symbolic"

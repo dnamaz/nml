@@ -109,9 +109,9 @@ PROGRAM_TEMPLATES = [
         "explanation": "FICA tax: if gross > $176,100 wage base, tax = 176100 * 6.2%; otherwise tax = gross * 6.2%.",
     },
     {
-        "desc": "Progressive bracket tax lookup using STE calc() formula",
+        "desc": "Progressive bracket tax lookup using domain calc() formula",
         "code": "LD    R0 @income\nALLC  RA #[1]\nCMPF  RE R0 #0 #47150.000000\nJMPF  #6\nCMPF  RE R0 #0 #11600.000000\nJMPF  #3\nSCLR  RA R0 #0.100000\nJUMP  #7\nLEAF  RA #1160.000000\nLEAF  RC #11600.000000\nMSUB  R8 R0 RC\nSCLR  R8 R8 #0.120000\nTACC  RA RA R8\nJUMP  #3\nLEAF  RA #5266.000000\nLEAF  RC #47150.000000\nMSUB  R8 R0 RC\nSCLR  R8 R8 #0.220000\nTACC  RA RA R8\nST    RA @tax\nHALT",
-        "explanation": "Three-bracket progressive tax: 10% up to $11,600, 12% up to $47,150, 22% above. Uses STE formula: tax = addition + (income - threshold) * rate.",
+        "explanation": "Three-bracket progressive tax: 10% up to $11,600, 12% up to $47,150, 22% above. Uses domain formula: tax = addition + (income - threshold) * rate.",
     },
     {
         "desc": "While loop summing 1 to 5 using backward jumps (v0.4)",

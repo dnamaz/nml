@@ -10,7 +10,7 @@ This document captures the design, rationale, and architecture for NML (Neural M
 
 The core thesis is simple: if AI generates the code and AI executes the code, then designing code for human eyes is an unnecessary constraint that slows down training, bloats runtimes, and limits where AI can run.
 
-We built a working system — a 49-instruction language covering neural networks, decision tree models, and general-purpose computation, with a browser-based emulator, a portable C runtime that compiles to ~51KB, a validated XGBoost-to-NML transpiler, an STE-to-NML transpiler covering 7,549 US and Canadian tax jurisdictions (100% validated), and a tri-syntax system (classic/symbolic/verbose). Benchmarks show NML achieves 4.6x faster inference than XGBoost in Python, with a runtime 1,000x smaller, while generating programs that require 4x fewer tokens than equivalent Python.
+We built a working system — a 49-instruction language covering neural networks, decision tree models, and general-purpose computation, with a browser-based emulator, a portable C runtime that compiles to ~51KB, a validated XGBoost-to-NML transpiler, a domain-specific rule transpiler (covering structured JSON rule definitions), and a tri-syntax system (classic/symbolic/verbose). Benchmarks show NML achieves 4.6x faster inference than XGBoost in Python, with a runtime 1,000x smaller, while generating programs that require 4x fewer tokens than equivalent Python.
 
 ---
 
@@ -514,27 +514,27 @@ This is arguably where the industry is already heading. When people use AI to ge
 | Browser Emulator | Interactive React terminal with syntax highlighting, register/memory inspection | Done |
 | Tri-Syntax System | Classic (MMUL), Symbolic (×), Verbose (MATRIX_MULTIPLY) — all produce same bytecode | Done |
 | Greek Register Aliases | 16 Greek letter aliases (ι κ λ μ ν ξ ο π ρ ς α β γ δ φ ψ) | Done |
-| NML Tax Library | 7,549 pre-compiled tax programs across 76 tax types, all validated | Done |
-| STE-to-NML Transpiler | Automated transpilation from 7,549 STE JSON files to NML programs | Done |
+| NML Domain Rule Library | Pre-compiled domain rule programs across multiple rule types, all validated | Done |
+| Domain Rule Transpiler | Automated transpilation from structured JSON rule definitions to NML programs | Done |
 | XGBoost → NML Transpiler | Automated conversion of trained XGBoost models to NML programs (20/20 exact match) | Done |
 | Rule Transpiler | Deterministic JSON tax rules to NML (exact analytical match) | Done |
-| Training Data Pipeline | 96,710 instruction-tuning pairs in Mistral format | Done |
+| Training Data Pipeline | Instruction-tuning pairs in Mistral format | Done |
 | Anomaly Detector | Neural network NML program: 3-layer network for sensor anomaly detection | Done |
 | Benchmark Suite | Comparative benchmarks: NML vs Python/NumPy, NML vs Python/XGBoost | Done |
 | Architecture Document | This document — complete system design, rationale, benchmarks, and roadmap | Done |
 | Multi-Agent Architecture | Architecture doc for distributed LLM communication with NML as interchange format | Done |
 | Multi-Agent Implementation Plan | Concrete 5-phase roadmap with per-task specifications and test results | Done |
 | Agent Services (3 HTTP services) | Transpiler (8083), Validator (8084), Engine (8085) wrapping existing tools | Done |
-| NML Grammar Validator | Formal grammar checker for all 49 opcodes, 3 syntax variants — 7,549/7,549 pass | Done |
-| NML Semantic Analyzer | Tax-domain invariant checker — bracket monotonicity, rate bounds, filing status coverage | Done |
-| Golden Test Regression Suite | Input/output baselines for every jurisdiction — 10/10 pass (expandable to all 7,549) | Done |
+| NML Grammar Validator | Formal grammar checker for all 49 opcodes, 3 syntax variants — full library pass | Done |
+| NML Semantic Analyzer | Domain invariant checker — bracket monotonicity, rate bounds, category coverage | Done |
+| Golden Test Regression Suite | Input/output baselines for every rule set — 10/10 pass (expandable to full library) | Done |
 | Intent Router + Agent Registry | Natural language intent classification (7 categories) + service health tracking | Done |
 | Pipeline Executor | Multi-agent pipeline chaining — transpile, validate, execute, explain | Done |
 | NML Agent Protocol | AgentMessage envelope with header, provenance, NML payload, context — JSON serializable | Done |
 | Provenance Tracker | Instruction-level source tracing with sidecar JSON files | Done |
 | Audit Log | Append-only JSONL agent message log with query/trace/stats CLI | Done |
-| NML Diff Engine | Semantic comparison of NML programs — brackets, rates, deductions across tax years | Done |
-| Anomaly Detector | Cross-jurisdiction anomaly scanning — rate/threshold outliers, duplicates, missing programs | Done |
+| NML Diff Engine | Semantic comparison of NML programs — brackets, rates, deductions across rule versions | Done |
+| Anomaly Detector | Cross-domain anomaly scanning — rate/threshold outliers, duplicates, missing programs | Done |
 | NML Chat Pipeline UI | Chat interface with agent status badge, pipeline-first execution, structured result display | Done |
 | NML v0.6 M2M Runtime | C runtime with 11 new M2M opcodes: META, FRAG/ENDF/LINK, PTCH, SIGN/VRFY, VOTE, PROJ/DIST | Done |
 | M2M Specification | Full spec for 7 M2M extensions: self-describing, typed tensors, fragments, patches, signing, consensus, latent space | Done |
@@ -546,9 +546,9 @@ This is arguably where the industry is already heading. When people use AI to ge
 | GATH/SCAT Opcodes | Tensor index lookup and write instructions for bracket table operations | Done |
 | Register Aliasing Fix | Fixed tensor_add/sub/emul/ediv/mmul to handle aliased output registers | Done |
 | f64 Activation Fix | Fixed RELU/SIGM/TANH/SOFT to use dtype-aware tensor access | Done |
-| STE MCP Validation | Automated validation against production STE — 14/14 match at $0.00 | Done |
+| Domain MCP Validation | Automated validation against production domain API — 14/14 match at $0.00 | Done |
 | Neural Bracket Models | 64-neuron ReLU models for Single/MFJ/HoH, $32-55 MAE | Done |
-| Embedding Anomaly Monitor | Year-over-year bracket drift detection across 53 jurisdictions | Done |
+| Embedding Anomaly Monitor | Year-over-year bracket drift detection across rule sets | Done |
 | LLM v0.6 R2 | Fine-tuned Mistral 7B generates valid NML (6,000 iters, val loss 0.396) | Done |
 
 ### How to Run
@@ -576,7 +576,7 @@ make
 make test
 ```
 
-**Build full NML tax library (7,549 programs):**
+**Build full NML domain rule library:**
 
 ```bash
 make transpile-library
@@ -608,9 +608,9 @@ bash serve/start_agents.sh       # Start services with health checks
 
 ```bash
 cd transpilers
-python3 nml_grammar.py ../output/nml-library-symbolic/    # Grammar validate all 7,549 programs
-python3 nml_semantic.py ../output/nml-library-symbolic/FIT/00-000-0000-FIT-000.nml --tax-type FIT
-python3 nml_anomaly.py ../output/nml-library-symbolic/     # Cross-jurisdiction anomaly scan
+python3 nml_grammar.py ../output/nml-library-symbolic/    # Grammar validate all programs
+python3 nml_semantic.py ../output/nml-library-symbolic/FIT/00-000-0000-FIT-000.nml --rule-type FIT
+python3 nml_anomaly.py ../output/nml-library-symbolic/     # Cross-domain anomaly scan
 python3 nml_regression.py generate --limit 20              # Generate golden test baselines
 python3 nml_regression.py run                              # Run regression tests
 python3 nml_diff.py --old old.nml --new new.nml            # Semantic NML diff
@@ -641,24 +641,24 @@ tests/
   test_m2m.nml             — M2M extension test (META, VOTE, PROJ, DIST)
 
 transpilers/
-  ste_transpiler.py          — Scanner, date resolver, bracket/flat emitters (--syntax flag)
-  ste_build_library.py       — Full library builder (7,549 programs, manifest.json)
-  ste_validate.py            — Transpile + execute + compare pipeline
-  ste_training_gen.py        — Training data generator (4 formats)
-  ste_oracle.py              — PayCalcRequest generator for STE API
+  domain_transpiler.py       — Scanner, date resolver, bracket/flat emitters (--syntax flag)
+  domain_build_library.py    — Full library builder (manifest.json)
+  domain_validate.py         — Transpile + execute + compare pipeline
+  domain_training_gen.py     — Training data generator (4 formats)
+  domain_oracle.py           — Request generator for domain API
   nml_builder.py             — Program builder with tri-syntax translation
   tax_pipeline.py            — XGBoost training + transpilation pipeline
   benchmark.py               — NML vs Python/NumPy benchmark
   nml_grammar.py           — Formal NML grammar validator (all 3 syntax variants)
-  nml_semantic.py          — Tax-domain semantic analyzer (brackets, rates, deductions)
+  nml_semantic.py          — Domain semantic analyzer (brackets, rates, deductions)
   nml_regression.py        — Golden test regression suite
   nml_diff.py              — Semantic NML diff engine
-  nml_anomaly.py           — Cross-jurisdiction anomaly detector
+  nml_anomaly.py           — Cross-domain anomaly detector
   nml_composer.py          — Fragment composition engine (FRAG/ENDF/LINK resolution)
   nml_patch.py             — Differential program generation and application
   nml_embedding.py         — Latent space utilities (projection matrices, distance)
-  ste_mcp_validate.py      — Automated STE validation via MCP (14/14 match)
-  embedding_anomaly_monitor.py — Year-over-year bracket drift detection
+  domain_mcp_validate.py   — Automated domain validation via MCP (14/14 match)
+  embedding_anomaly_monitor.py — Year-over-year drift detection
   neural_scaling_experiment.py — Neural bracket neuron scaling (8-128 neurons)
   neural_multi_status.py   — Multi-filing-status neural bracket models
   bracket_experiment.py    — Three-level bracket experiment comparison
@@ -669,17 +669,17 @@ terminal/
   nml_terminal.jsx           — Browser-based interactive emulator (React)
 
 output/
-  nml-library/               — 7,549 pre-compiled NML programs by tax type
+  nml-library/               — Pre-compiled NML programs by rule type
   training/                  — Training data (JSONL + MLX splits)
   model/                     — Base models + LoRA adapters
   anomaly_reports/         — Embedding anomaly monitor reports
   model/nml-v06-r2-merged/ — Fine-tuned Mistral 7B (6,000 iters, generates NML)
 
-tax-data/                    — 7,549 STE tax jurisdiction JSON files
+domain-data/                 — Domain rule JSON files
 
 serve/
-  transpiler_service.py    — HTTP service wrapping ste_transpiler.py (port 8083)
-  validation_service.py    — HTTP service wrapping ste_validate.py (port 8084)
+  transpiler_service.py    — HTTP service wrapping domain_transpiler.py (port 8083)
+  validation_service.py    — HTTP service wrapping domain_validate.py (port 8084)
   execution_service.py     — HTTP service wrapping nml runtime (port 8085)
   intent_router.py         — Natural language intent classification (7 categories)
   agent_registry.py        — Agent health tracking and capability mapping
@@ -731,7 +731,7 @@ Most systems serve one purpose. NML serves three simultaneously:
 - **Communication format:** Agents exchange NML payloads with provenance and signatures (like Protobuf carries structured data)
 - **Execution format:** The 68KB runtime executes NML directly (like WebAssembly runs in browsers)
 
-No translation step between roles. The FIT program that `ste_transpiler.py` generates is the same program that gets sent from the Transpiler Agent to the Validator Agent, is the same program that the C runtime executes, is the same program the LLM was trained to generate.
+No translation step between roles. The program that the domain transpiler generates is the same program that gets sent from the Transpiler Agent to the Validator Agent, is the same program that the C runtime executes, is the same program the LLM was trained to generate.
 
 ---
 
@@ -739,6 +739,6 @@ No translation step between roles. The FIT program that `ste_transpiler.py` gene
 
 NML is not a better programming language. It's a bet that programming languages themselves are a transitional technology — a bridge between human intent and machine execution that exists only because we didn't have a better bridge. The better bridge is a small, fast model that translates what you want directly into what the machine does, in a representation that no human ever needs to read.
 
-The proof of concept is no longer theoretical. We have a working transpiler that converts all 7,549 STE tax jurisdiction files to NML programs with zero errors. We have a ~51KB runtime that executes those programs in microseconds. We have a tri-syntax system where the same program can be expressed in dense symbolic form (for LLM training), classic assembly mnemonics (for developers), or fully verbose English (for auditors) — all producing identical bytecode. The 96,710-pair training dataset is prepared and ready for fine-tuning.
+The proof of concept is no longer theoretical. We have a working transpiler that converts structured domain rule files to NML programs with zero errors. We have a ~51KB runtime that executes those programs in microseconds. We have a tri-syntax system where the same program can be expressed in dense symbolic form (for LLM training), classic assembly mnemonics (for developers), or fully verbose English (for auditors) — all producing identical bytecode. The training dataset is prepared and ready for fine-tuning.
 
 The next step is running the training experiment that proves — or disproves — that a model trained to generate NML converges meaningfully faster than one trained on Python for the same tasks. If it does, everything else follows.

@@ -77,13 +77,13 @@ domain-test-tax: nml
 	./nml domain/programs/tax_calculator.nml /tmp/nml_test.data 2>&1 | grep -E "(HALTED|net_pay)"
 
 domain-transpile-scan:
-	cd domain/transpilers && python3 ste_transpiler.py scan
+	cd domain/transpilers && python3 domain_transpiler.py scan
 
 domain-transpile-library: nml
-	cd domain/transpilers && python3 ste_build_library.py --validate
+	cd domain/transpilers && python3 domain_build_library.py --validate
 
 domain-transpile-library-symbolic: nml
-	cd domain/transpilers && python3 ste_build_library.py --syntax symbolic --no-comments
+	cd domain/transpilers && python3 domain_build_library.py --syntax symbolic --no-comments
 
 domain-train:
 	cd domain/transpilers && python3 tax_pipeline.py
