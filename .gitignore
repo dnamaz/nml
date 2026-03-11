@@ -19,6 +19,11 @@ __pycache__/
 
 # Node
 node_modules/
+bun.lock
+
+# Cursor skill runner (not part of NML)
+terminal/jxs.ts
+terminal/hello.jsx
 
 # OS
 .DS_Store
