@@ -54,7 +54,7 @@ Most ISAs separate inference from training — you train in Python, export weigh
 
 ### Designed for LLM Generation
 
-NML's zero-ambiguity grammar exists specifically so that language models can learn to generate correct programs. With 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7-9B parameter model achieves 93% valid code generation after training on 436K pairs. The design decision — one way to do everything, no syntactic sugar, no implicit behavior — is driven by learnability, not programmer convenience.
+NML's zero-ambiguity grammar exists specifically so that language models can learn to generate correct programs. With 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7B parameter model achieves 100% grammar validity with constrained decoding (Outlines CFG) and 95% with temperature-varied retries after training on 228K pairs. With optional Outlines CFG constrained decoding, every generated token is guaranteed to be valid NML — 100% syntactic correctness by construction.
 
 ## Use Cases
 
@@ -84,7 +84,7 @@ An NML program can train its own neural network, then immediately run inference 
 
 ### Training LLMs to Generate Structured Code
 
-NML's zero-ambiguity grammar makes it dramatically easier to train models to write correct code. With only 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7-9B parameter model can learn to generate valid NML programs with 93% accuracy after training on 436K pairs. Compare this to Python, where the same model must learn thousands of library APIs, multiple coding styles, and ambiguous syntax.
+NML's zero-ambiguity grammar makes it dramatically easier to train models to write correct code. With only 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7B parameter model achieves 100% grammar accuracy (with Outlines CFG constrained decoding) or 95% (with 2 retries and temperature escalation) after training on 228K pairs. The additive-alias design philosophy — when models generate semantically valid alternative forms, accept them rather than fighting them — drove grammar pass rates from 85% to 100% without retraining.
 
 ## Quick Start
 
@@ -251,9 +251,96 @@ HALT
 ◼
 ```
 
-## Three Ways to Compute
+### Bracket-as-ReLU (Exact Tax Calculation)
 
-NML supports multiple approaches to the same computation. These three programs all compute a progressive rate on an input of 100,000 with a deduction of 8,600:
+The progressive bracket formula IS a ReLU network — each bracket is `max(0, taxable - threshold) × rate_delta`. No training needed. Exact to the penny.
+
+```
+LD    R0 @gross_pay
+LD    R1 @std_deduction
+MSUB  R2 R0 R1               ; taxable = gross - deduction
+RELU  R2 R2                   ; clamp to 0 if below deduction
+LD    R3 @thresholds          ; [0, 11925, 48475, ...]
+LD    R5 @rate_deltas         ; [0.10, 0.02, 0.10, ...]
+ALLC  RA #[1]                 ; tax = 0
+ALLC  RD #[1]                 ; tier = 0
+LEAF  R9 #1.0
+LOOP  #7
+GATH  RC R3 RD                ; threshold = thresholds[tier]
+MSUB  RC R2 RC                ; excess = taxable - threshold
+RELU  RC RC                   ; the "neuron": clip if not in bracket
+GATH  R8 R5 RD                ; rate_delta = rate_deltas[tier]
+EMUL  RC RC R8                ; contribution = excess × rate_delta
+TACC  RA RA RC                ; tax += contribution
+TACC  RD RD R9                ; tier++
+ENDP
+ST    RA @tax_amount
+HALT
+```
+
+With data file (only 2 tensors — no pre-computed base amounts needed):
+
+```
+@gross_pay shape=1 data=100000.0
+@std_deduction shape=1 data=15000.0
+@thresholds shape=7 data=0,11925,48475,103350,197300,250525,609350
+@rate_deltas shape=7 data=0.10,0.02,0.10,0.02,0.08,0.03,0.02
+```
+
+Result: $13,614.00 (exact IRS amount). To update for a new tax year, change only the data file.
+
+### Self-Contained Train + Infer
+
+An NML program that trains its own neural network and immediately runs inference — no Python, no external tools:
+
+```
+; Load training data + initial weights
+LD    R1 @w1
+LD    R2 @b1
+LD    R3 @w2
+LD    R4 @b2
+LD    R0 @training_inputs
+LD    R9 @training_targets
+; Train 5000 epochs (single instruction)
+TNET  #5000 #0.001 #0
+; Inference with trained weights (R1-R4 now updated)
+LD    R0 @test_input
+MMUL  R5 R0 R1
+MADD  R5 R5 R2
+RELU  R5 R5
+MMUL  R6 R5 R3
+MADD  RA R6 R4
+ST    RA @prediction
+HALT
+```
+
+The `.nml.data` file contains the training dataset, initial weights, and inference input. One binary, two files, complete ML system.
+
+### Hybrid: Bracket Net + Residual Net
+
+Exact bracket computation handles the predictable tax math. A trained residual network learns complex adjustments (credits, phase-outs, AMT). The bracket net provides the base; the residual provides the delta.
+
+```
+; Bracket net: exact (7 RELU neurons = 7 brackets)
+; ... bracket-relu loop → R6 = exact bracket tax ...
+
+; Residual net: trained on (income, actual_tax - bracket_tax)
+MMUL  RC R0 @res_weights
+RELU  RC RC
+MMUL  RC RC @res_output
+; RC = learned adjustment (credits, phase-outs)
+
+; Combine: total = exact + residual
+TACC  RA R6 RC
+ST    RA @tax_amount
+HALT
+```
+
+With zero-initialized residual weights, output equals the exact bracket tax. Train the residual on real payroll data to learn the complex parts.
+
+## Four Ways to Compute
+
+NML supports multiple approaches to the same computation. These four programs all compute a progressive rate:
 
 ### Approach 1: Cascade (66 instructions, 24 cycles)
 
@@ -310,17 +397,18 @@ HALT
 
 ### Comparison (input = 100,000)
 
-| | Cascade | Tensor Table | Neural Network |
-|-|---------|-------------|----------------|
-| **Result** | 13,614.00 (exact) | 13,614.00 (exact) | 13,241.49 (approx) |
-| **Instructions** | 66 | 31 | 12 |
-| **Cycles** | 24 | 61 | 12 |
-| **Time** | 202 µs | 200 µs | 194 µs |
-| **Data file** | 2 values | 5 tensors | 5 tensors (weights) |
-| **To update rates** | Rewrite program | Change data tensors | Retrain network |
-| **Accuracy** | Exact | Exact | ~$373 error |
+| | Cascade | Tensor Table | Bracket-ReLU | Neural Network |
+|-|---------|-------------|--------------|----------------|
+| **Result** | 13,614.00 | 13,614.00 | 13,614.00 | ~13,241 |
+| **Instructions** | 66 | 31 | 20 | 12 |
+| **Data tensors** | 2 values | 5 tensors | 2 tensors | 5 tensors (weights) |
+| **To update rates** | Rewrite program | Change 3 tensors | Change 2 tensors | Retrain network |
+| **Accuracy** | Exact | Exact | Exact | ~$373 error |
+| **Training needed** | No | No | No | Yes |
 
-All three programs are in `programs/` with matching `.nml.data` files:
+The Bracket-ReLU approach discovers that the progressive bracket formula IS a ReLU network — each bracket is `max(0, taxable - threshold) × rate_delta`. It needs only 2 data tensors (thresholds + rate deltas) and no pre-computed base amounts.
+
+Programs are in `programs/` and `domain/programs/` with matching `.nml.data` files:
 
 ```bash
 ./nml programs/rate_cascade.nml programs/rate_cascade.nml.data

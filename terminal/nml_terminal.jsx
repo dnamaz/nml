@@ -82,10 +82,8 @@ class NMLEmulator {
   constructor() { this.reset(); }
   reset() {
     this.registers = {};
-    for (let i = 0; i < 16; i++) {
-      const name = "R" + i.toString(16).toUpperCase();
-      this.registers[name] = null;
-    }
+    for (let i = 0; i <= 9; i++) this.registers["R" + i] = null;
+    "ABCDEFGHIJKLMNOPQRSTUV".split("").forEach(c => this.registers["R" + c] = null);
     this.memory = {};
     this.pc = 0;
     this.halted = false;
@@ -111,12 +109,38 @@ class NMLEmulator {
   }
 
   assemble(source) {
+    const SYMBOLIC = {
+      "×":"MMUL","⊕":"MADD","⊖":"MSUB","⊗":"EMUL","⊘":"EDIV","·":"SDOT","∗":"SCLR","÷":"SDIV",
+      "⌐":"RELU","σ":"SIGM","τ":"TANH","Σ":"SOFT","ℊ":"GELU",
+      "↓":"LD","↑":"ST","←":"MOV","□":"ALLC","∎":"LEAF",
+      "⊞":"RSHP","⊤":"TRNS","⊢":"SPLT","⊣":"MERG",
+      "⋈":"CMPF","≶":"CMP","≺":"CMPI","ϟ":"CMPI",
+      "↗":"JMPT","↘":"JMPF","→":"JUMP","↻":"LOOP","↺":"ENDP",
+      "⇒":"CALL","⇐":"RET","∑":"TACC",
+      "◼":"HALT","⚠":"TRAP","⏸":"SYNC","⚙":"SYS",
+      "∇":"BKWD","⟳":"WUPD","△":"LOSS","⥁":"TNET",
+      "⊛":"CONV","⊓":"POOL","⊔":"UPSC","⊡":"PADZ",
+      "⊙":"ATTN","‖":"NORM","⊏":"EMBD",
+      "⊥":"RDUC","ϛ":"RDUC","⊻":"WHER","⊧":"CLMP","⊜":"CMPR",
+      "∿":"FFT","⋐":"FILT",
+      "§":"META","◆":"FRAG","◇":"ENDF","⚖":"VOTE",
+      "⟐":"PROJ","⟂":"DIST","⊃":"GATH","⊂":"SCAT",
+      "✦":"SIGN","✓":"VRFY",
+    };
+    const GREEK = {
+      "ι":"R0","κ":"R1","λ":"R2","μ":"R3","ν":"R4","ξ":"R5","ο":"R6","π":"R7","ρ":"R8","ς":"R9",
+      "α":"RA","β":"RB","γ":"RC","δ":"RD","φ":"RE","ψ":"RF",
+      "η":"RG","θ":"RH","ζ":"RI","ω":"RJ","χ":"RK","υ":"RL","ε":"RM",
+    };
     const lines = source.split("\n")
       .map(l => l.replace(/;.*$/, "").trim())
-      .filter(l => l.length > 0);
+      .filter(l => l.length > 0 && !l.startsWith("#"));
     return lines.map((line, idx) => {
       const parts = line.split(/\s+/);
-      return { opcode: parts[0].toUpperCase(), operands: parts.slice(1), line: idx, source: line };
+      const rawOp = parts[0];
+      const opcode = (SYMBOLIC[rawOp] || rawOp).toUpperCase();
+      const operands = parts.slice(1).map(o => GREEK[o] || o);
+      return { opcode, operands, line: idx, source: line };
     });
   }
 
@@ -211,11 +235,22 @@ class NMLEmulator {
           this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = softmax(${ops[1]}) → ${this.registers[this._reg(ops[0])]}` });
           break;
         }
-        case "LD": {
-          const addr = ops[1].replace("@", "");
-          if (!(addr in this.memory)) throw new Error(`Address @${addr} not found`);
-          this.registers[this._reg(ops[0])] = this.memory[addr].clone();
-          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} ← @${addr} ${this.registers[this._reg(ops[0])]}` });
+        case "LD": case "LOAD": {
+          const src = ops[1];
+          if (src.startsWith("@")) {
+            const addr = src.replace("@", "");
+            if (!(addr in this.memory)) throw new Error(`Address @${addr} not found`);
+            this.registers[this._reg(ops[0])] = this.memory[addr].clone();
+            this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} ← @${addr} ${this.registers[this._reg(ops[0])]}` });
+          } else if (src.startsWith("#") || /^-?\d/.test(src)) {
+            const val = parseFloat(src.replace("#", ""));
+            this.registers[this._reg(ops[0])] = new NMLTensor([1], [val]);
+            this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${val}` });
+          } else {
+            const t = this._getTensor(src);
+            this.registers[this._reg(ops[0])] = t.clone();
+            this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${src}` });
+          }
           break;
         }
         case "ST": {
@@ -225,9 +260,18 @@ class NMLEmulator {
           this.log.push({ type: "exec", op: opcode, msg: `@${addr} ← ${ops[0]} ${t}` });
           break;
         }
-        case "MOV": {
-          const t = this._getTensor(ops[1]);
-          this.registers[this._reg(ops[0])] = t.clone();
+        case "MOV": case "COPY": {
+          const src = ops[1];
+          if (src.startsWith("@")) {
+            const addr = src.replace("@", "");
+            if (!(addr in this.memory)) throw new Error(`Address @${addr} not found`);
+            this.registers[this._reg(ops[0])] = this.memory[addr].clone();
+          } else if (src.startsWith("#") || /^-?\d/.test(src)) {
+            const val = parseFloat(src.replace("#", ""));
+            this.registers[this._reg(ops[0])] = new NMLTensor([1], [val]);
+          } else {
+            this.registers[this._reg(ops[0])] = this._getTensor(src).clone();
+          }
           this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${ops[1]}` });
           break;
         }
@@ -285,15 +329,30 @@ class NMLEmulator {
           this.log.push({ type: "halt", op: opcode, msg: `HALTED after ${this.cycles} cycles` });
           return;
         }
-        case "LEAF": {
-          const val = parseFloat(ops[1].replace("#", ""));
-          this.registers[this._reg(ops[0])] = new NMLTensor([1], [val]);
-          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${val}` });
+        case "LEAF": case "SET_VALUE": {
+          const src = ops[1];
+          if (src.startsWith("@")) {
+            const addr = src.replace("@", "");
+            if (!(addr in this.memory)) throw new Error(`Address @${addr} not found`);
+            this.registers[this._reg(ops[0])] = this.memory[addr].clone();
+          } else if (/^R[0-9A-Fa-f]$/i.test(src)) {
+            this.registers[this._reg(ops[0])] = this._getTensor(src).clone();
+          } else {
+            const val = parseFloat(src.replace("#", ""));
+            this.registers[this._reg(ops[0])] = new NMLTensor([1], [val]);
+          }
+          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${ops[1]}` });
           break;
         }
-        case "TACC": {
-          const a = this._getTensor(ops[1]).data[0];
-          const b = this._getTensor(ops[2]).data[0];
+        case "TACC": case "ACCUMULATE": {
+          let a, b;
+          if (ops.length >= 3) {
+            a = this._getTensor(ops[1]).data[0];
+            b = this._getTensor(ops[2]).data[0];
+          } else {
+            a = this.registers[this._reg(ops[0])] ? this.registers[this._reg(ops[0])].data[0] : 0;
+            b = this._getTensor(ops[1]).data[0];
+          }
           this.registers[this._reg(ops[0])] = new NMLTensor([1], [a + b]);
           this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${a} + ${b} = ${a + b}` });
           break;
@@ -314,11 +373,17 @@ class NMLEmulator {
           this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${ops[1]} / ${ops[2]}` });
           break;
         }
-        case "CMPI": {
-          const a = this._getTensor(ops[1]).data[0];
-          const imm = parseFloat(ops[2].replace("#", ""));
-          this.condFlag = a < imm;
-          this.log.push({ type: "exec", op: opcode, msg: `flag = ${a} < ${imm} → ${this.condFlag}` });
+        case "CMPI": case "COMPARE_VALUE": {
+          let regVal, imm;
+          if (ops.length >= 3) {
+            regVal = this._getTensor(ops[1]).data[0];
+            imm = parseFloat(ops[2].replace("#", ""));
+          } else {
+            regVal = this._getTensor(ops[0]).data[0];
+            imm = parseFloat(ops[1].replace("#", ""));
+          }
+          this.condFlag = regVal < imm;
+          this.log.push({ type: "exec", op: opcode, msg: `flag = ${regVal} < ${imm} → ${this.condFlag}` });
           break;
         }
         case "CMPF": {
@@ -387,8 +452,59 @@ class NMLEmulator {
           this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = dot(${ops[1]}, ${ops[2]}) → ${this.registers[this._reg(ops[0])]}` });
           break;
         }
-        case "META": case "SIGN": case "FRAG": case "ENDF": case "LINK": {
-          this.log.push({ type: "exec", op: opcode, msg: `${opcode} (metadata, no-op)` });
+        case "GELU": {
+          const t = this._getTensor(ops[1]);
+          const out = new NMLTensor(t.shape);
+          for (let i = 0; i < t.size; i++) {
+            const x = t.data[i];
+            out.data[i] = 0.5 * x * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (x + 0.044715 * x * x * x)));
+          }
+          this.registers[this._reg(ops[0])] = out;
+          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = gelu(${ops[1]})` });
+          break;
+        }
+        case "MOD": case "MODULO": {
+          const a = this._getTensor(ops[1]).data[0];
+          const b = this._getTensor(ops[2]).data[0];
+          this.registers[this._reg(ops[0])] = new NMLTensor([1], [Math.trunc(a) % Math.trunc(b)]);
+          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${Math.trunc(a)} % ${Math.trunc(b)}` });
+          break;
+        }
+        case "ITOF": case "INT_TO_FLOAT": {
+          const v = this._getTensor(ops[1]).data[0];
+          this.registers[this._reg(ops[0])] = new NMLTensor([1], [Math.trunc(v)]);
+          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = itof(${v})` });
+          break;
+        }
+        case "FTOI": case "FLOAT_TO_INT": {
+          const v = this._getTensor(ops[1]).data[0];
+          this.registers[this._reg(ops[0])] = new NMLTensor([1], [Math.trunc(v)]);
+          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ftoi(${v}) = ${Math.trunc(v)}` });
+          break;
+        }
+        case "BNOT": case "BITWISE_NOT": {
+          const v = this._getTensor(ops[1]).data[0];
+          this.registers[this._reg(ops[0])] = new NMLTensor([1], [~Math.trunc(v)]);
+          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ~${Math.trunc(v)}` });
+          break;
+        }
+        case "RDUC": case "REDUCE": {
+          const t = this._getTensor(ops[1]);
+          const mode = parseInt((ops[2] || "#0").replace("#", ""));
+          let val;
+          if (mode === 0) val = t.data.reduce((a, b) => a + b, 0);
+          else if (mode === 1) val = t.data.reduce((a, b) => a + b, 0) / t.size;
+          else if (mode === 2) val = Math.max(...t.data);
+          else val = Math.min(...t.data);
+          this.registers[this._reg(ops[0])] = new NMLTensor([1], [val]);
+          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = reduce(${ops[1]}, mode=${mode}) = ${val.toFixed(4)}` });
+          break;
+        }
+        case "META": case "METADATA": case "SIGN": case "SIGN_PROGRAM":
+        case "FRAG": case "FRAGMENT": case "ENDF": case "END_FRAGMENT":
+        case "LINK": case "IMPORT": case "PTCH": case "PATCH":
+        case "VRFY": case "VERIFY_SIGNATURE": {
+          this.log.push({ type: "exec", op: opcode, msg: `${opcode} (structural, no-op)` });
           break;
         }
         default:
@@ -671,7 +787,7 @@ export default function NMLTerminal() {
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ color: COLORS.accent, fontSize: 20, fontWeight: 800, letterSpacing: 3 }}>NML</span>
-          <span style={{ color: COLORS.textDim, fontSize: 11, letterSpacing: 1 }}>NEURAL MACHINE LANGUAGE v0.6.4</span>
+          <span style={{ color: COLORS.textDim, fontSize: 11, letterSpacing: 1 }}>NEURAL MACHINE LANGUAGE v0.7.0</span>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ color: COLORS.textDim, fontSize: 11, marginRight: 8 }}>EXAMPLES:</span>
@@ -950,8 +1066,8 @@ export default function NMLTerminal() {
         letterSpacing: 1,
         flexShrink: 0,
       }}>
-        <span>67 OPCODES • 16 REGISTERS • TRI-SYNTAX • FIXED-WIDTH ENCODING</span>
-        <span>NML EMULATOR v0.6.4</span>
+        <span>71 OPCODES • 32 REGISTERS • TRI-SYNTAX • FIXED-WIDTH ENCODING</span>
+        <span>NML EMULATOR v0.7.0</span>
       </div>
     </div>
   );

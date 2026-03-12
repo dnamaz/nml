@@ -366,12 +366,28 @@ def create_http_app(model_path: str = None):
 
     model = None
     tokenizer = None
+    outlines_model = None
+    nml_cfg = None
     if model_path:
         try:
             from mlx_lm import load
             print(f"Loading model: {model_path}")
             model, tokenizer = load(model_path)
             print(f"Model loaded: {model_path}")
+            try:
+                import outlines
+                from outlines.types import CFG
+                grammar_path = PROJECT_ROOT / "transpilers" / "nml_lark_grammar.py"
+                if grammar_path.exists():
+                    sys.path.insert(0, str(grammar_path.parent))
+                    from nml_lark_grammar import NML_GRAMMAR
+                    outlines_model = outlines.from_mlxlm(model, tokenizer)
+                    nml_cfg = CFG(NML_GRAMMAR)
+                    print(f"Constrained decoding: enabled (Outlines + NML CFG)")
+            except ImportError:
+                print(f"Constrained decoding: disabled (install outlines[mlxlm] llguidance)")
+            except Exception as e:
+                print(f"Constrained decoding: disabled ({e})")
         except Exception as e:
             print(f"WARNING: Could not load model: {e}")
 
@@ -384,6 +400,7 @@ def create_http_app(model_path: str = None):
             "service": "nml-server",
             "tools": [t["name"] for t in TOOLS],
             "model": model_path if model else None,
+            "constrained_decoding": outlines_model is not None,
         })
 
     async def handle_models(request):
@@ -425,6 +442,7 @@ def create_http_app(model_path: str = None):
         messages = body.get("messages", [])
         max_tokens = body.get("max_tokens", 1024)
         stream = body.get("stream", False)
+        constrained = body.get("constrained", False)
 
         prompt_parts = []
         for msg in messages:
@@ -439,9 +457,12 @@ def create_http_app(model_path: str = None):
         prompt_parts.append("<|im_start|>assistant\n")
         prompt = "\n".join(prompt_parts)
 
-        from mlx_lm import generate as mlx_generate
-        response_text = mlx_generate(model, tokenizer, prompt=prompt,
-                                     max_tokens=max_tokens, verbose=False)
+        if constrained and outlines_model and nml_cfg:
+            response_text = outlines_model(prompt, output_type=nml_cfg, max_tokens=max_tokens)
+        else:
+            from mlx_lm import generate as mlx_generate
+            response_text = mlx_generate(model, tokenizer, prompt=prompt,
+                                         max_tokens=max_tokens, verbose=False)
 
         if stream:
             async def stream_response(response):

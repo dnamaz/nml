@@ -192,6 +192,16 @@ static inline double tensor_getd(const Tensor *t, int i) {
     }
 }
 
+static inline float tensor_getf(const Tensor *t, int i) {
+    if (__builtin_expect(t->dtype == NML_F32, 1))
+        return t->data.f32[i];
+    switch (t->dtype) {
+        case NML_F64: return (float)t->data.f64[i];
+        case NML_I32: return (float)t->data.i32[i];
+        default: return 0.0f;
+    }
+}
+
 static inline void tensor_setd(Tensor *t, int i, double val) {
     if (__builtin_expect(t->dtype == NML_F64, 1)) {
         t->data.f64[i] = val;
@@ -199,6 +209,18 @@ static inline void tensor_setd(Tensor *t, int i, double val) {
     }
     switch (t->dtype) {
         case NML_F32: t->data.f32[i] = (float)val; break;
+        case NML_I32: t->data.i32[i] = (int)val; break;
+        default: break;
+    }
+}
+
+static inline void tensor_setf(Tensor *t, int i, float val) {
+    if (__builtin_expect(t->dtype == NML_F32, 1)) {
+        t->data.f32[i] = val;
+        return;
+    }
+    switch (t->dtype) {
+        case NML_F64: t->data.f64[i] = (double)val; break;
         case NML_I32: t->data.i32[i] = (int)val; break;
         default: break;
     }
@@ -1206,6 +1228,10 @@ static double parse_imm(const char *s) {
     return strtod(s[0] == '#' ? s+1 : s, NULL);
 }
 
+static int is_register_token(const char *s) {
+    return parse_register(s) >= 0;
+}
+
 static int is_compact_delim(const char *p) {
     /* ¶ = U+00B6 = UTF-8 bytes C2 B6 */
     return (unsigned char)p[0] == 0xC2
@@ -1254,12 +1280,24 @@ static int vm_assemble(VM *vm, const char *source) {
         instr->op = op;
 
         switch (instr->op) {
-            /* 3-register: MMUL MADD MSUB EMUL SDOT TACC EDIV */
+            /* 3-register: MMUL MADD MSUB EMUL SDOT EDIV */
             case OP_MMUL: case OP_MADD: case OP_MSUB: case OP_EMUL: case OP_SDOT:
-            case OP_TACC: case OP_EDIV:
+            case OP_EDIV:
                 instr->reg[0] = parse_register(tokens[1]);
                 instr->reg[1] = parse_register(tokens[2]);
                 instr->reg[2] = parse_register(tokens[3]);
+                break;
+
+            /* TACC: 3-op Rd Rs1 Rs2 or 2-op Rd Rs (Rd += Rs) */
+            case OP_TACC:
+                instr->reg[0] = parse_register(tokens[1]);
+                if (ntokens >= 4) {
+                    instr->reg[1] = parse_register(tokens[2]);
+                    instr->reg[2] = parse_register(tokens[3]);
+                } else {
+                    instr->reg[1] = parse_register(tokens[1]);
+                    instr->reg[2] = parse_register(tokens[2]);
+                }
                 break;
 
             /* Rd Rs #imm: SCLR SDIV */
@@ -1269,9 +1307,23 @@ static int vm_assemble(VM *vm, const char *source) {
                 instr->imm = parse_imm(tokens[3]);
                 break;
 
-            /* 2-register: activations, MOV, TRNS, CMP */
+            /* MOV accepts register, #immediate, or @memory */
+            case OP_MOV:
+                instr->reg[0] = parse_register(tokens[1]);
+                if (tokens[2][0] == '#' || (tokens[2][0] >= '0' && tokens[2][0] <= '9') || tokens[2][0] == '-') {
+                    instr->imm = parse_imm(tokens[2]);
+                    instr->int_params[3] = 1;
+                } else if (tokens[2][0] == '@') {
+                    strncpy(instr->addr, tokens[2]+1, NML_MAX_LABEL_LEN-1);
+                    instr->int_params[3] = 2;
+                } else {
+                    instr->reg[1] = parse_register(tokens[2]);
+                }
+                break;
+
+            /* 2-register: activations, TRNS, CMP */
             case OP_RELU: case OP_SIGM: case OP_TANH: case OP_SOFT:
-            case OP_MOV: case OP_TRNS: case OP_CMP:
+            case OP_TRNS: case OP_CMP:
 #ifdef NML_EXT_TRANSFORMER
             case OP_GELU:
 #endif
@@ -1279,17 +1331,33 @@ static int vm_assemble(VM *vm, const char *source) {
                 instr->reg[1] = parse_register(tokens[2]);
                 break;
 
-            /* CMPI Rd Rs #imm */
+            /* CMPI: 3-op RE Rs #imm or 2-op Rs #imm (implicit RE) */
             case OP_CMPI:
-                instr->reg[0] = parse_register(tokens[1]);
-                instr->reg[1] = parse_register(tokens[2]);
-                instr->imm = parse_imm(tokens[3]);
+                if (ntokens >= 4) {
+                    instr->reg[0] = parse_register(tokens[1]);
+                    instr->reg[1] = parse_register(tokens[2]);
+                    instr->imm = parse_imm(tokens[3]);
+                } else {
+                    instr->reg[0] = 14; /* RE */
+                    instr->reg[1] = parse_register(tokens[1]);
+                    instr->imm = parse_imm(tokens[2]);
+                }
                 break;
 
-            /* Load/Store */
+            /* Load/Store — LD accepts @memory, #immediate, or register */
             case OP_LD:
                 instr->reg[0] = parse_register(tokens[1]);
-                strncpy(instr->addr, tokens[2][0]=='@' ? tokens[2]+1 : tokens[2], NML_MAX_LABEL_LEN-1);
+                if (tokens[2][0] == '@') {
+                    strncpy(instr->addr, tokens[2]+1, NML_MAX_LABEL_LEN-1);
+                } else if (tokens[2][0] == '#' || (tokens[2][0] >= '0' && tokens[2][0] <= '9') || tokens[2][0] == '-') {
+                    instr->imm = parse_imm(tokens[2]);
+                    instr->int_params[3] = 1;
+                } else if (is_register_token(tokens[2])) {
+                    instr->reg[1] = parse_register(tokens[2]);
+                    instr->int_params[3] = 3;
+                } else {
+                    strncpy(instr->addr, tokens[2], NML_MAX_LABEL_LEN-1);
+                }
                 break;
             case OP_ST:
                 instr->reg[0] = parse_register(tokens[1]);
@@ -1349,16 +1417,43 @@ static int vm_assemble(VM *vm, const char *source) {
                 instr->imm = ntokens > 1 ? parse_imm(tokens[1]) : 1.0f;
                 break;
 
-            /* Tree extensions */
+            /* Tree extensions
+             * 4 ops: CMPF RE Rs #feat #thresh         (original)
+             * 4 ops: CMPF RE Rs #feat Rthresh          (threshold from register)
+             * 3 ops: CMPF RE Rs Rthresh                 (feat=0, threshold from register) */
             case OP_CMPF:
                 instr->reg[0] = parse_register(tokens[1]);
                 instr->reg[1] = parse_register(tokens[2]);
-                instr->feat_idx = (int)parse_imm(tokens[3]);
-                instr->imm = parse_imm(tokens[4]);
+                if (ntokens == 4) {
+                    instr->feat_idx = 0;
+                    if (is_register_token(tokens[3])) {
+                        instr->reg[2] = parse_register(tokens[3]);
+                        instr->int_params[1] = 1;
+                    } else {
+                        instr->imm = parse_imm(tokens[3]);
+                    }
+                } else {
+                    instr->feat_idx = (int)parse_imm(tokens[3]);
+                    if (ntokens > 4 && is_register_token(tokens[4])) {
+                        instr->reg[2] = parse_register(tokens[4]);
+                        instr->int_params[1] = 1;
+                    } else if (ntokens > 4) {
+                        instr->imm = parse_imm(tokens[4]);
+                    }
+                }
                 break;
+            /* LEAF accepts #immediate, @memory, or register */
             case OP_LEAF:
                 instr->reg[0] = parse_register(tokens[1]);
-                instr->imm = parse_imm(tokens[2]);
+                if (tokens[2][0] == '@') {
+                    strncpy(instr->addr, tokens[2]+1, NML_MAX_LABEL_LEN-1);
+                    instr->int_params[3] = 2;
+                } else if (is_register_token(tokens[2])) {
+                    instr->reg[1] = parse_register(tokens[2]);
+                    instr->int_params[3] = 3;
+                } else {
+                    instr->imm = parse_imm(tokens[2]);
+                }
                 break;
             case OP_JMPT: case OP_JMPF: case OP_JUMP: case OP_CALL:
                 instr->imm = parse_imm(tokens[1]);
@@ -1536,10 +1631,27 @@ static int vm_assemble(VM *vm, const char *source) {
                 instr->int_params[0] = ntokens > 4 ? parse_register(tokens[4]) : -1;
                 break;
             case OP_WUPD:
-                /* WUPD Rd_weights Rs_gradient #learning_rate */
+                /* 3 ops: WUPD Rd Rgrad #lr      (lr as immediate)
+                 * 3 ops: WUPD Rd Rgrad Rlr      (lr from register)
+                 * 4 ops: WUPD Rd Rd Rgrad Rlr   (explicit src, lr from register) */
                 instr->reg[0] = parse_register(tokens[1]);
-                instr->reg[1] = parse_register(tokens[2]);
-                instr->imm = parse_imm(tokens[3]);
+                if (ntokens >= 5) {
+                    instr->reg[1] = parse_register(tokens[3]);
+                    if (is_register_token(tokens[4])) {
+                        instr->reg[2] = parse_register(tokens[4]);
+                        instr->int_params[0] = 1;
+                    } else {
+                        instr->imm = parse_imm(tokens[4]);
+                    }
+                } else {
+                    instr->reg[1] = parse_register(tokens[2]);
+                    if (ntokens > 3 && is_register_token(tokens[3])) {
+                        instr->reg[2] = parse_register(tokens[3]);
+                        instr->int_params[0] = 1;
+                    } else if (ntokens > 3) {
+                        instr->imm = parse_imm(tokens[3]);
+                    }
+                }
                 break;
             case OP_LOSS:
                 /* LOSS Rd Rs_predicted Rs_target #loss_type */
@@ -1549,12 +1661,16 @@ static int vm_assemble(VM *vm, const char *source) {
                 instr->int_params[0] = ntokens > 4 ? (int)parse_imm(tokens[4]) : 0;
                 break;
             case OP_TNET:
-                /* TNET #epochs #lr #arch
-                 * Register convention: R0=input, R1=w1, R2=b1, R3=w2, R4=b2, R9=target
-                 * Writes: R1,R3,R4 updated, R8=final_loss */
-                instr->imm = parse_imm(tokens[1]);           /* epochs */
-                instr->int_params[0] = ntokens > 2 ? (int)(parse_imm(tokens[2]) * 1e6) : 1000; /* lr * 1e6 (stored as int to preserve precision) */
-                instr->int_params[1] = ntokens > 3 ? (int)parse_imm(tokens[3]) : 0;  /* arch */
+                /* Short: TNET #epochs #lr #loss_type     (3 immediates)
+                 * Long:  TNET R0 R1 ... #epochs #lr     (registers + immediates)
+                 * Register convention: R0=input, R1=w1, R2=b1, R3=w2, R4=b2, R9=target */
+                {
+                    int fi = 1;
+                    while (fi < ntokens && is_register_token(tokens[fi])) fi++;
+                    instr->imm = (fi < ntokens) ? parse_imm(tokens[fi]) : 1000;
+                    instr->int_params[0] = (fi+1 < ntokens) ? (int)(parse_imm(tokens[fi+1]) * 1e6) : 1000;
+                    instr->int_params[1] = (fi+2 < ntokens) ? (int)parse_imm(tokens[fi+2]) : 0;
+                }
                 break;
 #endif
             default:
@@ -1664,17 +1780,38 @@ static int vm_execute(VM *vm) {
             case OP_TANH: tensor_tanh_act(&REG(ins->reg[0]),&REG(ins->reg[1])); RVALID(ins->reg[0])=1; break;
             case OP_SOFT: tensor_softmax(&REG(ins->reg[0]),&REG(ins->reg[1])); RVALID(ins->reg[0])=1; break;
             case OP_LD: {
-                MemorySlot *sl = vm_memory(vm, ins->addr);
-                if (!sl) VM_ERROR(vm, NML_ERR_MEMORY, "Out of memory slots loading @%s at PC=%d", ins->addr, vm->pc);
-                if (!sl->used) VM_ERROR(vm, NML_ERR_UNINIT, "@%s not found at PC=%d", ins->addr, vm->pc);
-                tensor_copy(&REG(ins->reg[0]), &sl->tensor); RVALID(ins->reg[0])=1; break;
+                if (ins->int_params[3] == 1) {
+                    int s[]={1}; tensor_init_typed(&REG(ins->reg[0]),1,s,NML_F64);
+                    tensor_setd(&REG(ins->reg[0]),0,ins->imm);
+                } else if (ins->int_params[3] == 3) {
+                    tensor_copy(&REG(ins->reg[0]),&REG(ins->reg[1]));
+                } else {
+                    MemorySlot *sl = vm_memory(vm, ins->addr);
+                    if (!sl) VM_ERROR(vm, NML_ERR_MEMORY, "Out of memory slots loading @%s at PC=%d", ins->addr, vm->pc);
+                    if (!sl->used) VM_ERROR(vm, NML_ERR_UNINIT, "@%s not found at PC=%d", ins->addr, vm->pc);
+                    tensor_copy(&REG(ins->reg[0]), &sl->tensor);
+                }
+                RVALID(ins->reg[0])=1; break;
             }
             case OP_ST: {
                 MemorySlot *sl = vm_memory(vm, ins->addr);
                 if (!sl) VM_ERROR(vm, NML_ERR_MEMORY, "Out of memory slots storing @%s at PC=%d", ins->addr, vm->pc);
                 tensor_copy(&sl->tensor, &REG(ins->reg[0])); sl->used=1; break;
             }
-            case OP_MOV: tensor_copy(&REG(ins->reg[0]),&REG(ins->reg[1])); RVALID(ins->reg[0])=1; break;
+            case OP_MOV: {
+                if (ins->int_params[3] == 1) {
+                    int s[]={1}; tensor_init_typed(&REG(ins->reg[0]),1,s,NML_F64);
+                    tensor_setd(&REG(ins->reg[0]),0,ins->imm);
+                } else if (ins->int_params[3] == 2) {
+                    MemorySlot *sl = vm_memory(vm, ins->addr);
+                    if (!sl) VM_ERROR(vm, NML_ERR_MEMORY, "MOV: @%s not found at PC=%d", ins->addr, vm->pc);
+                    if (!sl->used) VM_ERROR(vm, NML_ERR_UNINIT, "MOV: @%s not initialized at PC=%d", ins->addr, vm->pc);
+                    tensor_copy(&REG(ins->reg[0]), &sl->tensor);
+                } else {
+                    tensor_copy(&REG(ins->reg[0]),&REG(ins->reg[1]));
+                }
+                RVALID(ins->reg[0])=1; break;
+            }
             case OP_ALLC: { rc=tensor_init_typed(&REG(ins->reg[0]),ins->shape_ndim,ins->shape,(DType)ins->int_params[3]); if(rc) VM_ERROR(vm,rc,"ALLC overflow at PC=%d",vm->pc); RVALID(ins->reg[0])=1; break; }
             case OP_RSHP: { Tensor *s=&REG(ins->reg[1]); Tensor *d=&REG(ins->reg[0]); memcpy(d->data.f32,s->data.f32,sizeof(float)*s->size); d->ndim=ins->shape_ndim; memcpy(d->shape,ins->shape,sizeof(int)*ins->shape_ndim); d->size=s->size; RVALID(ins->reg[0])=1; break; }
             case OP_TRNS: rc=tensor_transpose(&REG(ins->reg[0]),&REG(ins->reg[1])); if(rc) VM_ERROR(vm,rc,"TRNS requires 2D at PC=%d",vm->pc); RVALID(ins->reg[0])=1; break;
@@ -1726,8 +1863,21 @@ static int vm_execute(VM *vm) {
             }
 
             /* Tree model */
-            case OP_CMPF: { Tensor *t=&REG(ins->reg[1]); int fi=ins->feat_idx; double val=(fi<t->size)?tensor_getd(t,fi):0.0; vm->cond_flag=(val<ins->imm)?1:0; break; }
-            case OP_LEAF: { int s[]={1}; tensor_init_typed(&REG(ins->reg[0]),1,s,NML_F64); tensor_setd(&REG(ins->reg[0]),0,ins->imm); RVALID(ins->reg[0])=1; break; }
+            case OP_CMPF: { Tensor *t=&REG(ins->reg[1]); int fi=ins->feat_idx; double val=(fi<t->size)?tensor_getd(t,fi):0.0; double thresh=ins->int_params[1]?tensor_getd(&REG(ins->reg[2]),0):ins->imm; vm->cond_flag=(val<thresh)?1:0; break; }
+            case OP_LEAF: {
+                if (ins->int_params[3] == 2) {
+                    MemorySlot *sl = vm_memory(vm, ins->addr);
+                    if (!sl) VM_ERROR(vm, NML_ERR_MEMORY, "LEAF: @%s not found at PC=%d", ins->addr, vm->pc);
+                    if (!sl->used) VM_ERROR(vm, NML_ERR_UNINIT, "LEAF: @%s not initialized at PC=%d", ins->addr, vm->pc);
+                    tensor_copy(&REG(ins->reg[0]), &sl->tensor);
+                } else if (ins->int_params[3] == 3) {
+                    tensor_copy(&REG(ins->reg[0]),&REG(ins->reg[1]));
+                } else {
+                    int s[]={1}; tensor_init_typed(&REG(ins->reg[0]),1,s,NML_F64);
+                    tensor_setd(&REG(ins->reg[0]),0,ins->imm);
+                }
+                RVALID(ins->reg[0])=1; break;
+            }
             case OP_TACC: { double a=RVALID(ins->reg[1])?tensor_getd(&REG(ins->reg[1]),0):0; double b=RVALID(ins->reg[2])?tensor_getd(&REG(ins->reg[2]),0):0; int s[]={1}; DType dt=dtype_promote(REG(ins->reg[1]).dtype,REG(ins->reg[2]).dtype); tensor_init_typed(&REG(ins->reg[0]),1,s,dt); tensor_setd(&REG(ins->reg[0]),0,a+b); RVALID(ins->reg[0])=1; break; }
 
             /* Jumps — support both forward and backward offsets */
@@ -2051,11 +2201,11 @@ static int vm_execute(VM *vm) {
         }
 
         case OP_WUPD: {
-            /* WUPD Rd_weights Rs_gradient #learning_rate */
-            /* Rd = Rd - lr * Rs (in-place weight update) */
+            /* Rd = Rd - lr * Rs (in-place weight update)
+             * lr from immediate (#value) or register (Rlr[0]) */
             Tensor *weights = &REG(ins->reg[0]);
             Tensor *grad = &REG(ins->reg[1]);
-            double lr = ins->imm;
+            double lr = ins->int_params[0] ? tensor_getd(&REG(ins->reg[2]), 0) : ins->imm;
             int n = weights->size < grad->size ? weights->size : grad->size;
             for (int i = 0; i < n; i++) {
                 double w = tensor_getd(weights, i);
@@ -2095,15 +2245,14 @@ static int vm_execute(VM *vm) {
             break;
         }
         case OP_TNET: {
-            /* Fused mini-batch training loop in C.
+            /* Fused mini-batch training loop — f32 internal computation.
              * Register convention:
              *   R0 = training input (N×K)  R1 = w1 (K×H)   R2 = b1 (1×H)
              *   R3 = w2 (H×1)             R4 = b2 (1×1)    R9 = target (N×1)
-             * Writes: R1,R2,R3,R4 updated weights; R8 = final loss
-             */
+             * Writes: R1,R2,R3,R4 updated weights; R8 = final loss */
             int epochs = (int)ins->imm;
-            double lr = ins->int_params[0] / 1e6;
-            int use_adam = ins->int_params[1];  /* 0=SGD, 1=Adam */
+            float lr = (float)(ins->int_params[0] / 1e6);
+            int use_adam = ins->int_params[1];
 
             Tensor *input  = &REG(0);
             Tensor *w1     = &REG(1);
@@ -2118,27 +2267,26 @@ static int vm_execute(VM *vm) {
             int B = (N <= 64) ? N : 64;
             int nbatch = (N + B - 1) / B;
 
-            /* Heap-allocate: batch-sized working buffers + weight-sized gradient/Adam buffers */
             size_t bh = (size_t)B * H, kh = (size_t)K * H;
             size_t need = 3 * bh + 2 * (size_t)B + 2 * (size_t)H + kh;
             if (use_adam) need += 2 * kh + 4 * (size_t)H;
-            double *buf = (double *)calloc(need, sizeof(double));
-            if (!buf) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET: alloc failed (%zu doubles)", need);
+            float *buf = (float *)calloc(need, sizeof(float));
+            if (!buf) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET: alloc failed (%zu floats)", need);
 
-            double *pre_h = buf, *hidden = pre_h + bh, *d_hidden = hidden + bh;
-            double *out_buf = d_hidden + bh, *d_out = out_buf + B;
-            double *d_w2 = d_out + B, *d_b1 = d_w2 + H, *d_w1 = d_b1 + H;
-            double *m_w1 = NULL, *v_w1 = NULL, *m_w2 = NULL, *v_w2 = NULL;
-            double *m_b1 = NULL, *v_b1 = NULL;
+            float *pre_h = buf, *hidden = pre_h + bh, *d_hidden = hidden + bh;
+            float *out_buf = d_hidden + bh, *d_out = out_buf + B;
+            float *d_w2 = d_out + B, *d_b1 = d_w2 + H, *d_w1 = d_b1 + H;
+            float *m_w1 = NULL, *v_w1 = NULL, *m_w2 = NULL, *v_w2 = NULL;
+            float *m_b1 = NULL, *v_b1 = NULL;
             if (use_adam) {
                 m_w1 = d_w1 + kh; v_w1 = m_w1 + kh;
                 m_w2 = v_w1 + kh;  v_w2 = m_w2 + H;
                 m_b1 = v_w2 + H;   v_b1 = m_b1 + H;
             }
-            double m_b2 = 0, v_b2 = 0;
-            const double BETA1 = 0.9, BETA2 = 0.999, EPS = 1e-8;
+            float m_b2 = 0, v_b2 = 0;
+            const float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
             int adam_t = 0;
-            double loss = 0;
+            float loss = 0;
 
             for (int epoch = 0; epoch < epochs; epoch++) {
                 loss = 0;
@@ -2146,97 +2294,90 @@ static int vm_execute(VM *vm) {
                     int s = batch * B;
                     int Bn = (s + B <= N) ? B : N - s;
 
-                    /* Forward: pre_h = input[s:s+Bn] @ w1 + b1 */
                     for (int i = 0; i < Bn; i++)
                         for (int j = 0; j < H; j++) {
-                            double sum = 0;
+                            float sum = 0;
                             for (int p = 0; p < K; p++)
-                                sum += tensor_getd(input, (s + i) * K + p) * tensor_getd(w1, p * H + j);
-                            pre_h[i * H + j] = sum + tensor_getd(bias1, j);
+                                sum += tensor_getf(input, (s + i) * K + p) * tensor_getf(w1, p * H + j);
+                            pre_h[i * H + j] = sum + tensor_getf(bias1, j);
                         }
 
                     for (int i = 0; i < Bn * H; i++)
                         hidden[i] = pre_h[i] > 0 ? pre_h[i] : 0;
 
                     for (int i = 0; i < Bn; i++) {
-                        double sum = 0;
+                        float sum = 0;
                         for (int j = 0; j < H; j++)
-                            sum += hidden[i * H + j] * tensor_getd(w2, j);
-                        out_buf[i] = sum + tensor_getd(bias2, 0);
+                            sum += hidden[i * H + j] * tensor_getf(w2, j);
+                        out_buf[i] = sum + tensor_getf(bias2, 0);
                     }
 
-                    /* MSE loss + output gradient (normalized per batch) */
                     for (int i = 0; i < Bn; i++) {
-                        double diff = out_buf[i] - tensor_getd(target, s + i);
+                        float diff = out_buf[i] - tensor_getf(target, s + i);
                         loss += diff * diff;
-                        d_out[i] = 2.0 * diff / Bn;
+                        d_out[i] = 2.0f * diff / Bn;
                     }
 
-                    /* Backward: d_w2 = hidden^T @ d_out */
                     for (int j = 0; j < H; j++) {
-                        double sum = 0;
+                        float sum = 0;
                         for (int i = 0; i < Bn; i++)
                             sum += hidden[i * H + j] * d_out[i];
                         d_w2[j] = sum;
                     }
-                    double d_b2_val = 0;
+                    float d_b2_val = 0;
                     for (int i = 0; i < Bn; i++) d_b2_val += d_out[i];
 
-                    /* d_hidden = d_out @ w2^T * relu'(pre_h) */
                     for (int i = 0; i < Bn; i++)
                         for (int j = 0; j < H; j++) {
-                            double g = d_out[i] * tensor_getd(w2, j);
+                            float g = d_out[i] * tensor_getf(w2, j);
                             d_hidden[i * H + j] = pre_h[i * H + j] > 0 ? g : 0;
                         }
 
-                    /* d_w1 = input[s:s+Bn]^T @ d_hidden */
                     for (int p = 0; p < K; p++)
                         for (int j = 0; j < H; j++) {
-                            double sum = 0;
+                            float sum = 0;
                             for (int i = 0; i < Bn; i++)
-                                sum += tensor_getd(input, (s + i) * K + p) * d_hidden[i * H + j];
+                                sum += tensor_getf(input, (s + i) * K + p) * d_hidden[i * H + j];
                             d_w1[p * H + j] = sum;
                         }
 
-                    /* d_b1 = sum(d_hidden, axis=0) */
                     for (int j = 0; j < H; j++) {
-                        double sum = 0;
+                        float sum = 0;
                         for (int i = 0; i < Bn; i++)
                             sum += d_hidden[i * H + j];
                         d_b1[j] = sum;
                     }
 
-                    /* Weight update (per mini-batch) */
                     if (use_adam) {
                         adam_t++;
-                        double bc1 = 1.0 - pow(BETA1, adam_t);
-                        double bc2 = 1.0 - pow(BETA2, adam_t);
+                        float bc1 = 1.0f - powf(BETA1, adam_t);
+                        float bc2 = 1.0f - powf(BETA2, adam_t);
                         for (int j = 0; j < H; j++) {
                             m_w2[j] = BETA1 * m_w2[j] + (1 - BETA1) * d_w2[j];
                             v_w2[j] = BETA2 * v_w2[j] + (1 - BETA2) * d_w2[j] * d_w2[j];
-                            tensor_setd(w2, j, tensor_getd(w2, j) - lr * (m_w2[j] / bc1) / (sqrt(v_w2[j] / bc2) + EPS));
+                            tensor_setf(w2, j, tensor_getf(w2, j) - lr * (m_w2[j] / bc1) / (sqrtf(v_w2[j] / bc2) + EPS));
                         }
                         m_b2 = BETA1 * m_b2 + (1 - BETA1) * d_b2_val;
                         v_b2 = BETA2 * v_b2 + (1 - BETA2) * d_b2_val * d_b2_val;
-                        tensor_setd(bias2, 0, tensor_getd(bias2, 0) - lr * (m_b2 / bc1) / (sqrt(v_b2 / bc2) + EPS));
+                        tensor_setf(bias2, 0, tensor_getf(bias2, 0) - lr * (m_b2 / bc1) / (sqrtf(v_b2 / bc2) + EPS));
                         for (int j = 0; j < H; j++) {
                             m_b1[j] = BETA1 * m_b1[j] + (1 - BETA1) * d_b1[j];
                             v_b1[j] = BETA2 * v_b1[j] + (1 - BETA2) * d_b1[j] * d_b1[j];
-                            tensor_setd(bias1, j, tensor_getd(bias1, j) - lr * (m_b1[j] / bc1) / (sqrt(v_b1[j] / bc2) + EPS));
+                            tensor_setf(bias1, j, tensor_getf(bias1, j) - lr * (m_b1[j] / bc1) / (sqrtf(v_b1[j] / bc2) + EPS));
                         }
                         for (int idx = 0; idx < K * H; idx++) {
                             m_w1[idx] = BETA1 * m_w1[idx] + (1 - BETA1) * d_w1[idx];
                             v_w1[idx] = BETA2 * v_w1[idx] + (1 - BETA2) * d_w1[idx] * d_w1[idx];
-                            tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * (m_w1[idx] / bc1) / (sqrt(v_w1[idx] / bc2) + EPS));
+                            tensor_setf(w1, idx, tensor_getf(w1, idx) - lr * (m_w1[idx] / bc1) / (sqrtf(v_w1[idx] / bc2) + EPS));
                         }
                     } else {
                         for (int j = 0; j < H; j++)
-                            tensor_setd(w2, j, tensor_getd(w2, j) - lr * d_w2[j]);
-                        tensor_setd(bias2, 0, tensor_getd(bias2, 0) - lr * d_b2_val);
+                            tensor_setf(w2, j, tensor_getf(w2, j) - lr * d_w2[j]);
+                        tensor_setf(bias2, 0, tensor_getf(bias2, 0) - lr * d_b2_val);
                         for (int j = 0; j < H; j++)
-                            tensor_setd(bias1, j, tensor_getd(bias1, j) - lr * d_b1[j]);
+                            tensor_setf(bias1, j, tensor_getf(bias1, j) - lr * d_b1[j]);
                         for (int idx = 0; idx < K * H; idx++)
-                            tensor_setd(w1, idx, tensor_getd(w1, idx) - lr * d_w1[idx]);
+                            tensor_setf(w1, idx, tensor_getf(w1, idx) - lr * d_w1[idx]);
                     }
                 }
                 loss /= N;
@@ -2245,8 +2386,8 @@ static int vm_execute(VM *vm) {
             free(buf);
 
             int ls[] = {1};
-            tensor_init_typed(&REG(8), 1, ls, NML_F64);
-            tensor_setd(&REG(8), 0, loss);
+            tensor_init_typed(&REG(8), 1, ls, NML_F32);
+            tensor_setd(&REG(8), 0, (double)loss);
             RVALID(8) = 1;
 
             break;

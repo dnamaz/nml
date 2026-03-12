@@ -186,34 +186,41 @@ function MessageContent({ text, onNMLResult }) {
     if (block.type === "code") {
       const nml = isNMLCode(block.content);
       return (
-        <div key={i} style={{ position: "relative", margin: "8px 0" }}>
-          <div style={{ position: "absolute", top: 4, right: 4, zIndex: 1, display: "flex", gap: 4 }}>
-            {nml && <RunButton code={block.content} onResult={onNMLResult} />}
-            <CopyButton text={block.content} />
+        <div key={i} style={{ margin: "8px 0" }}>
+          <div style={{ position: "relative" }}>
+            <div style={{ position: "absolute", top: 4, right: 4, zIndex: 1, display: "flex", gap: 4 }}>
+              <CopyButton text={block.content} />
+            </div>
+            {nml && (
+              <div style={{
+                position: "absolute", top: 4, left: 8, fontSize: 8, fontWeight: 700,
+                letterSpacing: 2, color: "#00b4ff", opacity: 0.6,
+              }}>
+                NML
+              </div>
+            )}
+            <pre style={{
+              background: COLORS.bg,
+              border: `1px solid ${nml ? "rgba(0,180,255,0.3)" : COLORS.border}`,
+              borderRadius: 4,
+              padding: nml ? "22px 14px 10px" : "10px 14px",
+              paddingRight: 80,
+              fontSize: 12.5,
+              lineHeight: "19px",
+              fontFamily: FONT,
+              overflowX: "auto",
+              whiteSpace: "pre",
+              letterSpacing: 0.4,
+              margin: 0,
+            }}>
+              {block.content}
+            </pre>
           </div>
           {nml && (
-            <div style={{
-              position: "absolute", top: 4, left: 8, fontSize: 8, fontWeight: 700,
-              letterSpacing: 2, color: "#00b4ff", opacity: 0.6,
-            }}>
-              NML
+            <div style={{ marginTop: 4 }}>
+              <RunButton code={block.content} onResult={onNMLResult} messageText={text} />
             </div>
           )}
-          <pre style={{
-            background: COLORS.bg,
-            border: `1px solid ${nml ? "rgba(0,180,255,0.3)" : COLORS.border}`,
-            borderRadius: 4,
-            padding: nml ? "22px 14px 10px" : "10px 14px",
-            paddingRight: 120,
-            fontSize: 12.5,
-            lineHeight: "19px",
-            fontFamily: FONT,
-            overflowX: "auto",
-            whiteSpace: "pre",
-            letterSpacing: 0.4,
-          }}>
-            {block.content}
-          </pre>
         </div>
       );
     }
@@ -396,38 +403,81 @@ function detectInputs(code) {
   return [...loads].filter(a => !stores.has(a));
 }
 
-function RunButton({ code, onResult }) {
+function extractDataFromContext(code, messageText) {
+  const dataLines = [];
+  const allText = messageText || "";
+  for (const line of allText.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("@") && trimmed.includes("shape=") && trimmed.includes("data=")) {
+      dataLines.push(trimmed);
+    }
+  }
+  for (const line of code.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("@") && trimmed.includes("shape=") && trimmed.includes("data=")) {
+      dataLines.push(trimmed);
+    }
+  }
+  const seen = new Set();
+  return dataLines.filter(l => {
+    const name = l.split(/\s+/)[0];
+    if (seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  });
+}
+
+function RunButton({ code, onResult, messageText }) {
   const [state, setState] = useState("idle");
   const [result, setResult] = useState(null);
   const [inputs, setInputs] = useState({});
   const [needsInputs, setNeedsInputs] = useState(null);
+  const [showInputs, setShowInputs] = useState(true);
+  const [contextData, setContextData] = useState([]);
 
   useEffect(() => {
-    const needed = detectInputs(code);
+    const dataFromCtx = extractDataFromContext(code, messageText);
+    setContextData(dataFromCtx);
+    const dataNames = new Set(dataFromCtx.map(l => l.split(/\s+/)[0].slice(1)));
+    const needed = detectInputs(code).filter(n => !dataNames.has(n));
     setNeedsInputs(needed.length > 0 ? needed : null);
     const init = {};
     for (const name of needed) init[name] = "";
-    setInputs(init);
-  }, [code]);
+    setInputs(prev => {
+      const merged = { ...init };
+      for (const name of needed) {
+        if (prev[name]) merged[name] = prev[name];
+      }
+      return merged;
+    });
+  }, [code, messageText]);
 
   const buildDataContent = () => {
-    if (!needsInputs) return "";
-    return needsInputs.map(name => {
-      const val = inputs[name]?.trim() || "0.0";
-      const nums = val.split(",").map(v => v.trim());
-      const shape = nums.length > 1 ? `1,${nums.length}` : "1";
-      return `@${name} shape=${shape} data=${nums.join(",")}`;
-    }).join("\n");
+    const parts = [...contextData];
+    if (needsInputs) {
+      for (const name of needsInputs) {
+        const val = inputs[name]?.trim() || "0.0";
+        const nums = val.split(",").map(v => v.trim());
+        const shape = nums.length > 1 ? `1,${nums.length}` : "1";
+        parts.push(`@${name} shape=${shape} data=${nums.join(",")}`);
+      }
+    }
+    return parts.join("\n");
   };
 
   const handleRun = async () => {
     setState("validating");
     setResult(null);
     try {
+      const nmlOnly = code.split("\n").filter(l => {
+        const t = l.trim();
+        return !(t.startsWith("@") && t.includes("shape="));
+      }).join("\n");
+
       const valR = await fetch(EXEC_BASE + "/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nml_program: code }),
+        body: JSON.stringify({ nml_program: nmlOnly }),
       });
       const valData = await valR.json();
 
@@ -435,7 +485,7 @@ function RunButton({ code, onResult }) {
         setState("error");
         const r = { status: "GRAMMAR ERROR", errors: valData.errors?.map(e => e.message) || ["Invalid NML"] };
         setResult(r);
-        if (onResult) onResult(r, code);
+        if (onResult) onResult(r, nmlOnly);
         return;
       }
 
@@ -444,12 +494,12 @@ function RunButton({ code, onResult }) {
       const execR = await fetch(EXEC_BASE + "/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nml_program: code, data: dataContent }),
+        body: JSON.stringify({ nml_program: nmlOnly, data: dataContent }),
       });
       const execData = await execR.json();
       setState("done");
       setResult(execData);
-      if (onResult) onResult(execData, code);
+      if (onResult) onResult(execData, nmlOnly);
     } catch (e) {
       setState("error");
       const r = { status: "CONNECTION ERROR", errors: [e.message] };
@@ -467,41 +517,78 @@ function RunButton({ code, onResult }) {
   };
   const s = btnColors[state];
   const btnLabel = { idle: "▶ RUN", validating: "VALIDATING...", executing: "EXECUTING...", done: "▶ RE-RUN", error: "▶ RETRY" };
+  const hasDataOrInputs = contextData.length > 0 || needsInputs;
 
   return (
     <div style={{ display: "inline-flex", flexDirection: "column", gap: 4 }}>
-      <button onClick={handleRun} disabled={state === "validating" || state === "executing"} style={{
-        background: s.bg, border: `1px solid ${s.border}`, color: s.color,
-        padding: "3px 8px", borderRadius: 4, fontSize: 9,
-        cursor: state === "validating" || state === "executing" ? "wait" : "pointer",
-        fontFamily: FONT, letterSpacing: 0.5, transition: "all 0.2s",
-      }}>
-        {btnLabel[state]}
-      </button>
-      {needsInputs && state === "idle" && (
+      <div style={{ display: "flex", gap: 4 }}>
+        <button onClick={handleRun} disabled={state === "validating" || state === "executing"} style={{
+          background: s.bg, border: `1px solid ${s.border}`, color: s.color,
+          padding: "3px 8px", borderRadius: 4, fontSize: 9,
+          cursor: state === "validating" || state === "executing" ? "wait" : "pointer",
+          fontFamily: FONT, letterSpacing: 0.5, transition: "all 0.2s",
+        }}>
+          {btnLabel[state]}
+        </button>
+        {hasDataOrInputs && (
+          <button onClick={() => setShowInputs(v => !v)} style={{
+            background: "transparent", border: `1px solid ${COLORS.border}`,
+            color: COLORS.textDim, padding: "3px 6px", borderRadius: 4, fontSize: 9,
+            cursor: "pointer", fontFamily: FONT,
+          }}>
+            {showInputs ? "▼ DATA" : "▶ DATA"}
+          </button>
+        )}
+      </div>
+      {hasDataOrInputs && showInputs && (
         <div style={{
           padding: "6px 8px", borderRadius: 4,
           background: "rgba(0,180,255,0.04)", border: "1px solid rgba(0,180,255,0.15)",
-          fontSize: 10, fontFamily: FONT, minWidth: 200,
+          fontSize: 10, fontFamily: FONT, minWidth: 220, maxWidth: 360,
+          maxHeight: 180, overflowY: "auto",
         }}>
-          <div style={{ fontSize: 7, fontWeight: 700, letterSpacing: 2, color: "#00b4ff", marginBottom: 4 }}>
-            INPUTS
-          </div>
-          {needsInputs.map(name => (
-            <div key={name} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-              <span style={{ color: "#ffcc00", fontSize: 10 }}>@{name}</span>
-              <input
-                value={inputs[name] || ""}
-                onChange={e => setInputs(prev => ({ ...prev, [name]: e.target.value }))}
-                placeholder="0.0"
-                style={{
-                  background: COLORS.bg, color: COLORS.text, border: `1px solid ${COLORS.border}`,
-                  borderRadius: 3, padding: "2px 6px", fontFamily: FONT, fontSize: 10,
-                  width: 80, outline: "none",
-                }}
-              />
-            </div>
-          ))}
+          {contextData.length > 0 && (
+            <>
+              <div style={{ fontSize: 7, fontWeight: 700, letterSpacing: 2, color: COLORS.accent, marginBottom: 4 }}>
+                DATA ({contextData.length})
+              </div>
+              {contextData.map((line, i) => {
+                const name = line.split(/\s+/)[0];
+                const rest = line.slice(name.length).trim();
+                return (
+                  <div key={`d-${i}`} style={{ marginBottom: 2, lineHeight: "14px" }}>
+                    <span style={{ color: "#ffcc00" }}>{name}</span>{" "}
+                    <span style={{ color: COLORS.textDim, fontSize: 9 }}>{rest}</span>
+                  </div>
+                );
+              })}
+            </>
+          )}
+          {needsInputs && (
+            <>
+              <div style={{
+                fontSize: 7, fontWeight: 700, letterSpacing: 2, color: "#00b4ff",
+                marginBottom: 4, marginTop: contextData.length > 0 ? 6 : 0,
+              }}>
+                INPUTS ({needsInputs.length})
+              </div>
+              {needsInputs.map(name => (
+                <div key={name} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                  <span style={{ color: "#ffcc00", fontSize: 10, minWidth: 60 }}>@{name}</span>
+                  <input
+                    value={inputs[name] || ""}
+                    onChange={e => setInputs(prev => ({ ...prev, [name]: e.target.value }))}
+                    placeholder="0.0"
+                    style={{
+                      background: COLORS.bg, color: COLORS.text, border: `1px solid ${COLORS.border}`,
+                      borderRadius: 3, padding: "2px 6px", fontFamily: FONT, fontSize: 10,
+                      flex: 1, minWidth: 60, outline: "none",
+                    }}
+                  />
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -572,6 +659,8 @@ export default function NMLChat() {
   const [ragStatus, setRagStatus] = useState(null);
   const [agentStatus, setAgentStatus] = useState(null);
   const [pipelineResult, setPipelineResult] = useState(null);
+  const [constrained, setConstrained] = useState(false);
+  const [constrainedAvailable, setConstrainedAvailable] = useState(false);
   const chatRef = useRef(null);
   const inputRef = useRef(null);
   const ctrlRef = useRef(null);
@@ -658,6 +747,11 @@ export default function NMLChat() {
       setConnected(true);
 
       try {
+        const healthR = await fetch(EXEC_BASE + "/health", { signal: AbortSignal.timeout(2000) });
+        if (healthR.ok) { const h = await healthR.json(); setConstrainedAvailable(!!h.constrained_decoding); }
+      } catch {}
+
+      try {
         const ragR = await fetch(API_BASE + "/rag/status", { signal: AbortSignal.timeout(2000) });
         if (ragR.ok) setRagStatus(await ragR.json());
       } catch { setRagStatus(null); }
@@ -734,31 +828,37 @@ export default function NMLChat() {
           body: JSON.stringify({
             model: selectedModel,
             messages: apiMsgs,
-            stream: true,
+            stream: !constrained,
             max_tokens: 2048,
             temperature: 0.7,
+            constrained,
           }),
           signal: ctrlRef.current.signal,
         });
 
-        const reader = r.body.getReader();
-        const decoder = new TextDecoder();
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const chunk = decoder.decode(value);
-          for (const line of chunk.split("\n")) {
-            if (!line.startsWith("data: ")) continue;
-            const data = line.slice(6);
-            if (data === "[DONE]") break;
-            try {
-              const token = JSON.parse(data).choices?.[0]?.delta?.content;
-              if (token) {
-                full += token;
-                setStreamText(full);
-              }
-            } catch {}
+        if (constrained) {
+          const d = await r.json();
+          full = d.choices?.[0]?.message?.content || "";
+          setStreamText(full);
+        } else {
+          const reader = r.body.getReader();
+          const decoder = new TextDecoder();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value);
+            for (const line of chunk.split("\n")) {
+              if (!line.startsWith("data: ")) continue;
+              const data = line.slice(6);
+              if (data === "[DONE]") break;
+              try {
+                const token = JSON.parse(data).choices?.[0]?.delta?.content;
+                if (token) {
+                  full += token;
+                  setStreamText(full);
+                }
+              } catch {}
+            }
           }
         }
       } catch (e) {
@@ -774,7 +874,7 @@ export default function NMLChat() {
     setStreamText("");
     setGenerating(false);
     inputRef.current?.focus();
-  }, [input, generating, messages, systemPrompt, selectedModel]);
+  }, [input, generating, messages, systemPrompt, selectedModel, constrained]);
 
   const stop = useCallback(() => {
     ctrlRef.current?.abort();
@@ -849,6 +949,18 @@ export default function NMLChat() {
             }}>
               AGENTS {agentStatus.healthy ?? agentStatus.count ?? 0}
             </div>
+          )}
+          {constrainedAvailable && (
+            <button onClick={() => setConstrained(c => !c)} style={{
+              background: constrained ? "rgba(255,170,0,0.1)" : "transparent",
+              border: `1px solid ${constrained ? COLORS.warn : COLORS.border}`,
+              color: constrained ? COLORS.warn : COLORS.textDim,
+              padding: "3px 8px", borderRadius: 4, fontSize: 9,
+              cursor: "pointer", fontFamily: FONT, letterSpacing: 1,
+              fontWeight: constrained ? 700 : 400, transition: "all 0.2s",
+            }}>
+              {constrained ? "CFG ON" : "CFG"}
+            </button>
           )}
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
             <div style={{

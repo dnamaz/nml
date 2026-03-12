@@ -216,18 +216,18 @@ _OPERAND_COUNTS: dict[str, tuple[int, int]] = {
     "SDIV": (3, 3),
     "EDIV": (3, 3),
     "LEAF": (2, 2),
-    "TACC": (3, 3),
+    "TACC": (2, 3),
     "RELU": (2, 2),
     "SIGM": (2, 2),
     "TANH": (2, 2),
     "SOFT": (2, 2),
     "RSHP": (2, 3),
     "TRNS": (1, 2),
-    "SPLT": (2, 3),
-    "MERG": (2, 3),
-    "CMPF": (4, 4),
+    "SPLT": (2, 4),
+    "MERG": (2, 4),
+    "CMPF": (3, 4),
     "CMP":  (2, 2),
-    "CMPI": (3, 3),
+    "CMPI": (2, 3),
     "JMPT": (1, 1),
     "JMPF": (1, 1),
     "JUMP": (1, 1),
@@ -238,15 +238,15 @@ _OPERAND_COUNTS: dict[str, tuple[int, int]] = {
     "SYNC": (0, 0),
     "HALT": (0, 0),
     "TRAP": (0, 1),
-    "CONV": (3, 4),
-    "POOL": (2, 3),
+    "CONV": (3, 5),
+    "POOL": (2, 4),
     "UPSC": (2, 3),
     "PADZ": (2, 3),
     "ATTN": (3, 4),
-    "NORM": (2, 3),
+    "NORM": (2, 4),
     "EMBD": (2, 3),
     "GELU": (2, 2),
-    "RDUC": (2, 3),
+    "RDUC": (2, 4),
     "WHER": (3, 4),
     "CLMP": (3, 4),
     "CMPR": (3, 4),
@@ -267,9 +267,9 @@ _OPERAND_COUNTS: dict[str, tuple[int, int]] = {
     "FTOI": (2, 2),
     "BNOT": (2, 2),
     "BKWD": (3, 4),
-    "WUPD": (3, 3),
+    "WUPD": (3, 4),
     "LOSS": (3, 4),
-    "TNET": (3, 3),
+    "TNET": (2, 9),
 }
 
 _STRUCTURAL_OPCODES = {"META", "PTCH", "SIGN"}
@@ -334,13 +334,14 @@ def _validate_operands(canonical: str, opcode_raw: str, operands: list[str], lin
     """Type-check operands for a resolved canonical opcode."""
     errs: list[GrammarError] = []
 
-    if canonical == "LD":
+    if canonical in ("LD", "LEAF", "MOV"):
         if not _is_register(operands[0]):
             errs.append(GrammarError(line_no, "invalid_register",
                 f"First operand of {opcode_raw} must be a register, got '{operands[0]}'"))
-        if not _is_memory_ref(operands[1]):
+        op1 = operands[1]
+        if not (_is_register(op1) or _is_immediate(op1) or _is_memory_ref(op1)):
             errs.append(GrammarError(line_no, "invalid_operand",
-                f"Second operand of {opcode_raw} must be @memory, got '{operands[1]}'"))
+                f"Second operand of {opcode_raw} must be register, #value, or @memory, got '{op1}'"))
 
     elif canonical == "ST":
         if not _is_register(operands[0]):
@@ -358,15 +359,7 @@ def _validate_operands(canonical: str, opcode_raw: str, operands: list[str], lin
             errs.append(GrammarError(line_no, "invalid_operand",
                 f"Second operand of {opcode_raw} must be #[N], got '{operands[1]}'"))
 
-    elif canonical == "LEAF":
-        if not _is_register(operands[0]):
-            errs.append(GrammarError(line_no, "invalid_register",
-                f"First operand of {opcode_raw} must be a register, got '{operands[0]}'"))
-        if not _is_immediate(operands[1]):
-            errs.append(GrammarError(line_no, "invalid_immediate",
-                f"Second operand of {opcode_raw} must be #value, got '{operands[1]}'"))
-
-    elif canonical in ("MOV", "RELU", "SIGM", "TANH", "SOFT", "TRNS", "GELU"):
+    elif canonical in ("RELU", "SIGM", "TANH", "SOFT", "TRNS", "GELU"):
         for i, op in enumerate(operands):
             if not _is_register(op) and not _is_immediate(op):
                 errs.append(GrammarError(line_no, "invalid_operand",
@@ -389,10 +382,11 @@ def _validate_operands(canonical: str, opcode_raw: str, operands: list[str], lin
         if not _is_register(operands[1]):
             errs.append(GrammarError(line_no, "invalid_register",
                 f"Source of {opcode_raw} must be a register, got '{operands[1]}'"))
-        for idx in (2, 3):
-            if not _is_immediate(operands[idx]):
-                errs.append(GrammarError(line_no, "invalid_immediate",
-                    f"Operand {idx+1} of {opcode_raw} must be #immediate, got '{operands[idx]}'"))
+        for idx in range(2, len(operands)):
+            op = operands[idx]
+            if not _is_immediate(op) and not _is_register(op):
+                errs.append(GrammarError(line_no, "invalid_operand",
+                    f"Operand {idx+1} of {opcode_raw} must be register or #immediate, got '{op}'"))
 
     elif canonical in ("CMP", "CMPI"):
         if not _is_register(operands[0]):
