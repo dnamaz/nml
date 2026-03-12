@@ -1,0 +1,22 @@
+; Opcode Coverage: NML-V Vision (4 opcodes)
+; Tests: CONV, POOL, UPSC, PADZ
+
+; CONV — 2D convolution (grammar: 3-4 operands)
+LD    R0 @image
+LD    R1 @kernel
+CONV  R2 R0 R1 #1
+ST    R2 @conv_result
+
+; POOL — max pooling (grammar: 2-3 operands)
+POOL  R3 R2 #2
+ST    R3 @pool_result
+
+; UPSC — upscale (nearest-neighbor)
+UPSC  R5 R3 #2
+ST    R5 @upsc_result
+
+; PADZ — zero padding
+PADZ  R6 R0 #1
+ST    R6 @padz_result
+
+HALT

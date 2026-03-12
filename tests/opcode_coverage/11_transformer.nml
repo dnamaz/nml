@@ -1,0 +1,22 @@
+; Opcode Coverage: NML-T Transformer (4 opcodes — GELU in activation)
+; Tests: ATTN, NORM, EMBD
+
+; ATTN — scaled dot-product attention
+LD    R0 @query
+LD    R1 @key
+LD    R2 @value
+ATTN  R3 R0 R1 R2
+ST    R3 @attn_result
+
+; NORM — layer normalization (grammar: 2-3 operands)
+LD    R4 @gamma
+NORM  R6 R3 R4
+ST    R6 @norm_result
+
+; EMBD — embedding table lookup
+LD    R7 @embed_table
+LD    R8 @indices
+EMBD  R9 R7 R8
+ST    R9 @embd_result
+
+HALT

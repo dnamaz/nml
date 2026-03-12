@@ -1,0 +1,7 @@
+@query shape=2,4 data=0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8
+@key shape=2,4 data=0.4,0.3,0.2,0.1,0.8,0.7,0.6,0.5
+@value shape=2,4 data=1.0,0.0,0.5,0.2,0.0,1.0,0.3,0.7
+@gamma shape=4 data=1.0,1.0,1.0,1.0
+@beta shape=4 data=0.0,0.0,0.0,0.0
+@embed_table shape=4,3 data=0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1,1.2
+@indices shape=2 data=0,2

@@ -1,0 +1,39 @@
+; Opcode Coverage: NML-TR Training (4 opcodes)
+; Tests: BKWD, WUPD, LOSS, TNET
+
+; --- Manual training with LOSS, BKWD, WUPD ---
+LD    R0 @input
+LD    R1 @weights
+LD    R9 @target
+
+; Forward pass
+MMUL  R3 R0 R1
+RELU  R3 R3
+
+; LOSS — compute loss (MSE)
+LOSS  R5 R3 R9 #0
+ST    R5 @loss_before
+
+; BKWD — backpropagation
+BKWD  RG R3 R9
+
+; WUPD — weight update
+WUPD  R1 RG #0.01
+
+; Forward again after update
+MMUL  R3 R0 R1
+RELU  R3 R3
+LOSS  R5 R3 R9 #0
+ST    R5 @loss_after
+
+; --- TNET: self-training loop ---
+LD    R1 @w1
+LD    R2 @b1
+LD    R3 @w2
+LD    R4 @b2
+LD    R0 @tnet_input
+LD    R9 @tnet_target
+TNET  #500 #0.01 #0
+ST    RA @tnet_result
+
+HALT

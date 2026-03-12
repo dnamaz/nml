@@ -391,46 +391,74 @@ static int tensor_transpose(Tensor *out, const Tensor *t) {
 }
 
 static int tensor_split(Tensor *out_lo, Tensor *out_hi, const Tensor *src, int dim, int split_at) {
+    DType dt = src->dtype;
+    if (src->ndim == 1) {
+        int n = src->shape[0];
+        if (split_at < 0) split_at = n / 2;
+        if (split_at < 0 || split_at > n) return NML_ERR_OOB;
+        int s1[] = {split_at}, s2[] = {n - split_at};
+        int rc = tensor_init_typed(out_lo, 1, s1, dt); if (rc) return rc;
+        for (int i = 0; i < split_at; i++) tensor_setd(out_lo, i, tensor_getd(src, i));
+        if (out_hi) {
+            rc = tensor_init_typed(out_hi, 1, s2, dt); if (rc) return rc;
+            for (int i = 0; i < n - split_at; i++) tensor_setd(out_hi, i, tensor_getd(src, split_at + i));
+        }
+        return NML_OK;
+    }
     if (src->ndim != 2 || dim > 1) return NML_ERR_SHAPE;
     int rows = src->shape[0], cols = src->shape[1];
     if (dim == 0) {
+        if (split_at < 0) split_at = rows / 2;
         if (split_at < 0 || split_at > rows) return NML_ERR_OOB;
         int s1[] = {split_at, cols}, s2[] = {rows - split_at, cols};
-        int rc = tensor_init(out_lo, 2, s1); if (rc) return rc;
-        rc = tensor_init(out_hi, 2, s2); if (rc) return rc;
-        memcpy(out_lo->data.f32, src->data.f32, sizeof(float) * split_at * cols);
-        memcpy(out_hi->data.f32, src->data.f32 + split_at * cols, sizeof(float) * (rows - split_at) * cols);
+        int rc = tensor_init_typed(out_lo, 2, s1, dt); if (rc) return rc;
+        for (int i = 0; i < split_at * cols; i++) tensor_setd(out_lo, i, tensor_getd(src, i));
+        if (out_hi) {
+            rc = tensor_init_typed(out_hi, 2, s2, dt); if (rc) return rc;
+            for (int i = 0; i < (rows - split_at) * cols; i++) tensor_setd(out_hi, i, tensor_getd(src, split_at * cols + i));
+        }
     } else {
+        if (split_at < 0) split_at = cols / 2;
         if (split_at < 0 || split_at > cols) return NML_ERR_OOB;
         int s1[] = {rows, split_at}, s2[] = {rows, cols - split_at};
-        int rc = tensor_init(out_lo, 2, s1); if (rc) return rc;
-        rc = tensor_init(out_hi, 2, s2); if (rc) return rc;
+        int rc = tensor_init_typed(out_lo, 2, s1, dt); if (rc) return rc;
+        if (out_hi) { rc = tensor_init_typed(out_hi, 2, s2, dt); if (rc) return rc; }
         for (int i = 0; i < rows; i++) {
-            memcpy(out_lo->data.f32 + i * split_at, src->data.f32 + i * cols, sizeof(float) * split_at);
-            memcpy(out_hi->data.f32 + i * (cols - split_at), src->data.f32 + i * cols + split_at, sizeof(float) * (cols - split_at));
+            for (int j = 0; j < split_at; j++) tensor_setd(out_lo, i * split_at + j, tensor_getd(src, i * cols + j));
+            if (out_hi) for (int j = 0; j < cols - split_at; j++) tensor_setd(out_hi, i * (cols - split_at) + j, tensor_getd(src, i * cols + split_at + j));
         }
     }
     return NML_OK;
 }
 
 static int tensor_merge(Tensor *out, const Tensor *a, const Tensor *b, int dim) {
+    DType dt = dtype_promote(a->dtype, b->dtype);
+    /* 1D or scalar: concatenate into 1D */
+    if (a->ndim <= 1 && b->ndim <= 1) {
+        int na = a->size, nb = b->size;
+        int shape[] = {na + nb};
+        int rc = tensor_init_typed(out, 1, shape, dt); if (rc) return rc;
+        for (int i = 0; i < na; i++) tensor_setd(out, i, tensor_getd(a, i));
+        for (int i = 0; i < nb; i++) tensor_setd(out, na + i, tensor_getd(b, i));
+        return NML_OK;
+    }
     if (a->ndim != 2 || b->ndim != 2 || dim > 1) return NML_ERR_SHAPE;
     int ar = a->shape[0], ac = a->shape[1];
     int br = b->shape[0], bc = b->shape[1];
     if (dim == 0) {
         if (ac != bc) return NML_ERR_SHAPE;
         int shape[] = {ar + br, ac};
-        int rc = tensor_init(out, 2, shape); if (rc) return rc;
-        memcpy(out->data.f32, a->data.f32, sizeof(float) * ar * ac);
-        memcpy(out->data.f32 + ar * ac, b->data.f32, sizeof(float) * br * bc);
+        int rc = tensor_init_typed(out, 2, shape, dt); if (rc) return rc;
+        for (int i = 0; i < ar * ac; i++) tensor_setd(out, i, tensor_getd(a, i));
+        for (int i = 0; i < br * bc; i++) tensor_setd(out, ar * ac + i, tensor_getd(b, i));
     } else {
         if (ar != br) return NML_ERR_SHAPE;
         int shape[] = {ar, ac + bc};
         int oc = ac + bc;
-        int rc = tensor_init(out, 2, shape); if (rc) return rc;
+        int rc = tensor_init_typed(out, 2, shape, dt); if (rc) return rc;
         for (int i = 0; i < ar; i++) {
-            memcpy(out->data.f32 + i * oc, a->data.f32 + i * ac, sizeof(float) * ac);
-            memcpy(out->data.f32 + i * oc + ac, b->data.f32 + i * bc, sizeof(float) * bc);
+            for (int j = 0; j < ac; j++) tensor_setd(out, i * oc + j, tensor_getd(a, i * ac + j));
+            for (int j = 0; j < bc; j++) tensor_setd(out, i * oc + ac + j, tensor_getd(b, i * bc + j));
         }
     }
     return NML_OK;
@@ -1280,13 +1308,25 @@ static int vm_assemble(VM *vm, const char *source) {
                 parse_shape(tokens[3], instr->shape, &instr->shape_ndim);
                 break;
 
-            /* SPLT Rd Re Rs #dim — split Rs along dim, lower into Rd, upper into Re */
+            /* SPLT: two forms supported:
+             *   Short (grammar): SPLT Rd Rs [#dim]       — 2-3 operands, no second output
+             *   Long  (spec):    SPLT Rd Re Rs [#dim [#split_at]] — 4-5 operands */
             case OP_SPLT:
-                instr->reg[0] = parse_register(tokens[1]);
-                instr->reg[1] = parse_register(tokens[2]);
-                instr->reg[2] = parse_register(tokens[3]);
-                instr->int_params[0] = ntokens > 4 ? (int)parse_imm(tokens[4]) : 0;
-                instr->int_params[1] = ntokens > 5 ? (int)parse_imm(tokens[5]) : -1;
+                if (ntokens <= 4) {
+                    /* Short form: SPLT Rd Rs [#dim] */
+                    instr->reg[0] = parse_register(tokens[1]);
+                    instr->reg[1] = -1;
+                    instr->reg[2] = parse_register(tokens[2]);
+                    instr->int_params[0] = ntokens > 3 ? (int)parse_imm(tokens[3]) : 0;
+                    instr->int_params[1] = -1;
+                } else {
+                    /* Long form: SPLT Rd Re Rs [#dim [#split_at]] */
+                    instr->reg[0] = parse_register(tokens[1]);
+                    instr->reg[1] = parse_register(tokens[2]);
+                    instr->reg[2] = parse_register(tokens[3]);
+                    instr->int_params[0] = ntokens > 4 ? (int)parse_imm(tokens[4]) : 0;
+                    instr->int_params[1] = ntokens > 5 ? (int)parse_imm(tokens[5]) : -1;
+                }
                 break;
 
             /* MERG Rd Rs1 Rs2 #dim */
@@ -1643,10 +1683,13 @@ static int vm_execute(VM *vm) {
                 int dim = ins->int_params[0];
                 int split_at = ins->int_params[1];
                 Tensor *src = &REG(ins->reg[2]);
-                if (split_at < 0) split_at = (dim == 0 ? src->shape[0] : src->shape[1]) / 2;
-                rc = tensor_split(&REG(ins->reg[0]), &REG(ins->reg[1]), src, dim, split_at);
+                if (split_at < 0 && src->ndim == 2) split_at = (dim == 0 ? src->shape[0] : src->shape[1]) / 2;
+                Tensor *out_hi = (ins->reg[1] >= 0) ? &REG(ins->reg[1]) : NULL;
+                rc = tensor_split(&REG(ins->reg[0]), out_hi, src, dim, split_at);
                 if (rc) VM_ERROR(vm, rc, "SPLT error at PC=%d", vm->pc);
-                RVALID(ins->reg[0])=1; RVALID(ins->reg[1])=1; break;
+                RVALID(ins->reg[0])=1;
+                if (ins->reg[1] >= 0) RVALID(ins->reg[1])=1;
+                break;
             }
             case OP_MERG: {
                 rc = tensor_merge(&REG(ins->reg[0]), &REG(ins->reg[1]), &REG(ins->reg[2]), ins->int_params[0]);

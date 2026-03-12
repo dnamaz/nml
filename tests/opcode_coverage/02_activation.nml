@@ -1,0 +1,33 @@
+; Opcode Coverage: Activation (5 opcodes)
+; Tests: RELU, SIGM, TANH, SOFT, GELU
+
+; RELU
+LEAF  R0 #-2.0
+RELU  R1 R0              ; max(0, -2) = 0
+ST    R1 @relu_neg
+
+LEAF  R0 #3.0
+RELU  R1 R0              ; max(0, 3) = 3
+ST    R1 @relu_pos
+
+; SIGM — sigmoid
+LEAF  R0 #0.0
+SIGM  R1 R0              ; sigmoid(0) = 0.5
+ST    R1 @sigm_zero
+
+; TANH
+LEAF  R0 #0.0
+TANH  R1 R0              ; tanh(0) = 0
+ST    R1 @tanh_zero
+
+; SOFT — softmax (needs a vector)
+LD    R0 @softmax_input
+SOFT  R1 R0
+ST    R1 @soft_result
+
+; GELU
+LEAF  R0 #1.0
+GELU  R1 R0
+ST    R1 @gelu_result
+
+HALT

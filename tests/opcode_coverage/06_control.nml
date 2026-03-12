@@ -1,0 +1,44 @@
+; Opcode Coverage: Control Flow (7 opcodes)
+; Tests: JMPT, JMPF, JUMP, LOOP, ENDP, CALL, RET
+
+; JUMP — unconditional jump
+LEAF  R9 #0.0
+JUMP  #1
+LEAF  R9 #999.0          ; skipped
+LEAF  R9 #1.0
+ST    R9 @jump_result
+
+; JMPT / JMPF — conditional jumps
+LEAF  R0 #5.0
+CMPI  RE R0 #10.0        ; 5 < 10 → true
+JMPT  #2                 ; jump over next 2
+LEAF  R9 #0.0            ; skipped
+JUMP  #1                 ; skipped
+LEAF  R9 #1.0
+ST    R9 @jmpt_result
+
+LEAF  R0 #20.0
+CMPI  RE R0 #10.0        ; 20 < 10 → false
+JMPF  #2                 ; jump because flag is false
+LEAF  R9 #0.0            ; skipped
+JUMP  #1                 ; skipped
+LEAF  R9 #1.0
+ST    R9 @jmpf_result
+
+; LOOP / ENDP — counted loop (sum 1 to 5)
+ALLC  RA #[1]
+LEAF  R2 #1.0
+LOOP  #5
+TACC  RA RA R2            ; sum += 1
+ENDP
+ST    RA @loop_result     ; expect 5.0
+
+; CALL / RET — subroutine
+LEAF  R1 #7.0
+CALL  #2                  ; call subroutine
+ST    R1 @call_result     ; expect 14.0
+JUMP  #2                  ; skip subroutine body
+TACC  R1 R1 R1            ; double R1
+RET
+
+HALT

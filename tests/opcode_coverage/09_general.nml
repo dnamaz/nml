@@ -1,0 +1,29 @@
+; Opcode Coverage: NML-G General (5 opcodes)
+; Tests: SYS, MOD, ITOF, FTOI, BNOT
+
+; SYS — system call (print number)
+LEAF  R0 #42.0
+SYS   R0 #0              ; print 42
+
+; MOD — integer modulo
+LEAF  R0 #17.0
+LEAF  R1 #5.0
+MOD   R2 R0 R1           ; 17 % 5 = 2
+ST    R2 @mod_result
+
+; ITOF — integer to float
+LEAF  R0 #7.0
+ITOF  R3 R0              ; 7 → 7.0
+ST    R3 @itof_result
+
+; FTOI — float to integer
+LEAF  R0 #3.7
+FTOI  R4 R0              ; 3.7 → 3
+ST    R4 @ftoi_result
+
+; BNOT — bitwise NOT
+LEAF  R0 #0.0
+BNOT  R5 R0              ; ~0
+ST    R5 @bnot_result
+
+HALT

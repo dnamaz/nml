@@ -1,0 +1,41 @@
+; Opcode Coverage: Compare (3 opcodes)
+; Tests: CMP, CMPI, CMPF
+
+; CMPI — compare register to immediate
+LEAF  R0 #25.0
+CMPI  RE R0 #30.0        ; 25 < 30 → flag = 1 (true)
+JMPT  #2
+LEAF  R9 #0.0
+JUMP  #1
+LEAF  R9 #1.0
+ST    R9 @cmpi_true
+
+; CMPI false case
+LEAF  R0 #50.0
+CMPI  RE R0 #30.0        ; 50 < 30 → flag = 0 (false)
+JMPT  #2
+LEAF  R9 #1.0
+JUMP  #1
+LEAF  R9 #0.0
+ST    R9 @cmpi_false
+
+; CMP — register-register comparison
+LEAF  R0 #10.0
+LEAF  R1 #20.0
+CMP   R0 R1              ; 10 < 20 → flag = 1
+JMPT  #2
+LEAF  R9 #0.0
+JUMP  #1
+LEAF  R9 #1.0
+ST    R9 @cmp_result
+
+; CMPF — feature compare (tree opcode)
+LD    R0 @cmpf_data
+CMPF  RE R0 #0 #0.5      ; feature[0] < 0.5?
+JMPT  #2
+LEAF  R9 #0.0
+JUMP  #1
+LEAF  R9 #1.0
+ST    R9 @cmpf_result
+
+HALT

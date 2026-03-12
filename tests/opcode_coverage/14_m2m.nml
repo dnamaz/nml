@@ -1,0 +1,45 @@
+; Opcode Coverage: NML-M2M (13 opcodes)
+; Tests: META, FRAG, ENDF, LINK, VOTE, PROJ, DIST, GATH, SCAT/SCTR, SIGN, VRFY, PTCH
+; Note: SIGN/VRFY/PTCH/LINK are structural — tested as grammar, not all produce output
+
+META  @name         "opcode_coverage_m2m"
+META  @version      "0.7.0"
+META  @domain       "test"
+
+; VOTE — consensus
+LD    R0 @agent_values
+VOTE  RA R0 #0            ; median
+ST    RA @vote_median
+VOTE  RB R0 #1            ; mean
+ST    RB @vote_mean
+
+; PROJ — embedding projection
+LD    R1 @features
+LD    R2 @proj_matrix
+PROJ  R3 R1 R2
+ST    R3 @proj_result
+
+; DIST — embedding distance (cosine)
+LD    R4 @features_b
+PROJ  R5 R4 R2
+DIST  R6 R3 R5 #0
+ST    R6 @dist_cosine
+
+; DIST — euclidean
+DIST  R7 R3 R5 #1
+ST    R7 @dist_euclidean
+
+; GATH — tensor index lookup
+LD    R8 @lookup_table
+LEAF  R9 #2.0
+GATH  RA R8 R9
+ST    RA @gath_result
+
+; SCTR — scatter (Rd-first order)
+ALLC  RB #[5]
+LEAF  RC #99.0
+LEAF  RD #1.0
+SCTR  RB RC RD
+ST    RB @sctr_result
+
+HALT

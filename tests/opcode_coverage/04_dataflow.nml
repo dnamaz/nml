@@ -1,0 +1,26 @@
+; Opcode Coverage: Data Flow (4 opcodes)
+; Tests: RSHP, TRNS, SPLT, MERG
+
+; Load a 2x3 matrix
+LD    R0 @matrix_2x3
+
+; TRNS — transpose 2x3 → 3x2
+TRNS  R2 R0
+ST    R2 @trns_result
+
+; RSHP — reshape 3x2 → 6
+RSHP  R1 R2 #[6]
+ST    R1 @rshp_result
+
+; SPLT — split 1D tensor in half
+LD    R3 @split_data
+SPLT  R4 R3
+ST    R4 @splt_result
+
+; MERG — merge two tensors
+LEAF  R5 #10.0
+LEAF  R6 #20.0
+MERG  R7 R5 R6
+ST    R7 @merg_result
+
+HALT

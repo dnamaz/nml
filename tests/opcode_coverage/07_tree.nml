@@ -1,0 +1,27 @@
+; Opcode Coverage: Tree (2 opcodes — LEAF already tested)
+; Tests: LEAF, TACC
+
+; LEAF — constant loading
+LEAF  R0 #10.0
+LEAF  R1 #3.0
+ST    R0 @leaf_val
+
+; TACC — scalar accumulate (add)
+TACC  RA R0 R1            ; 10 + 3 = 13
+ST    RA @tacc_result
+
+; TACC chained — sum 1+2+3+4+5
+LEAF  RA #0.0
+LEAF  R0 #1.0
+TACC  RA RA R0
+LEAF  R0 #2.0
+TACC  RA RA R0
+LEAF  R0 #3.0
+TACC  RA RA R0
+LEAF  R0 #4.0
+TACC  RA RA R0
+LEAF  R0 #5.0
+TACC  RA RA R0
+ST    RA @tacc_sum        ; expect 15.0
+
+HALT

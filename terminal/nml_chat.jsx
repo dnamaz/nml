@@ -1,7 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
-const API_BASE = "http://localhost:8082/v1";
-const EXEC_BASE = "http://localhost:8082";
+function _getPort() {
+  try {
+    return new URLSearchParams(window.location.search).get("port") || "8082";
+  } catch { return "8082"; }
+}
+const NML_PORT = _getPort();
+const API_BASE = `http://localhost:${NML_PORT}/v1`;
+const EXEC_BASE = `http://localhost:${NML_PORT}`;
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Source Code Pro', monospace";
 const COLORS = {
@@ -37,6 +43,63 @@ const NML_SYMBOLIC = new Set([
   "⊛","⊓","⊔","⊡","⊙","‖","⊏","⊥","ϛ","⊻","⊧","⊜",
   "∿","⋐","§","◆","◇","⚖","✦","✓","⟐","⟂","⊃","⊂","⚙",
 ]);
+
+const SYSTEM_PROMPTS = {
+  classic: `You are an NML v0.7.0 code generator. NML is a 71-opcode tensor register machine with 32 registers (R0-RV).
+
+CRITICAL RULES:
+- LEAF R0 #42.0 loads constants (# prefix). LD R0 @name loads from memory (@ prefix). Never mix them.
+- Every program MUST end with HALT.
+- CALL #N at line X lands on X+N+1. Subroutine right after HALT: use CALL #2, NOT #3.
+- JMPT/JMPF/JUMP offset math: target = current_line + offset + 1.
+- No ADD, SUB, MUL, INCR, or LDI instruction exists. Use TACC for addition, EMUL for element-wise multiply, SCLR for scalar multiply.
+- Increment pattern: LEAF RC #1.0 then TACC RD RD RC.
+
+ALL 71 OPCODES:
+Arithmetic: MMUL MADD MSUB EMUL EDIV SDOT/DOT SCLR SDIV
+Activation: RELU SIGM TANH SOFT GELU
+Memory: LD ST MOV ALLC LEAF
+Data flow: RSHP TRNS SPLT MERG
+Compare: CMP CMPI CMPF
+Control: JMPT JMPF JUMP LOOP ENDP CALL RET
+System: HALT TRAP SYNC SYS MOD ITOF FTOI BNOT
+Vision: CONV POOL UPSC PADZ
+Transformer: ATTN NORM EMBD
+Reduction: RDUC WHER CLMP CMPR
+Signal: FFT FILT
+M2M: META FRAG ENDF LINK PTCH SIGN VRFY VOTE PROJ DIST GATH SCAT/SCTR
+Training: BKWD WUPD LOSS TNET
+
+REGISTERS: R0-R9 (general), RA (accumulator), RB (general), RC (scratch), RD (counter), RE (condition flag set by CMP/CMPI/CMPF), RF (stack pointer), RG-RI (gradients), RJ (learning rate), RK-RV (training/hive).`,
+
+  symbolic: `You are an NML v0.7.0 code generator. ALWAYS use symbolic syntax with Greek register names. Never use classic opcode mnemonics.
+
+CRITICAL RULES:
+- ∎ ι #42.0 loads constants (# prefix). ↓ ι @name loads from memory (@ prefix). Never mix them.
+- Every program MUST end with ◼.
+- ⇒ #N at line X lands on X+N+1. Subroutine right after ◼: use ⇒ #2, NOT #3.
+- ↗/↘/→ offset math: target = current_line + offset + 1.
+- No ADD, SUB, MUL, or INCR exists. Use ∑ for addition, ⊗ for element-wise multiply, ∗ for scalar multiply.
+- Increment pattern: ∎ γ #1.0 then ∑ δ δ γ.
+
+ALL 71 SYMBOLIC OPCODES:
+Arithmetic: × (matmul) ⊕ (add) ⊖ (sub) ⊗ (emul) ⊘ (ediv) · (dot) ∗ (scale) ÷ (sdiv)
+Activation: ⌐ (relu) σ (sigmoid) τ (tanh) Σ (softmax) ℊ (gelu)
+Memory: ↓ (load) ↑ (store) ← (move) □ (alloc) ∎ (leaf/constant)
+Data flow: ⊞ (reshape) ⊤ (transpose) ⊢ (split) ⊣ (merge)
+Compare: ≶ (cmp) ≺/ϟ (cmpi) ⋈ (cmpf)
+Control: ↗ (jmpt) ↘ (jmpf) → (jump) ↻ (loop) ↺ (endp) ⇒ (call) ⇐ (ret)
+Tree: ∎ (leaf) ∑ (accumulate)
+System: ◼ (halt) ⚠ (trap) ⏸ (sync) ⚙ (sys) % (mod) ⊶ (itof) ⊷ (ftoi) ¬ (bnot)
+Vision: ⊛ (conv) ⊓ (pool) ⊔ (upsc) ⊡ (padz)
+Transformer: ⊙ (attn) ‖ (norm) ⊏ (embd)
+Reduction: ⊥/ϛ (rduc) ⊻ (wher) ⊧ (clmp) ⊜ (cmpr)
+Signal: ∿ (fft) ⋐ (filt)
+M2M: § (meta) ◆ (frag) ◇ (endf) ⊿ (ptch) ✦ (sign) ✓ (vrfy) ⚖ (vote) ⟐ (proj) ⟂ (dist) ⊃ (gath) ⊂ (scat)
+Training: ∇ (bkwd) ⟳ (wupd) △ (loss) ⥁ (tnet)
+
+REGISTERS (always use Greek): ι κ λ μ ν ξ ο π ρ ς (R0-R9), α (accumulator), β (general), γ (scratch), δ (counter), φ (flag), ψ (stack), η θ ζ (gradients), ω (learning rate), χ υ ε (training).`,
+};
 
 function isNMLCode(text) {
   const lines = text.trim().split("\n").filter(l => l.trim() && !l.trim().startsWith(";"));
@@ -493,7 +556,11 @@ function ExecutionResult({ content, defaultCollapsed = true }) {
 }
 
 export default function NMLChat() {
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem("nml-chat-messages")) || [];
+    } catch { return []; }
+  });
   const [input, setInput] = useState("");
   const [generating, setGenerating] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -514,6 +581,11 @@ export default function NMLChat() {
   }, []);
 
   useEffect(() => { scrollBottom(); }, [messages, streamText, scrollBottom]);
+
+  useEffect(() => {
+    try { localStorage.setItem("nml-chat-messages", JSON.stringify(messages)); }
+    catch {}
+  }, [messages]);
 
   const handleNMLResult = useCallback(async (result, code) => {
     let summary = "";
@@ -568,7 +640,7 @@ export default function NMLChat() {
       } catch {}
 
       if (full) {
-        setMessages(prev => [...prev, { role: "assistant", content: full }]);
+        setMessages(prev => [...prev, { role: "assistant", content: full, ephemeral: true }]);
       }
       setStreamText("");
       setGenerating(false);
@@ -582,7 +654,7 @@ export default function NMLChat() {
       const d = await r.json();
       const list = (d.data || []).map(m => m.id);
       setModels(list);
-      if (list.length && !selectedModel) setSelectedModel(list[0]);
+      if (list.length) setSelectedModel(prev => prev || list[0]);
       setConnected(true);
 
       try {
@@ -600,7 +672,7 @@ export default function NMLChat() {
       setRagStatus(null);
       setAgentStatus(null);
     }
-  }, [selectedModel]);
+  }, []);
 
   useEffect(() => {
     checkServer();
@@ -621,11 +693,14 @@ export default function NMLChat() {
 
     const apiMsgs = [];
     if (systemPrompt.trim()) apiMsgs.push({ role: "system", content: systemPrompt.trim() });
-    apiMsgs.push(...newMsgs.map(m => ({ role: m.role, content: m.content })));
+    apiMsgs.push(...newMsgs
+      .filter(m => (m.role === "user" || m.role === "assistant") && !m.ephemeral)
+      .map(m => ({ role: m.role, content: m.content })));
 
     ctrlRef.current = new AbortController();
     let full = "";
     let pipelineUsed = false;
+    let pipeData = null;
     setPipelineResult(null);
 
     try {
@@ -636,7 +711,7 @@ export default function NMLChat() {
         signal: AbortSignal.timeout(15000),
       });
       if (pipeR.ok) {
-        const pipeData = await pipeR.json();
+        pipeData = await pipeR.json();
         if (pipeData.status !== "error" && pipeData.intent !== "general_chat") {
           setPipelineResult(pipeData);
           pipelineUsed = true;
@@ -644,50 +719,52 @@ export default function NMLChat() {
       }
     } catch { /* pipeline not available, fall through to LLM */ }
 
-    if (pipelineUsed) {
-      apiMsgs.push({
-        role: "system",
-        content: "The agent pipeline has already computed a structured result for this query. Summarize and explain it to the user.",
-      });
-    }
-
-    try {
-      const r = await fetch(API_BASE + "/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: selectedModel,
-          messages: apiMsgs,
-          stream: true,
-          max_tokens: 2048,
-          temperature: 0.7,
-        }),
-        signal: ctrlRef.current.signal,
-      });
-
-      const reader = r.body.getReader();
-      const decoder = new TextDecoder();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value);
-        for (const line of chunk.split("\n")) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6);
-          if (data === "[DONE]") break;
-          try {
-            const token = JSON.parse(data).choices?.[0]?.delta?.content;
-            if (token) {
-              full += token;
-              setStreamText(full);
-            }
-          } catch {}
-        }
+    if (!pipeData?.final_output) {
+      if (pipelineUsed) {
+        apiMsgs.push({
+          role: "system",
+          content: "The agent pipeline has already computed a structured result for this query. Summarize and explain it to the user.",
+        });
       }
-    } catch (e) {
-      if (e.name !== "AbortError") {
-        full += "\n\n*[Connection lost]*";
+
+      try {
+        const r = await fetch(API_BASE + "/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: selectedModel,
+            messages: apiMsgs,
+            stream: true,
+            max_tokens: 2048,
+            temperature: 0.7,
+          }),
+          signal: ctrlRef.current.signal,
+        });
+
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value);
+          for (const line of chunk.split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6);
+            if (data === "[DONE]") break;
+            try {
+              const token = JSON.parse(data).choices?.[0]?.delta?.content;
+              if (token) {
+                full += token;
+                setStreamText(full);
+              }
+            } catch {}
+          }
+        }
+      } catch (e) {
+        if (e.name !== "AbortError") {
+          full += "\n\n*[Connection lost]*";
+        }
       }
     }
 
@@ -706,6 +783,7 @@ export default function NMLChat() {
   const clearChat = useCallback(() => {
     setMessages([]);
     setStreamText("");
+    try { localStorage.removeItem("nml-chat-messages"); } catch {}
   }, []);
 
   return (
@@ -791,13 +869,52 @@ export default function NMLChat() {
           background: COLORS.panel, borderBottom: `1px solid ${COLORS.border}`,
           padding: "10px 20px",
         }}>
-          <div style={{ color: COLORS.textDim, fontSize: 9, letterSpacing: 2, marginBottom: 6 }}>
-            SYSTEM PROMPT
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            marginBottom: 8,
+          }}>
+            <div style={{ color: COLORS.textDim, fontSize: 9, letterSpacing: 2 }}>
+              SYSTEM PROMPT
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {Object.keys(SYSTEM_PROMPTS).map(key => {
+                const active = systemPrompt === SYSTEM_PROMPTS[key];
+                return (
+                  <button key={key} onClick={() => {
+                    const next = SYSTEM_PROMPTS[key];
+                    if (next !== systemPrompt) {
+                      setMessages([]);
+                      setStreamText("");
+                      setPipelineResult(null);
+                    }
+                    setSystemPrompt(next);
+                  }} style={{
+                    background: active ? COLORS.accentBg : "transparent",
+                    border: `1px solid ${active ? COLORS.accent : COLORS.border}`,
+                    color: active ? COLORS.accent : COLORS.textDim,
+                    padding: "3px 10px", borderRadius: 4, fontSize: 9,
+                    cursor: "pointer", fontFamily: FONT, letterSpacing: 1,
+                    fontWeight: active ? 700 : 400, transition: "all 0.2s",
+                  }}>
+                    {key.toUpperCase()}
+                  </button>
+                );
+              })}
+              {systemPrompt && (
+                <button onClick={() => setSystemPrompt("")} style={{
+                  background: "transparent", border: `1px solid ${COLORS.border}`,
+                  color: COLORS.textDim, padding: "3px 10px", borderRadius: 4,
+                  fontSize: 9, cursor: "pointer", fontFamily: FONT, letterSpacing: 1,
+                }}>
+                  CLEAR
+                </button>
+              )}
+            </div>
           </div>
           <textarea
             value={systemPrompt}
             onChange={e => setSystemPrompt(e.target.value)}
-            placeholder="You are an NML v0.6.4 code generator. NML uses LEAF for constants, LD for memory, TACC for scalar addition, EMUL for multiply, SCLR for scaling. All programs must end with HALT."
+            placeholder="Select a preset above or type a custom system prompt..."
             style={{
               width: "100%", background: COLORS.bg, color: COLORS.text,
               border: `1px solid ${COLORS.border}`, borderRadius: 4,
@@ -823,7 +940,7 @@ export default function NMLChat() {
             <div style={{ fontSize: 10, opacity: 0.6, marginTop: 8 }}>
               {connected
                 ? `Model: ${selectedModel.split("/").pop() || "none"}${ragStatus ? ` • RAG: ${ragStatus.tax_files?.toLocaleString()} tax files` : ""}`
-                : "Waiting for RAG server on port 8082..."}
+                : `Waiting for server on port ${NML_PORT}...`}
             </div>
             {ragStatus && (
               <div style={{ fontSize: 10, opacity: 0.5, marginTop: 4 }}>

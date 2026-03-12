@@ -1,0 +1,2 @@
+@matrix_2x3 shape=2,3 data=1.0,2.0,3.0,4.0,5.0,6.0
+@split_data shape=4 data=10.0,20.0,30.0,40.0

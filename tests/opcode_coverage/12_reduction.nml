@@ -1,0 +1,30 @@
+; Opcode Coverage: NML-R Reduction (4 opcodes)
+; Tests: RDUC, WHER, CLMP, CMPR
+
+LD    R0 @data
+
+; RDUC — reduce (grammar: 2-3 operands: Rd Rs #op)
+RDUC  R1 R0 #0            ; sum
+ST    R1 @rduc_sum
+RDUC  R2 R0 #1            ; mean
+ST    R2 @rduc_mean
+RDUC  R3 R0 #2            ; max
+ST    R3 @rduc_max
+RDUC  R4 R0 #3            ; min
+ST    R4 @rduc_min
+
+; CMPR — comparison mask (which elements > 0.5?)
+CMPR  R5 R0 #0.5 #0
+ST    R5 @cmpr_result
+
+; CLMP — clamp to [0.2, 0.8]
+CLMP  R6 R0 #0.2 #0.8
+ST    R6 @clmp_result
+
+; WHER — conditional select
+LEAF  R7 #1.0
+LEAF  R8 #0.0
+WHER  R9 R5 R7 R8
+ST    R9 @wher_result
+
+HALT

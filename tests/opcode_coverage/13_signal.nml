@@ -1,0 +1,16 @@
+; Opcode Coverage: NML-S Signal (2 opcodes)
+; Tests: FFT, FILT
+
+LD    R0 @signal
+
+; FFT — discrete Fourier transform
+FFT   R1 R2 R0
+ST    R1 @fft_real
+ST    R2 @fft_imag
+
+; FILT — FIR filter
+LD    R3 @coeffs
+FILT  R4 R0 R3
+ST    R4 @filt_result
+
+HALT

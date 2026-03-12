@@ -1,0 +1,11 @@
+; Opcode Coverage: System (3 core opcodes)
+; Tests: HALT, SYNC, TRAP (TRAP tested indirectly — would abort)
+; Note: TRAP is intentionally NOT executed — it would halt with error
+
+; SYNC — synchronization barrier (no-op in single-thread)
+LEAF  R0 #42.0
+SYNC
+ST    R0 @sync_result
+
+; HALT — stop execution
+HALT

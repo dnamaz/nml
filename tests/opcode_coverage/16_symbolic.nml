@@ -1,0 +1,56 @@
+; Opcode Coverage: Symbolic syntax (all core opcodes in symbolic form)
+; Tests: ∎, ↓, ↑, ×, ⊕, ⊖, ⊗, ∗, ⌐, σ, ∑, ≺, ↗, ↘, →, ↻, ↺, ◼
+
+; ∎ (LEAF) — load constant
+∎  ι  #10.0
+∎  κ  #3.0
+
+; ∑ (TACC) — accumulate
+∑  α  ι  κ               ; 10 + 3 = 13
+↑  α  @symbolic_add
+
+; ⊕ (MADD) — add
+⊕  λ  ι  κ               ; 10 + 3 = 13
+↑  λ  @symbolic_madd
+
+; ⊖ (MSUB) — subtract
+⊖  μ  ι  κ               ; 10 - 3 = 7
+↑  μ  @symbolic_msub
+
+; ⊗ (EMUL) — multiply
+⊗  ν  ι  κ               ; 10 * 3 = 30
+↑  ν  @symbolic_emul
+
+; ∗ (SCLR) — scalar multiply
+∗  ξ  ι  #2.0            ; 10 * 2 = 20
+↑  ξ  @symbolic_sclr
+
+; ⌐ (RELU)
+∎  ο  #-5.0
+⌐  π  ο                  ; max(0, -5) = 0
+↑  π  @symbolic_relu
+
+; σ (SIGM)
+∎  ρ  #0.0
+σ  ς  ρ                  ; sigmoid(0) = 0.5
+↑  ς  @symbolic_sigm
+
+; ≺ (CMPI) + ↗ (JMPT) + → (JUMP)
+∎  ι  #5.0
+≺  φ  ι  #10.0           ; 5 < 10 → true
+↗  #2                     ; jump over
+∎  α  #0.0
+→  #1
+∎  α  #1.0
+↑  α  @symbolic_cmp
+
+; ↻ (LOOP) + ↺ (ENDP) — sum 1 to 3
+□  α  #[1]
+∎  κ  #1.0
+↻  #3
+∑  α  α  κ
+↺
+↑  α  @symbolic_loop      ; expect 3.0
+
+; ◼ (HALT)
+◼

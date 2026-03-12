@@ -1,0 +1,46 @@
+; Opcode Coverage: Arithmetic (8 opcodes)
+; Tests: MMUL, MADD, MSUB, EMUL, EDIV, SDOT/DOT, SCLR, SDIV
+
+LEAF  R0 #3.0
+LEAF  R1 #4.0
+LEAF  R2 #2.0
+
+; MADD — element-wise add
+MADD  R3 R0 R1           ; 3 + 4 = 7
+ST    R3 @madd_result
+
+; MSUB — element-wise subtract
+MSUB  R3 R1 R0           ; 4 - 3 = 1
+ST    R3 @msub_result
+
+; EMUL — element-wise multiply
+EMUL  R3 R0 R1           ; 3 * 4 = 12
+ST    R3 @emul_result
+
+; EDIV — element-wise divide
+EDIV  R3 R1 R2           ; 4 / 2 = 2
+ST    R3 @ediv_result
+
+; SCLR — scalar multiply
+SCLR  R3 R0 #5.0         ; 3 * 5 = 15
+ST    R3 @sclr_result
+
+; SDIV — scalar divide
+SDIV  R3 R1 #2.0         ; 4 / 2 = 2
+ST    R3 @sdiv_result
+
+; SDOT / DOT — dot product (needs vectors)
+ALLC  R4 #[3]
+ALLC  R5 #[3]
+LEAF  R4 #1.0
+LEAF  R5 #2.0
+SDOT  R6 R4 R5           ; dot([1,1,1],[2,2,2]) = 6
+ST    R6 @sdot_result
+
+; MMUL — matrix multiply (needs 2D tensors)
+LD    R7 @mat_a
+LD    R8 @mat_b
+MMUL  R9 R7 R8
+ST    R9 @mmul_result
+
+HALT
