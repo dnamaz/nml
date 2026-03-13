@@ -2448,6 +2448,38 @@ static int vm_load_data(VM *vm, const char *path) {
     free(src); return count;
 }
 
+static int vm_load_data_from_string(VM *vm, const char *src) {
+    char line[4096]; const char *p = src; int count = 0;
+    while (*p) {
+        int i = 0;
+        while (*p && *p != '\n' && i < 4095) line[i++] = *p++;
+        line[i] = '\0'; if (*p == '\n') p++;
+        char *start = line;
+        while (*start == ' ' || *start == '\t') start++;
+        if (*start == '\0' || *start == '#') continue;
+        if (*start == '@') {
+            char label[NML_MAX_LABEL_LEN] = {0};
+            int shape[NML_MAX_DIMS] = {0}; int ndim = 0;
+            char *lp = start + 1; int li = 0;
+            while (*lp && *lp != ' ' && *lp != '\t') label[li++] = *lp++;
+            char *sp = strstr(lp, "shape=");
+            if (sp) { sp += 6; while (*sp && *sp != ' ' && *sp != '\t') { shape[ndim++] = atoi(sp); while (*sp && *sp != ',' && *sp != ' ' && *sp != '\t') sp++; if (*sp == ',') sp++; } }
+            DType file_dtype = NML_F32;
+            char *dtp = strstr(lp, "dtype=");
+            if (dtp) { dtp += 6; char dtbuf[8]={0}; int dti=0; while(*dtp&&*dtp!=' '&&*dtp!='\t'&&dti<7) dtbuf[dti++]=*dtp++; file_dtype=parse_dtype(dtbuf); }
+            MemorySlot *slot = vm_memory(vm, label);
+            if (!slot) return NML_ERR_MEMORY;
+            tensor_init_typed(&slot->tensor, ndim, shape, file_dtype); slot->used = 1;
+            char *dp = strstr(lp, "data=");
+            if (dp) { dp += 5; int di = 0; while (*dp && di < slot->tensor.size) { tensor_setd(&slot->tensor, di++, strtod(dp, &dp)); if (*dp == ',') dp++; } }
+            count++;
+        }
+    }
+    return count;
+}
+
+#ifndef NML_LIBRARY_MODE
+
 /* ═══════════════════════════════════════════
    MAIN
    ═══════════════════════════════════════════ */
@@ -2631,3 +2663,5 @@ int main(int argc, char **argv) {
     free(vm);
     return exit_code;
 }
+
+#endif /* NML_LIBRARY_MODE */

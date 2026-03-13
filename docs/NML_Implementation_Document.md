@@ -2,7 +2,7 @@
 
 ## What Was Built
 
-This document describes the complete implementation of the NML (Neural Machine Language) system: a 71-instruction machine language for AI workloads with a ~51KB C runtime, three transpiler pipelines (XGBoost, deterministic rules, and domain rule transpilation), a tri-syntax system (classic/symbolic/verbose), a training data generator for LLM fine-tuning, and a general-purpose extension (NML-G) enabling console I/O and integer math.
+This document describes the complete implementation of the NML (Neural Machine Language) system: a 71-instruction machine language for AI workloads with an 83KB C runtime, three transpiler pipelines (XGBoost, deterministic rules, and STE tax rule transpilation), a tri-syntax system (classic/symbolic/verbose), a training data generator for LLM fine-tuning, a general-purpose extension (NML-G) enabling console I/O and integer math, an NML daemon (nmld) for high-performance execution, and a domain services layer providing standalone tax calculation with penny-exact accuracy against the Symmetry Tax Engine.
 
 ---
 
@@ -45,15 +45,18 @@ flowchart TD
         Dataset["Training Dataset — 96,710 pairs"]
     end
 
-    subgraph agents [Agent Services Layer]
+    subgraph core_services [NML Core Services]
+        NMLServer["NML Server — port 8082<br/>LLM chat, execution, validation"]
+        ChatUI["Chat UI — nml_chat.jsx"]
+    end
+
+    subgraph domain_services [Domain Services — independent]
         TranspilerSvc["Transpiler Service — port 8083"]
         ValidatorSvc["Validation Service — port 8084"]
         EngineSvc["Execution Service — port 8085"]
-        Gateway["Agent Gateway — port 8082"]
-        Orchestrator["Intent Router + Pipeline Executor"]
+        PayCalcSvc["PayCalc Service — port 8086"]
+        PayCalcUI["PayCalc UI — nml_paycalc.jsx"]
         GrammarVal["Grammar Validator — nml_grammar.py"]
-        SemanticVal["Semantic Analyzer — nml_semantic.py"]
-        AnomalyDet["Anomaly Detector — nml_anomaly.py"]
     end
 
     XGB --> XGBTrans --> TaxCalc
@@ -72,17 +75,17 @@ flowchart TD
     DomainTrans --> TranspilerSvc
     Validate --> ValidatorSvc
     NMLFull --> EngineSvc
+    NMLFull --> PayCalcSvc
     GrammarVal --> ValidatorSvc
-    SemanticVal --> ValidatorSvc
-    Gateway --> TranspilerSvc & ValidatorSvc & EngineSvc
-    Orchestrator --> Gateway
+    PayCalcUI --> PayCalcSvc
+    ChatUI --> NMLServer
 ```
 
 ---
 
-## Component 1: NML Runtime (`nml.c`)
+## Component 1: NML Runtime (`nml.c` + `nmld.c`)
 
-**~1,900 lines of C99.** Single-file runtime implementing the full NML instruction set with tri-syntax support, M2M extensions, and general-purpose I/O.
+**~2,600 lines of C99.** Single-file runtime implementing the full 71-instruction NML instruction set with tri-syntax support, M2M extensions, training extensions (BKWD, WUPD, LOSS, TNET), and general-purpose I/O. The daemon (`nmld.c`, ~700 lines) adds pre-fork worker pools, binary cache with mmap for sub-second startup, Unix socket API, and zero-downtime cache reload (SIGHUP).
 
 ### Build
 
@@ -302,24 +305,25 @@ Net pay (annual): $86,906.36
 ```mermaid
 flowchart TD
     subgraph core [NML Core]
-        Runtime["C Runtime\nnml.c — ~1,900 lines\n71 instructions, ~68 KB\nTri-syntax: classic | symbolic | verbose"]
-        Spec["NML Spec v0.7.0\n35 core + 14 ext + 13 M2M + 5 GP + 4 TR"]
+        Runtime["C Runtime\nnml.c — ~2,600 lines\n71 instructions, 83 KB\nTri-syntax: classic | symbolic | verbose"]
+        Daemon["NML Daemon\nnmld.c — ~700 lines\nPre-fork workers, binary cache, Unix socket"]
+        Spec["NML Spec v0.7.1\n35 core + 14 ext + 13 M2M + 5 GP + 4 TR"]
     end
 
     subgraph transpilers [Transpilers]
         XGB["XGBoost Transpiler\ntax_pipeline.py — 569 lines\n20/20 exact match"]
         Rules["Rule Transpiler\nrule_transpiler.py — 525 lines\n2024 US tax rules"]
-        Domain["Domain Transpiler\ntranspilers/ — ~2,500 lines\nDomain rules, all validated"]
+        STE["STE Transpiler\nste_transpiler.py — ~1,250 lines\n7,549 tax programs"]
     end
 
     subgraph programs [Generated Programs]
-        Library["NML Rule Library\nDomain-transpiled programs"]
+        Library["NML Tax Library\n7,549 programs, 50+ states\nPenny-exact vs STE"]
         P1["tax_calculator.nml\n1,536 instr — XGBoost"]
         P6["anomaly_detector.nml\n18 instr — neural net"]
     end
 
     subgraph training [Training Pipeline]
-        T1["96,710 training pairs\nMistral format"]
+        T1["228K training pairs\nMistral format"]
     end
 ```
 
@@ -327,14 +331,16 @@ flowchart TD
 
 | Metric | Value |
 |--------|-------|
-| NML runtime size (stripped) | ~68 KB (full), ~50 KB (core) |
-| NML vocabulary | ~71 symbols (classic) + symbolic + verbose aliases |
-| Token count (typical NN program) | 20–50 tokens |
-| Inference time (XGBoost, 20 trees) | 88 µs |
+| NML runtime size (stripped) | 83 KB (full), ~50 KB (core) |
+| NML vocabulary | 71 symbols (classic) + symbolic + verbose aliases |
+| Token count (typical NN program) | 20-50 tokens |
+| Tax library size | 7,549 NML programs |
 | Inference time (FIT bracket lookup) | 145 µs |
 | Inference time (FICA flat rate) | 85 µs |
-| Domain Rules | Validated |
-| Training pairs generated | 96,710 (Mistral format) |
+| Inference time (MI city tax) | 140-260 µs |
+| Daemon startup (mmap cache) | < 1 second |
+| Tax accuracy vs STE | 100% penny-exact (355/355 tests) |
+| Training pairs generated | 228K (Mistral format) |
 | Syntax modes | 3 (classic, symbolic, verbose) |
 
 ---
@@ -343,14 +349,21 @@ flowchart TD
 
 The NML system now includes a multi-agent services layer that wraps the core components as HTTP services with an orchestration pipeline. See [NML_Multi_Agent_Architecture.md](NML_Multi_Agent_Architecture.md) for the full architecture and [NML_Multi_Agent_Implementation_Plan.md](NML_Multi_Agent_Implementation_Plan.md) for the implementation details.
 
-### Agent Services
+### Core Services (serve/)
 
 | Service | Port | Implementation | Status |
 |---------|------|---------------|--------|
-| Transpiler | 8083 | `serve/transpiler_service.py` | Implemented and tested |
-| Validator | 8084 | `serve/validation_service.py` | Implemented and tested |
+| NML Server | 8082 | `serve/nml_server.py` | LLM chat, execution, validation |
+| RAG Gateway | 8083 | `domain/transpilers/domain_rag_server.py` | Domain RAG |
+
+### Domain Services (domain/serve/) — run independently
+
+| Service | Port | Implementation | Status |
+|---------|------|---------------|--------|
+| Transpiler | 8083 | `domain/serve/transpiler_service.py` | Implemented and tested |
+| Validator | 8084 | `domain/serve/validation_service.py` | Implemented and tested |
 | Execution Engine | 8085 | `serve/execution_service.py` | Implemented and tested |
-| Agent Gateway | 8082 | `transpilers/domain_rag_server.py` | Implemented and tested |
+| PayCalc | 8086 | `domain/serve/paycalc_server.py` | Penny-exact, 7,549 jurisdictions |
 
 ### Validation Tools
 
@@ -362,16 +375,16 @@ The NML system now includes a multi-agent services layer that wraps the core com
 | NML Diff Engine | `transpilers/nml_diff.py` | Semantic bracket/rate comparison |
 | Anomaly Detector | `transpilers/nml_anomaly.py` | Cross-jurisdiction scanning |
 
-### Orchestration
+### Orchestration (domain/serve/)
 
 | Component | Implementation | Status |
 |-----------|---------------|--------|
-| Intent Router | `serve/intent_router.py` | 7 intent categories |
-| Agent Registry | `serve/agent_registry.py` | Health tracking + call stats |
-| Pipeline Executor | `serve/pipeline_executor.py` | 6 pipeline types |
-| Agent Protocol | `serve/nml_protocol.py` | AgentMessage envelope |
-| Provenance Tracker | `serve/provenance_tracker.py` | Instruction-level tracing |
-| Audit Log | `serve/audit_log.py` | Append-only JSONL log |
+| Intent Router | `domain/serve/intent_router.py` | 7 intent categories |
+| Agent Registry | `domain/serve/agent_registry.py` | Health tracking + call stats |
+| Pipeline Executor | `domain/serve/pipeline_executor.py` | 6 pipeline types |
+| Agent Protocol | `domain/serve/nml_protocol.py` | AgentMessage envelope |
+| Provenance Tracker | `domain/serve/provenance_tracker.py` | Instruction-level tracing |
+| Audit Log | `domain/serve/audit_log.py` | Append-only JSONL log |
 
 ## Component 7: NML v0.6 M2M Extensions
 

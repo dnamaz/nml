@@ -119,7 +119,7 @@ echo ""
 
 if ! $NO_UI; then
     echo "  Launching NML chat UI..."
-    cd "$PROJECT_ROOT" && bun terminal/jxs.ts terminal/nml_chat.jsx &
+    cd "$PROJECT_ROOT" && bun ~/.cursor/skills/jxs-runner/scripts/jxs.ts terminal/nml_chat.jsx &
     PIDS+=($!)
 fi
 

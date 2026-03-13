@@ -442,7 +442,26 @@ def create_http_app(model_path: str = None):
         messages = body.get("messages", [])
         max_tokens = body.get("max_tokens", 1024)
         stream = body.get("stream", False)
-        constrained = body.get("constrained", False)
+        mode = body.get("mode", "auto")
+        constrained = body.get("constrained", None)
+
+        if constrained is None:
+            if mode == "nml":
+                constrained = True
+            elif mode == "chat":
+                constrained = False
+            elif mode == "auto":
+                last_msg = messages[-1].get("content", "") if messages else ""
+                nml_keywords = ["write nml", "nml program", "nml code", "symbolic nml",
+                                "verbose nml", "generate nml", "nml to ", "nml for ",
+                                "using nml", "in nml", "tnet", "mmul", "leaf r",
+                                "include the .nml.data"]
+                constrained = any(kw in last_msg.lower() for kw in nml_keywords)
+            else:
+                constrained = False
+
+        if constrained and not outlines_model:
+            constrained = False
 
         prompt_parts = []
         for msg in messages:
@@ -487,6 +506,7 @@ def create_http_app(model_path: str = None):
                 "message": {"role": "assistant", "content": response_text.strip()},
                 "finish_reason": "stop",
             }],
+            "constrained": constrained,
         })
 
     app = web.Application()

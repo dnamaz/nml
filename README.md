@@ -89,7 +89,7 @@ NML's zero-ambiguity grammar makes it dramatically easier to train models to wri
 ## Quick Start
 
 ```bash
-# Build
+# Build the runtime (and daemon)
 make
 
 # Run Hello World
@@ -103,6 +103,12 @@ make
 
 # Run all tests
 make test
+
+# Start the NML server (LLM chat + execution)
+serve/start_agents.sh
+
+# Start the domain tax services (independent)
+domain/serve/start_agents.sh --paycalc-ui
 ```
 
 ## Tri-Syntax
@@ -453,27 +459,94 @@ NML can train its own neural networks using the TNET fused opcode. Same weights,
 
 ## Architecture
 
+NML separates core infrastructure from domain-specific applications. The core (`runtime/`, `serve/`, `transpilers/`) is a general-purpose tensor register machine. Domain logic (`domain/`) implements specific workloads like tax calculations as self-contained NML programs with their own services and UI.
+
 ```
-runtime/nml.c        Single-file C99 runtime (~2,100 lines, 83 KB binary)
-                     Assembler + validator + VM in one file
-                     Parses all three syntax forms natively
+runtime/
+  nml.c              Single-file C99 runtime (~2,600 lines, 83 KB binary)
+  nmld.c             NML daemon — pre-fork worker pool, binary cache, Unix socket API
 
-transpilers/         Grammar validator, training data generators (core, equalize,
-                     self-training, tensor table, cascade, library), formatting
+transpilers/         Grammar validator (nml_grammar.py), Lark CFG for constrained
+                     decoding (nml_lark_grammar.py), training data generators
 
-serve/               MCP server, protocol definitions, cryptographic signing,
-                     provenance tracking, and multi-agent orchestration
+serve/
+  nml_server.py      HTTP server: LLM chat, NML execution, validation endpoints
+  start_agents.sh    Starts NML server + optional RAG gateway + chat UI
+
+terminal/
+  nml_chat.jsx       LLM chat UI for NML code generation
+  nml_terminal.jsx   Interactive NML emulator
 
 programs/            Example NML programs (anomaly detector, fibonacci,
-                     fizzbuzz, primes, calculator, hello world)
+                     fizzbuzz, primes, rate calculations, hello world)
 
-tests/               Test programs covering core features, symbolic syntax,
-                     verbose syntax, M2M extensions
+tests/               Opcode coverage tests, LLM generation tests, model comparison
 
-terminal/            React + Bun JSX apps: NML emulator terminal and chat UI
+docs/                Full specification, architecture documents, usage guide
 
-docs/                Full specification, architecture documents, usage guide,
-                     M2M spec, and integration plans
+domain/              Tax domain (self-contained, independent services)
+  serve/
+    paycalc_server.py   Standalone PayCalc HTTP server (port 8086)
+    paycalc_service.py  PayCalcRequest → NML execution → PayCalcResponse
+    transpiler_service.py  STE-to-NML transpilation service
+    validation_service.py  NML validation service
+    start_agents.sh     Starts all domain services independently
+  terminal/
+    nml_paycalc.jsx     PayCalc desktop UI (React)
+  transpilers/          STE transpiler, training data generators, validation
+  tax-data/             STE jurisdiction JSON files (7,500+ jurisdictions)
+  output/
+    nml-library-classic/  Pre-transpiled NML programs (7,549 tax programs)
+    model/                Fine-tuned LLM weights
+  programs/             Tax-specific NML programs (bracket-relu, neural, tensor table)
+```
+
+## Domain: Tax Calculations
+
+NML's first production domain is payroll tax computation. The `domain/` directory contains a complete, self-contained tax engine that transpiles Symmetry Tax Engine (STE) rules into NML programs and executes them via a standalone HTTP service.
+
+### How It Works
+
+1. **STE Transpiler** (`domain/transpilers/ste_transpiler.py`) reads STE JSON tax rules and generates deterministic NML programs for each jurisdiction
+2. **NML Library** (`domain/output/nml-library-classic/`) contains 7,549 pre-transpiled programs covering FIT, SIT, FICA, Medicare, city/county/school taxes across 50+ states
+3. **PayCalc Service** (`domain/serve/paycalc_server.py`) accepts standard PayCalcRequest JSON and executes the appropriate NML programs
+4. **NML Daemon** (`runtime/nmld.c`) optionally provides sub-millisecond execution via pre-loaded binary cache and Unix socket API
+
+### Validation
+
+Penny-exact against the live Symmetry Tax Engine across all tested jurisdictions:
+
+| Tax Type | Test Cases | Penny-Exact Match |
+|----------|-----------|-------------------|
+| Federal payroll (FICA/MEDI) | 14 | 100% |
+| Michigan SIT | 5 | 100% |
+| Michigan CITY (24 cities) | 336 | 100% |
+
+### Running the Domain Services
+
+```bash
+# Start all domain services (transpiler, validator, engine, paycalc)
+domain/serve/start_agents.sh
+
+# With the PayCalc desktop UI
+domain/serve/start_agents.sh --paycalc-ui
+
+# PayCalc server alone
+python3 domain/serve/paycalc_server.py --port 8086
+```
+
+The PayCalc API:
+```bash
+# Health check
+curl http://localhost:8086/health
+
+# List available jurisdictions
+curl http://localhost:8086/v1/paycalc/jurisdictions
+
+# Submit a PayCalcRequest
+curl -X POST http://localhost:8086/v1/paycalc \
+  -H "Content-Type: application/json" \
+  -d @request.json
 ```
 
 ## Registers
@@ -578,3 +651,4 @@ Memory contents are loaded from simple text files:
 | v0.6.3 | 67 | Compact form (pilcrow delimiter), MCP toolchain server |
 | v0.6.4 | 67 | Alternative aliases for LLM trainability, bare number tolerance |
 | v0.7.0 | 71 | NML-TR training extensions (BKWD, WUPD, LOSS, TNET), BLAS acceleration |
+| v0.7.1 | 71 | NML daemon (nmld), PayCalc service, STE transpiler (7,549 tax programs), penny-exact validation, domain separation |

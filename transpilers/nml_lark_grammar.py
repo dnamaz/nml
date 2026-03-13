@@ -8,9 +8,10 @@ NML_GRAMMAR = r"""
 
 program: (line "\n")* line?
 
-line: comment | instruction | meta_line | data_line
+line: comment | instruction trailing_comment? | meta_line trailing_comment? | data_line trailing_comment?
 
 comment: /;[^\n]+/
+trailing_comment: /\s*;[^\n]*/
 
 meta_line: "META" WS /@[a-z_][a-z0-9_]*/ WS /\"[^\"]*\"/
          | "§" WS /@[a-z_][a-z0-9_]*/ WS /\"[^\"]*\"/

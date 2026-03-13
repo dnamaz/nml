@@ -15,6 +15,10 @@ nml: runtime/nml.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 	@echo "  Built: nml (v0.7.0, 70 instructions, 32 registers — portable)"
 
+nmld: runtime/nmld.c runtime/nml.c
+	$(CC) $(CFLAGS) -o $@ runtime/nmld.c $(LDFLAGS)
+	@echo "  Built: nmld (NML daemon — generic execution server)"
+
 nml-fast: runtime/nml.c
 ifeq ($(shell uname),Darwin)
 	$(CC) -O3 -march=native -std=c99 -DNML_USE_ACCELERATE -DACCELERATE_NEW_LAPACK -o $@ $< -lm -framework Accelerate
