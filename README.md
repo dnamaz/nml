@@ -1,6 +1,6 @@
 # NML — Neural Machine Language
 
-A minimal, deterministic machine language designed for AI workloads. 71 instructions. ~2,100 lines of C. Zero ambiguity.
+A minimal, deterministic machine language designed for AI workloads. 71 instructions. ~2,600 lines of C. Zero ambiguity.
 
 NML supports neural network inference, decision tree execution, transformer attention, signal processing, and general-purpose computation within a single instruction set and runtime — compiled to an 83 KB binary.
 
@@ -66,9 +66,9 @@ When AI models need to exchange executable computation — not just text — NML
 
 The entire NML runtime compiles to an 83 KB binary with zero dependencies beyond libc and libm. This means neural network inference, decision tree execution, and signal processing can run on microcontrollers, embedded systems, and IoT devices — anywhere Python and ONNX can't go. A sensor anomaly detector is 18 NML instructions and runs in 34 microseconds.
 
-### Auditable Financial and Regulatory Computation
+### Auditable Computation
 
-Tax calculations, insurance rate tables, compliance formulas, and regulatory rules can be expressed as NML programs that are deterministic, traceable, and human-readable. The verbose syntax mode (`SET_VALUE`, `ACCUMULATE`, `COMPARE_FEATURE`) makes programs self-documenting for auditors. Every computation step is explicit — there is no hidden state, no implicit type coercion, no undefined behavior.
+Compliance formulas, regulatory rules, rate schedules, and financial models can be expressed as NML programs that are deterministic, traceable, and human-readable. The verbose syntax mode (`SET_VALUE`, `ACCUMULATE`, `COMPARE_FEATURE`) makes programs self-documenting for auditors. Every computation step is explicit — there is no hidden state, no implicit type coercion, no undefined behavior.
 
 ### Multi-Agent Consensus
 
@@ -106,9 +106,6 @@ make test
 
 # Start the NML server (LLM chat + execution)
 serve/start_agents.sh
-
-# Start the domain tax services (independent)
-domain/serve/start_agents.sh --paycalc-ui
 ```
 
 ## Tri-Syntax
@@ -120,7 +117,7 @@ Every NML instruction can be written in three interchangeable syntaxes — class
 LEAF  RC #176100.0
 SCLR  RC RC #0.062
 TACC  RA RA RC
-ST    RA @tax_amount
+ST    RA @result
 HALT
 ```
 
@@ -129,7 +126,7 @@ HALT
 ∎  γ  #176100.0
 ∗  γ  γ  #0.062
 ∑  α  α  γ
-↑  α  @tax_amount
+↑  α  @result
 ◼
 ```
 
@@ -138,7 +135,7 @@ HALT
 SET_VALUE   SCRATCH #176100.0
 SCALE       SCRATCH SCRATCH #0.062
 ACCUMULATE  ACCUMULATOR ACCUMULATOR SCRATCH
-STORE       ACCUMULATOR @tax_amount
+STORE       ACCUMULATOR @result
 STOP
 ```
 
@@ -257,43 +254,43 @@ HALT
 ◼
 ```
 
-### Bracket-as-ReLU (Exact Tax Calculation)
+### Piecewise-Linear as ReLU Network
 
-The progressive bracket formula IS a ReLU network — each bracket is `max(0, taxable - threshold) × rate_delta`. No training needed. Exact to the penny.
+Any progressive rate schedule IS a ReLU network — each tier is `max(0, input - threshold) × rate_delta`. No training needed. Exact results.
 
 ```
-LD    R0 @gross_pay
-LD    R1 @std_deduction
-MSUB  R2 R0 R1               ; taxable = gross - deduction
-RELU  R2 R2                   ; clamp to 0 if below deduction
+LD    R0 @input_value
+LD    R1 @deduction
+MSUB  R2 R0 R1               ; adjusted = input - deduction
+RELU  R2 R2                   ; clamp to 0
 LD    R3 @thresholds          ; [0, 11925, 48475, ...]
 LD    R5 @rate_deltas         ; [0.10, 0.02, 0.10, ...]
-ALLC  RA #[1]                 ; tax = 0
+ALLC  RA #[1]                 ; result = 0
 ALLC  RD #[1]                 ; tier = 0
 LEAF  R9 #1.0
 LOOP  #7
 GATH  RC R3 RD                ; threshold = thresholds[tier]
-MSUB  RC R2 RC                ; excess = taxable - threshold
-RELU  RC RC                   ; the "neuron": clip if not in bracket
+MSUB  RC R2 RC                ; excess = adjusted - threshold
+RELU  RC RC                   ; the "neuron": clip if not in tier
 GATH  R8 R5 RD                ; rate_delta = rate_deltas[tier]
 EMUL  RC RC R8                ; contribution = excess × rate_delta
-TACC  RA RA RC                ; tax += contribution
+TACC  RA RA RC                ; result += contribution
 TACC  RD RD R9                ; tier++
 ENDP
-ST    RA @tax_amount
+ST    RA @result
 HALT
 ```
 
 With data file (only 2 tensors — no pre-computed base amounts needed):
 
 ```
-@gross_pay shape=1 data=100000.0
-@std_deduction shape=1 data=15000.0
+@input_value shape=1 data=100000.0
+@deduction shape=1 data=15000.0
 @thresholds shape=7 data=0,11925,48475,103350,197300,250525,609350
 @rate_deltas shape=7 data=0.10,0.02,0.10,0.02,0.08,0.03,0.02
 ```
 
-Result: $13,614.00 (exact IRS amount). To update for a new tax year, change only the data file.
+Result: 13,614.00 (exact). To update for a new rate schedule, change only the data file.
 
 ### Self-Contained Train + Infer
 
@@ -322,31 +319,9 @@ HALT
 
 The `.nml.data` file contains the training dataset, initial weights, and inference input. One binary, two files, complete ML system.
 
-### Hybrid: Bracket Net + Residual Net
-
-Exact bracket computation handles the predictable tax math. A trained residual network learns complex adjustments (credits, phase-outs, AMT). The bracket net provides the base; the residual provides the delta.
-
-```
-; Bracket net: exact (7 RELU neurons = 7 brackets)
-; ... bracket-relu loop → R6 = exact bracket tax ...
-
-; Residual net: trained on (income, actual_tax - bracket_tax)
-MMUL  RC R0 @res_weights
-RELU  RC RC
-MMUL  RC RC @res_output
-; RC = learned adjustment (credits, phase-outs)
-
-; Combine: total = exact + residual
-TACC  RA R6 RC
-ST    RA @tax_amount
-HALT
-```
-
-With zero-initialized residual weights, output equals the exact bracket tax. Train the residual on real payroll data to learn the complex parts.
-
 ## Four Ways to Compute
 
-NML supports multiple approaches to the same computation. These four programs all compute a progressive rate:
+NML supports multiple approaches to the same computation. These four programs all compute a progressive rate schedule:
 
 ### Approach 1: Cascade (66 instructions, 24 cycles)
 
@@ -412,9 +387,9 @@ HALT
 | **Accuracy** | Exact | Exact | Exact | ~$373 error |
 | **Training needed** | No | No | No | Yes |
 
-The Bracket-ReLU approach discovers that the progressive bracket formula IS a ReLU network — each bracket is `max(0, taxable - threshold) × rate_delta`. It needs only 2 data tensors (thresholds + rate deltas) and no pre-computed base amounts.
+The Bracket-ReLU approach discovers that any progressive rate schedule IS a ReLU network — each tier is `max(0, input - threshold) × rate_delta`. It needs only 2 data tensors (thresholds + rate deltas) and no pre-computed base amounts.
 
-Programs are in `programs/` and `domain/programs/` with matching `.nml.data` files:
+Programs are in `programs/` with matching `.nml.data` files:
 
 ```bash
 ./nml programs/rate_cascade.nml programs/rate_cascade.nml.data
@@ -437,7 +412,7 @@ NML can train its own neural networks using the TNET fused opcode. Same weights,
 | Python/NumPy Adam | 7.0000 (exact) | 97.4 ms | baseline |
 | NML TNET Adam | 7.0000 (exact) | 0.54 ms | **182x faster** |
 
-**Medium network** — 1→256→1 ReLU, 396 real FIT bracket samples, Adam, mini-batch=64:
+**Medium network** — 1→256→1 ReLU, 396 piecewise-linear samples, Adam, mini-batch=64:
 
 | Method | 1K epochs | 5K epochs |
 |--------|-----------|-----------|
@@ -458,8 +433,6 @@ NML can train its own neural networks using the TNET fused opcode. Same weights,
 | Fibonacci (20 numbers) | 13 | 165 | 89 µs |
 
 ## Architecture
-
-NML separates core infrastructure from domain-specific applications. The core (`runtime/`, `serve/`, `transpilers/`) is a general-purpose tensor register machine. Domain logic (`domain/`) implements specific workloads like tax calculations as self-contained NML programs with their own services and UI.
 
 ```
 runtime/
@@ -483,70 +456,6 @@ programs/            Example NML programs (anomaly detector, fibonacci,
 tests/               Opcode coverage tests, LLM generation tests, model comparison
 
 docs/                Full specification, architecture documents, usage guide
-
-domain/              Tax domain (self-contained, independent services)
-  serve/
-    paycalc_server.py   Standalone PayCalc HTTP server (port 8086)
-    paycalc_service.py  PayCalcRequest → NML execution → PayCalcResponse
-    transpiler_service.py  STE-to-NML transpilation service
-    validation_service.py  NML validation service
-    start_agents.sh     Starts all domain services independently
-  terminal/
-    nml_paycalc.jsx     PayCalc desktop UI (React)
-  transpilers/          STE transpiler, training data generators, validation
-  tax-data/             STE jurisdiction JSON files (7,500+ jurisdictions)
-  output/
-    nml-library-classic/  Pre-transpiled NML programs (7,549 tax programs)
-    model/                Fine-tuned LLM weights
-  programs/             Tax-specific NML programs (bracket-relu, neural, tensor table)
-```
-
-## Domain: Tax Calculations
-
-NML's first production domain is payroll tax computation. The `domain/` directory contains a complete, self-contained tax engine that transpiles Symmetry Tax Engine (STE) rules into NML programs and executes them via a standalone HTTP service.
-
-### How It Works
-
-1. **STE Transpiler** (`domain/transpilers/ste_transpiler.py`) reads STE JSON tax rules and generates deterministic NML programs for each jurisdiction
-2. **NML Library** (`domain/output/nml-library-classic/`) contains 7,549 pre-transpiled programs covering FIT, SIT, FICA, Medicare, city/county/school taxes across 50+ states
-3. **PayCalc Service** (`domain/serve/paycalc_server.py`) accepts standard PayCalcRequest JSON and executes the appropriate NML programs
-4. **NML Daemon** (`runtime/nmld.c`) optionally provides sub-millisecond execution via pre-loaded binary cache and Unix socket API
-
-### Validation
-
-Penny-exact against the live Symmetry Tax Engine across all tested jurisdictions:
-
-| Tax Type | Test Cases | Penny-Exact Match |
-|----------|-----------|-------------------|
-| Federal payroll (FICA/MEDI) | 14 | 100% |
-| Michigan SIT | 5 | 100% |
-| Michigan CITY (24 cities) | 336 | 100% |
-
-### Running the Domain Services
-
-```bash
-# Start all domain services (transpiler, validator, engine, paycalc)
-domain/serve/start_agents.sh
-
-# With the PayCalc desktop UI
-domain/serve/start_agents.sh --paycalc-ui
-
-# PayCalc server alone
-python3 domain/serve/paycalc_server.py --port 8086
-```
-
-The PayCalc API:
-```bash
-# Health check
-curl http://localhost:8086/health
-
-# List available jurisdictions
-curl http://localhost:8086/v1/paycalc/jurisdictions
-
-# Submit a PayCalcRequest
-curl -X POST http://localhost:8086/v1/paycalc \
-  -H "Content-Type: application/json" \
-  -d @request.json
 ```
 
 ## Registers
@@ -570,7 +479,7 @@ curl -X POST http://localhost:8086/v1/paycalc \
 | Type | Size | Use Case |
 |------|------|----------|
 | f32 | 4 bytes | ML inference (default) |
-| f64 | 8 bytes | Financial calculations |
+| f64 | 8 bytes | Double-precision computation |
 | i32 | 4 bytes | Counters, indices |
 
 ## Building
@@ -651,4 +560,4 @@ Memory contents are loaded from simple text files:
 | v0.6.3 | 67 | Compact form (pilcrow delimiter), MCP toolchain server |
 | v0.6.4 | 67 | Alternative aliases for LLM trainability, bare number tolerance |
 | v0.7.0 | 71 | NML-TR training extensions (BKWD, WUPD, LOSS, TNET), BLAS acceleration |
-| v0.7.1 | 71 | NML daemon (nmld), PayCalc service, STE transpiler (7,549 tax programs), penny-exact validation, domain separation |
+| v0.7.1 | 71 | NML daemon (nmld) with pre-fork workers and binary cache, constrained decoding (Outlines CFG), additive alias tolerance |
