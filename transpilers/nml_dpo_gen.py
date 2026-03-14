@@ -144,10 +144,20 @@ def main():
     print("Loading model...")
     try:
         from mlx_lm import load, generate as mlx_generate
+        import mlx.core as mx
         model, tokenizer = load(args.model, adapter_path=args.adapter)
     except Exception as e:
         print(f"ERROR loading model: {e}")
         return
+
+    def make_sampler(temp):
+        """Create a temperature sampler for mlx_lm generate."""
+        def sampler(logits):
+            if temp <= 0:
+                return mx.argmax(logits, axis=-1)
+            scaled = logits / temp
+            return mx.random.categorical(scaled)
+        return sampler
 
     prompts = []
     while len(prompts) < args.count:
@@ -164,18 +174,19 @@ def main():
 
         formatted = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
         candidates = []
-        for _ in range(args.candidates):
+        for ci in range(args.candidates):
             try:
+                temp = args.temperature if ci > 0 else 0.0
                 response = mlx_generate(
                     model, tokenizer, prompt=formatted,
                     max_tokens=args.max_tokens, verbose=False,
-                    temp=args.temperature,
+                    sampler=make_sampler(temp),
                 )
                 code = response.strip()
                 if code and not code.startswith("ERROR"):
                     score, reason = score_candidate(code, str(runtime))
                     candidates.append((code, score, reason))
-            except Exception:
+            except Exception as e:
                 continue
 
         if len(candidates) < 2:
