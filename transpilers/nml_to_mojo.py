@@ -307,11 +307,24 @@ def emit_instruction(ins: NMLInstruction, indent: str = "    ") -> list[str]:
 # Mojo source generation
 # ═══════════════════════════════════════════════════════════════════════════════
 
+MOJO_MAX_PRELUDE = '''\
+# Auto-generated from NML by nml_to_mojo.py (MAX mode)
+# NML: 82-opcode tensor register machine -> Mojo GPU code
+#
+# Requires: Mojo SDK + MAX framework
+# Run: mojo run {filename}
+#
+# To use MAX GPU acceleration, replace the Tensor stub below with:
+#   from max.tensor import Tensor, TensorShape
+#   from max.engine import InferenceSession
+# and replace matmul() with max.linalg.matmul() for hardware dispatch.
+'''
+
 MOJO_PRELUDE = '''\
 # Auto-generated from NML by nml_to_mojo.py
-# NML: 82-opcode tensor register machine -> Mojo GPU-ready code
+# NML: 82-opcode tensor register machine -> Mojo CPU code
 #
-# Requires: Mojo SDK, MAX framework for GPU dispatch
+# Requires: Mojo SDK
 # Run: mojo run {filename}
 
 from collections import Dict
@@ -492,9 +505,10 @@ fn mse_loss(pred: Tensor, target: Tensor) -> Tensor:
 '''
 
 
-def transpile(prog: NMLProgram, source_name: str = "program.nml") -> str:
+def transpile(prog: NMLProgram, source_name: str = "program.nml", use_max: bool = False) -> str:
     """Transpile NML program to Mojo source."""
-    lines = [MOJO_PRELUDE.replace("{filename}", source_name)]
+    prelude = MOJO_MAX_PRELUDE if use_max else MOJO_PRELUDE
+    lines = [prelude.replace("{filename}", source_name)]
 
     lines.append(f"fn nml_main() -> Tuple[List[Tensor], Dict[String, Tensor]]:")
     lines.append(f"    var regs = List[Tensor]()")
@@ -546,6 +560,8 @@ def main():
     parser.add_argument("input", help="NML source file (.nml)")
     parser.add_argument("-o", "--output", help="Output Mojo file (default: stdout)")
     parser.add_argument("--emit-ir", action="store_true", help="Print IR instead of Mojo")
+    parser.add_argument("--max", action="store_true",
+                        help="Emit MAX framework imports (GPU-ready, requires MAX SDK)")
     args = parser.parse_args()
 
     source = Path(args.input).read_text()
@@ -560,7 +576,7 @@ def main():
             print(f"  {ins.line:3d}: {ins.opcode:<8} {' '.join(ins.operands)}")
         return
 
-    mojo_src = transpile(prog, Path(args.input).name)
+    mojo_src = transpile(prog, Path(args.input).name, use_max=args.max)
 
     if args.output:
         Path(args.output).write_text(mojo_src)

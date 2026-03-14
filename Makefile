@@ -41,6 +41,13 @@ else
 	@exit 1
 endif
 
+nml-wasm: runtime/nml.c
+	emcc -O2 -std=c99 -o terminal/nml.js runtime/nml.c -lm \
+	    -s MODULARIZE=1 -s EXPORT_NAME='NMLModule' \
+	    -s EXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
+	    -s ALLOW_MEMORY_GROWTH=1
+	@echo "  Built: nml-wasm (terminal/nml.js + terminal/nml.wasm)"
+
 release: nml
 	strip nml
 	@echo "  nml: $$(wc -c < nml | tr -d ' ') bytes"

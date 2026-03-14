@@ -192,15 +192,26 @@ static DType parse_dtype(const char *s) {
 
 typedef struct {
     union {
-        float  f32[NML_MAX_TENSOR_SIZE];
-        double f64[NML_MAX_TENSOR_SIZE];
-        int    i32[NML_MAX_TENSOR_SIZE];
+        float  *f32;
+        double *f64;
+        int    *i32;
+        void   *raw;
     } data;
     DType dtype;
     int   shape[NML_MAX_DIMS];
     int   ndim;
     int   size;
+    int   _capacity;
 } Tensor;
+
+static void tensor_free(Tensor *t) {
+    if (t->data.raw && t->_capacity > 0) {
+        free(t->data.raw);
+    }
+    t->data.raw = NULL;
+    t->_capacity = 0;
+    t->size = 0;
+}
 
 static inline double tensor_getd(const Tensor *t, int i) {
     if (__builtin_expect(t->dtype == NML_F64, 1))
@@ -246,34 +257,45 @@ static inline void tensor_setf(Tensor *t, int i, float val) {
     }
 }
 
+static size_t dtype_size(DType dt) {
+    switch (dt) {
+        case NML_F64: return sizeof(double);
+        case NML_I32: return sizeof(int);
+        default:      return sizeof(float);
+    }
+}
+
 static int tensor_init_typed(Tensor *t, int ndim, const int *shape, DType dtype) {
+    int new_size = 1;
+    for (int i = 0; i < ndim; i++) new_size *= shape[i];
+    if (new_size > NML_MAX_TENSOR_SIZE) return NML_ERR_OVERFLOW;
+
+    size_t need = (size_t)new_size * dtype_size(dtype);
+    if (t->_capacity < (int)new_size || t->dtype != dtype) {
+        if (t->data.raw && t->_capacity > 0) free(t->data.raw);
+        t->data.raw = calloc(new_size, dtype_size(dtype));
+        if (!t->data.raw) return NML_ERR_OVERFLOW;
+        t->_capacity = new_size;
+    } else {
+        memset(t->data.raw, 0, need);
+    }
     t->dtype = dtype;
     t->ndim = ndim;
-    t->size = 1;
-    for (int i = 0; i < ndim; i++) {
-        t->shape[i] = shape[i];
-        t->size *= shape[i];
-    }
-    if (t->size > NML_MAX_TENSOR_SIZE) return NML_ERR_OVERFLOW;
-    memset(&t->data, 0, sizeof(t->data));
+    t->size = new_size;
+    for (int i = 0; i < ndim; i++) t->shape[i] = shape[i];
     return NML_OK;
 }
 
 static int tensor_init(Tensor *t, int ndim, const int *shape) {
-    t->dtype = NML_F32;
-    t->ndim = ndim;
-    t->size = 1;
-    for (int i = 0; i < ndim; i++) {
-        t->shape[i] = shape[i];
-        t->size *= shape[i];
-    }
-    if (t->size > NML_MAX_TENSOR_SIZE) return NML_ERR_OVERFLOW;
-    memset(&t->data, 0, sizeof(t->data));
-    return NML_OK;
+    return tensor_init_typed(t, ndim, shape, NML_F32);
 }
 
 static void tensor_copy(Tensor *dst, const Tensor *src) {
-    memcpy(dst, src, sizeof(Tensor));
+    if (dst == src) return;
+    tensor_init_typed(dst, src->ndim, src->shape, src->dtype);
+    if (src->data.raw && src->size > 0) {
+        memcpy(dst->data.raw, src->data.raw, (size_t)src->size * dtype_size(src->dtype));
+    }
 }
 
 static void tensor_print(const Tensor *t, const char *label) {
@@ -347,14 +369,14 @@ static int tensor_matmul(Tensor *out, const Tensor *a, const Tensor *b) {
     if (k1 != k2) return NML_ERR_SHAPE;
     DType dt = dtype_promote(a->dtype, b->dtype);
     int shape[] = {m, n};
-    Tensor tmp;
+    Tensor tmp = {0};
     Tensor *dest = (out == a || out == b) ? &tmp : out;
     int rc = tensor_init_typed(dest, 2, shape, dt);
     if (rc) return rc;
 
 #ifdef NML_USE_METAL
     if (m * n >= NML_METAL_MMUL_THRESHOLD && tensor_matmul_metal(dest, a, b, m, k1, n) == 0) {
-        if (dest == &tmp) *out = tmp;
+        if (dest == &tmp) { tensor_free(out); *out = tmp; }
         return NML_OK;
     }
 #endif
@@ -379,47 +401,47 @@ static int tensor_matmul(Tensor *out, const Tensor *a, const Tensor *b) {
             }
     }
 
-    if (dest == &tmp) *out = tmp;
+    if (dest == &tmp) { tensor_free(out); *out = tmp; }
     return NML_OK;
 }
 
 static void tensor_add(Tensor *out, const Tensor *a, const Tensor *b) {
     DType dt = dtype_promote(a->dtype, b->dtype);
-    Tensor tmp;
+    Tensor tmp = {0};
     Tensor *dest = (out == a || out == b) ? &tmp : out;
     tensor_init_typed(dest, a->ndim, a->shape, dt); dest->size = a->size;
     for (int i = 0; i < a->size; i++) tensor_setd(dest, i, tensor_getd(a, i) + tensor_getd(b, i));
-    if (dest == &tmp) *out = tmp;
+    if (dest == &tmp) { tensor_free(out); *out = tmp; }
 }
 
 static void tensor_sub(Tensor *out, const Tensor *a, const Tensor *b) {
     DType dt = dtype_promote(a->dtype, b->dtype);
-    Tensor tmp;
+    Tensor tmp = {0};
     Tensor *dest = (out == a || out == b) ? &tmp : out;
     tensor_init_typed(dest, a->ndim, a->shape, dt); dest->size = a->size;
     for (int i = 0; i < a->size; i++) tensor_setd(dest, i, tensor_getd(a, i) - tensor_getd(b, i));
-    if (dest == &tmp) *out = tmp;
+    if (dest == &tmp) { tensor_free(out); *out = tmp; }
 }
 
 static void tensor_emul(Tensor *out, const Tensor *a, const Tensor *b) {
     DType dt = dtype_promote(a->dtype, b->dtype);
-    Tensor tmp;
+    Tensor tmp = {0};
     Tensor *dest = (out == a || out == b) ? &tmp : out;
     tensor_init_typed(dest, a->ndim, a->shape, dt); dest->size = a->size;
     for (int i = 0; i < a->size; i++) tensor_setd(dest, i, tensor_getd(a, i) * tensor_getd(b, i));
-    if (dest == &tmp) *out = tmp;
+    if (dest == &tmp) { tensor_free(out); *out = tmp; }
 }
 
 static int tensor_ediv(Tensor *out, const Tensor *a, const Tensor *b) {
     DType dt = dtype_promote(a->dtype, b->dtype);
-    Tensor tmp;
+    Tensor tmp = {0};
     Tensor *dest = (out == a || out == b) ? &tmp : out;
     tensor_init_typed(dest, a->ndim, a->shape, dt); dest->size = a->size;
     for (int i = 0; i < a->size; i++) {
         if (tensor_getd(b, i) == 0.0) return NML_ERR_DIVZERO;
         tensor_setd(dest, i, tensor_getd(a, i) / tensor_getd(b, i));
     }
-    if (dest == &tmp) *out = tmp;
+    if (dest == &tmp) { tensor_free(out); *out = tmp; }
     return NML_OK;
 }
 
@@ -475,11 +497,11 @@ static int tensor_transpose(Tensor *out, const Tensor *t) {
     if (t->ndim != 2) return NML_ERR_SHAPE;
     int r = t->shape[0], c = t->shape[1];
     int shape[] = {c, r};
-    int rc = tensor_init(out, 2, shape);
+    int rc = tensor_init_typed(out, 2, shape, t->dtype);
     if (rc) return rc;
     for (int i = 0; i < r; i++)
         for (int j = 0; j < c; j++)
-            out->data.f32[j*r+i] = t->data.f32[i*c+j];
+            tensor_setd(out, j*r+i, tensor_getd(t, i*c+j));
     return NML_OK;
 }
 
@@ -635,7 +657,7 @@ static void tensor_pad(Tensor *out, const Tensor *input, int pad) {
 static void tensor_attention(Tensor *out, const Tensor *Q, const Tensor *K, const Tensor *V) {
     int seq_len = Q->shape[0], d_k = Q->shape[1], d_v = V->shape[1];
     float scale = 1.0f / sqrtf((float)d_k);
-    Tensor scores;
+    Tensor scores = {0};
     int score_shape[] = {seq_len, seq_len};
     tensor_init(&scores, 2, score_shape);
     for (int i = 0; i < seq_len; i++)
@@ -1199,6 +1221,13 @@ typedef struct {
 #define EXT_SIGNAL      0x08
 #define EXT_M2M         0x10
 #define EXT_GENERAL     0x20
+
+static void vm_cleanup(VM *vm) {
+    for (int i = 0; i < NML_MAX_REGISTERS; i++)
+        tensor_free(&vm->regs[i]);
+    for (int i = 0; i < vm->mem_count; i++)
+        tensor_free(&vm->memory[i].tensor);
+}
 
 static void vm_init(VM *vm) {
     memset(vm, 0, sizeof(VM));
@@ -1909,6 +1938,13 @@ static int vm_execute(VM *vm) {
     vm->loop_depth = 0; vm->call_depth = 0;
     vm->error_code = NML_OK;
     vm->error_msg[0] = '\0';
+
+    /* Pre-validate register indices for the hot path */
+    for (int i = 0; i < vm->program_len; i++) {
+        Instruction *ins = &vm->program[i];
+        for (int r = 0; r < 3; r++)
+            if (ins->reg[r] < 0) ins->reg[r] = 0;
+    }
 
     while (vm->pc < vm->program_len && !vm->halted) {
         if (vm->cycles >= vm->max_cycles)
@@ -2645,13 +2681,15 @@ static int vm_execute(VM *vm) {
                 VM_ERROR(vm, NML_ERR_OPCODE, "MMULBK: missing input/weight register at PC=%d", vm->pc);
             Tensor *input  = &REG(r_input);
             Tensor *weight = &REG(r_weight);
-            Tensor wt, it;
+            Tensor wt = {0}, it = {0};
             tensor_transpose(&wt, weight);
             tensor_matmul(&REG(ins->reg[0]), grad, &wt);
             RVALID(ins->reg[0]) = 1;
             tensor_transpose(&it, input);
             tensor_matmul(&REG(ins->reg[1]), &it, grad);
             RVALID(ins->reg[1]) = 1;
+            tensor_free(&wt);
+            tensor_free(&it);
             break;
         }
 
@@ -3322,6 +3360,7 @@ int main(int argc, char **argv) {
     printf("  Opcodes:       %d (%d core + %d extensions)\n", OP_COUNT, core_ops, OP_COUNT - core_ops);
 
     int exit_code = (result != NML_OK) ? 1 : 0;
+    vm_cleanup(vm);
     free(vm);
     return exit_code;
 }

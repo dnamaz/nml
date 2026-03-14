@@ -300,6 +300,8 @@ def main():
     parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--skip-execute", action="store_true",
                         help="Only validate grammar, skip runtime execution")
+    parser.add_argument("--constrained", action="store_true",
+                        help="Use Outlines CFG constrained decoding (guarantees valid grammar)")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -334,6 +336,21 @@ def main():
         print(f"ERROR loading model: {e}")
         return
 
+    outlines_model = None
+    nml_cfg = None
+    if args.constrained:
+        try:
+            import outlines
+            from outlines.types import CFG
+            grammar_path = Path(__file__).parent / "nml_lark_grammar.py"
+            sys.path.insert(0, str(grammar_path.parent))
+            from nml_lark_grammar import NML_GRAMMAR
+            outlines_model = outlines.from_mlxlm(model, tokenizer)
+            nml_cfg = CFG(NML_GRAMMAR)
+            print("  Constrained decoding: ENABLED (Outlines + NML CFG)")
+        except Exception as e:
+            print(f"  Constrained decoding: FAILED ({e}), falling back to unconstrained")
+
     for idx, prompt in enumerate(prompts):
         stats["total"] += 1
         if (idx + 1) % 10 == 0:
@@ -341,11 +358,14 @@ def main():
 
         formatted = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
         try:
-            response = mlx_generate(
-                model, tokenizer, prompt=formatted,
-                max_tokens=args.max_tokens, verbose=False,
-            )
-            nml_code = response.strip()
+            if outlines_model and nml_cfg:
+                nml_code = outlines_model(formatted, output_type=nml_cfg, max_tokens=args.max_tokens)
+            else:
+                response = mlx_generate(
+                    model, tokenizer, prompt=formatted,
+                    max_tokens=args.max_tokens, verbose=False,
+                )
+                nml_code = response.strip()
         except Exception as e:
             stats["error"] += 1
             continue
