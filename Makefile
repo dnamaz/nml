@@ -28,6 +28,19 @@ else
 	@echo "  Built: nml-fast (v0.7.0, BLAS via OpenBLAS)"
 endif
 
+nml-metal: runtime/nml.c
+ifeq ($(shell uname),Darwin)
+	clang -O3 -march=native -x objective-c -D_DARWIN_C_SOURCE \
+	    -DNML_USE_METAL -DNML_USE_ACCELERATE -DACCELERATE_NEW_LAPACK \
+	    -framework Metal -framework MetalPerformanceShaders \
+	    -framework Accelerate -framework Foundation \
+	    -o $@ $< -lm -Wno-deprecated-declarations
+	@echo "  Built: nml-metal (v0.8.0, Metal GPU + BLAS via Accelerate)"
+else
+	@echo "  Error: Metal requires macOS. Use nml-fast for CPU acceleration."
+	@exit 1
+endif
+
 release: nml
 	strip nml
 	@echo "  nml: $$(wc -c < nml | tr -d ' ') bytes"

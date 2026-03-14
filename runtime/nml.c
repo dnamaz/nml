@@ -49,11 +49,31 @@
 
 /* BLAS acceleration (optional) */
 #ifdef NML_USE_ACCELERATE
+  #ifdef NML_USE_METAL
+    #include <sys/types.h>
+  #endif
   #include <Accelerate/Accelerate.h>
   #define NML_HAS_BLAS 1
 #elif defined(NML_USE_OPENBLAS)
   #include <cblas.h>
   #define NML_HAS_BLAS 1
+#endif
+
+/* Metal GPU acceleration (optional, macOS/iOS, requires -x objective-c) */
+#ifdef NML_USE_METAL
+  #import <Foundation/Foundation.h>
+  #import <Metal/Metal.h>
+  #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
+  #define NML_METAL_MMUL_THRESHOLD 1048576  /* ~1024x1024; GPU overhead > BLAS for smaller */
+  static id<MTLDevice> _nml_mtl_device = nil;
+  static id<MTLCommandQueue> _nml_mtl_queue = nil;
+  static void nml_metal_init(void) {
+      if (!_nml_mtl_device) {
+          _nml_mtl_device = MTLCreateSystemDefaultDevice();
+          if (_nml_mtl_device)
+              _nml_mtl_queue = [_nml_mtl_device newCommandQueue];
+      }
+  }
 #endif
 #include <string.h>
 #include <strings.h>
@@ -274,6 +294,50 @@ static void tensor_print(const Tensor *t, const char *label) {
    CORE TENSOR OPERATIONS
    ═══════════════════════════════════════════ */
 
+#ifdef NML_USE_METAL
+static int tensor_matmul_metal(Tensor *dest, const Tensor *a, const Tensor *b, int m, int k, int n) {
+    nml_metal_init();
+    if (!_nml_mtl_device || !_nml_mtl_queue) return -1;
+
+    size_t a_bytes = (size_t)m * k * sizeof(float);
+    size_t b_bytes = (size_t)k * n * sizeof(float);
+    size_t c_bytes = (size_t)m * n * sizeof(float);
+
+    id<MTLBuffer> buf_a = [_nml_mtl_device newBufferWithLength:a_bytes options:MTLResourceStorageModeShared];
+    id<MTLBuffer> buf_b = [_nml_mtl_device newBufferWithLength:b_bytes options:MTLResourceStorageModeShared];
+    id<MTLBuffer> buf_c = [_nml_mtl_device newBufferWithLength:c_bytes options:MTLResourceStorageModeShared];
+    if (!buf_a || !buf_b || !buf_c) return -1;
+
+    float *pa = (float *)[buf_a contents];
+    float *pb = (float *)[buf_b contents];
+    for (int i = 0; i < m * k; i++) pa[i] = (float)tensor_getd(a, i);
+    for (int i = 0; i < k * n; i++) pb[i] = (float)tensor_getd(b, i);
+
+    MPSMatrixDescriptor *desc_a = [MPSMatrixDescriptor
+        matrixDescriptorWithRows:m columns:k rowBytes:k * sizeof(float) dataType:MPSDataTypeFloat32];
+    MPSMatrixDescriptor *desc_b = [MPSMatrixDescriptor
+        matrixDescriptorWithRows:k columns:n rowBytes:n * sizeof(float) dataType:MPSDataTypeFloat32];
+    MPSMatrixDescriptor *desc_c = [MPSMatrixDescriptor
+        matrixDescriptorWithRows:m columns:n rowBytes:n * sizeof(float) dataType:MPSDataTypeFloat32];
+
+    MPSMatrix *mat_a = [[MPSMatrix alloc] initWithBuffer:buf_a descriptor:desc_a];
+    MPSMatrix *mat_b = [[MPSMatrix alloc] initWithBuffer:buf_b descriptor:desc_b];
+    MPSMatrix *mat_c = [[MPSMatrix alloc] initWithBuffer:buf_c descriptor:desc_c];
+
+    MPSMatrixMultiplication *mmul = [[MPSMatrixMultiplication alloc]
+        initWithDevice:_nml_mtl_device resultRows:m resultColumns:n interiorColumns:k];
+
+    id<MTLCommandBuffer> cmd = [_nml_mtl_queue commandBuffer];
+    [mmul encodeToCommandBuffer:cmd leftMatrix:mat_a rightMatrix:mat_b resultMatrix:mat_c];
+    [cmd commit];
+    [cmd waitUntilCompleted];
+
+    float *pc = (float *)[buf_c contents];
+    for (int i = 0; i < m * n; i++) tensor_setd(dest, i, (double)pc[i]);
+    return 0;
+}
+#endif
+
 static int tensor_matmul(Tensor *out, const Tensor *a, const Tensor *b) {
     int m, k1, k2, n;
     if (a->ndim == 1 && b->ndim == 2) { m = 1; k1 = a->shape[0]; }
@@ -287,6 +351,13 @@ static int tensor_matmul(Tensor *out, const Tensor *a, const Tensor *b) {
     Tensor *dest = (out == a || out == b) ? &tmp : out;
     int rc = tensor_init_typed(dest, 2, shape, dt);
     if (rc) return rc;
+
+#ifdef NML_USE_METAL
+    if (m * n >= NML_METAL_MMUL_THRESHOLD && tensor_matmul_metal(dest, a, b, m, k1, n) == 0) {
+        if (dest == &tmp) *out = tmp;
+        return NML_OK;
+    }
+#endif
 
 #ifdef NML_HAS_BLAS
     if (dt == NML_F64 && a->dtype == NML_F64 && b->dtype == NML_F64) {
