@@ -99,6 +99,35 @@ PROMPTS = [
     "Write symbolic NML to scale a value by 0.5.",
     "Write verbose NML to load, scale, and store a value.",
     "Write verbose NML for a neural network layer with ReLU.",
+    # --- Backward opcodes (v0.8) ---
+    "Write NML to compute the ReLU backward pass: use RELUBK with upstream gradient and input.",
+    "Write NML for sigmoid backward using SIGMBK.",
+    "Write NML for tanh backward using TANHBK.",
+    "Write NML for GELU backward using GELUBK.",
+    "Write NML for softmax backward using SOFTBK.",
+    "Write NML for matmul backward using MMULBK to get both d_input and d_weight.",
+    "Write NML for convolution backward using CONVBK to get d_input and d_kernel.",
+    "Write NML for max pool backward using POOLBK.",
+    "Write NML for layer norm backward using NORMBK.",
+    "Write NML for attention backward using ATTNBK to get dQ, dK, dV.",
+    "Write NML to train a 2-layer dense network using TNDEEP with Adam optimizer.",
+    # --- Training loops with backward ops ---
+    "Write NML for a complete training loop: forward (MMUL+RELU), LOSS, backward (RELUBK+MMULBK), WUPD.",
+    "Write NML to train a dense layer: forward pass, MSE loss, SIGMBK backward, weight update in a LOOP.",
+    "Write NML for CNN training: CONV, RELU, POOL, dense forward, then POOLBK, RELUBK, CONVBK backward with WUPD.",
+    # --- Missing original opcodes ---
+    "Write NML to subtract two tensors using MSUB.",
+    "Write NML to split a tensor using SPLT and merge with MERG.",
+    "Write NML to reshape a tensor using RSHP.",
+    "Write NML for element-wise division using EDIV.",
+    "Write NML using TNET to train a small network for 500 epochs.",
+    "Write NML to compute MSE loss using LOSS and backpropagate using BKWD and WUPD.",
+    "Write NML to apply tanh activation to a tensor.",
+    "Write NML to convert a float to integer using FTOI.",
+    "Write NML to compute bitwise NOT using BNOT.",
+    "Write NML for a decision tree using CMPF, JMPT, LEAF.",
+    "Write NML to scatter values into a tensor using SCAT.",
+    "Write NML with META headers describing the program name and version.",
 ]
 
 
