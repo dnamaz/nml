@@ -9,6 +9,78 @@ const NML_PORT = _getPort();
 const API_BASE = `http://localhost:${NML_PORT}/v1`;
 const EXEC_BASE = `http://localhost:${NML_PORT}`;
 
+let _wasmModule = null;
+let _wasmReady = false;
+let _wasmError = null;
+
+async function initWasm() {
+  if (_wasmReady) return _wasmModule;
+  if (_wasmError) return null;
+  try {
+    const script = document.createElement("script");
+    script.src = "nml.js";
+    document.head.appendChild(script);
+    await new Promise((resolve, reject) => {
+      script.onload = resolve;
+      script.onerror = () => reject(new Error("Failed to load nml.js"));
+    });
+    _wasmModule = await globalThis.NMLModule();
+    _wasmReady = true;
+    return _wasmModule;
+  } catch (e) {
+    _wasmError = e.message;
+    return null;
+  }
+}
+
+async function runWasm(nmlCode, dataContent) {
+  const mod = await initWasm();
+  if (!mod) return { status: "WASM ERROR", errors: [_wasmError || "WASM not available"] };
+
+  let stdout = "", stderr = "";
+  const origPrint = mod.print;
+  const origPrintErr = mod.printErr;
+  mod.print = (t) => { stdout += t + "\n"; };
+  mod.printErr = (t) => { stderr += t + "\n"; };
+
+  try {
+    mod.FS.writeFile("/tmp/_run.nml", nmlCode);
+    const args = ["/tmp/_run.nml"];
+    if (dataContent && dataContent.trim()) {
+      mod.FS.writeFile("/tmp/_run.nml.data", dataContent);
+      args.push("/tmp/_run.nml.data");
+    }
+    args.push("--max-cycles", "100000");
+    mod.callMain(args);
+
+    try { mod.FS.unlink("/tmp/_run.nml"); } catch (_) {}
+    try { mod.FS.unlink("/tmp/_run.nml.data"); } catch (_) {}
+
+    const registers = {};
+    const memory = {};
+    let section = "";
+    for (const line of stdout.split("\n")) {
+      if (line.includes("=== REGISTERS ===")) { section = "reg"; continue; }
+      if (line.includes("=== MEMORY ===")) { section = "mem"; continue; }
+      if (line.includes("=== STATS ===")) { section = ""; continue; }
+      if (section && line.trim()) {
+        const m = line.match(/^\s+(\w+):\s+shape=\[([^\]]+)\]\s*(dtype=\w+\s+)?data=\[([^\]]+)\]/);
+        if (m) {
+          const obj = { shape: m[2], data: m[4].split(",").map(s => parseFloat(s.trim())) };
+          if (section === "reg") registers[m[1]] = obj;
+          else memory[m[1]] = obj;
+        }
+      }
+    }
+    return { status: "OK", output: stdout, registers, memory, runtime: "wasm" };
+  } catch (e) {
+    return { status: "RUNTIME ERROR", errors: [e.message], output: stdout, stderr };
+  } finally {
+    mod.print = origPrint;
+    mod.printErr = origPrintErr;
+  }
+}
+
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Source Code Pro', monospace";
 const COLORS = {
   bg: "#0a0a0f",
@@ -447,6 +519,12 @@ function RunButton({ code, onResult, messageText }) {
   const [needsInputs, setNeedsInputs] = useState(null);
   const [showInputs, setShowInputs] = useState(true);
   const [contextData, setContextData] = useState([]);
+  const [execMode, setExecMode] = useState("server");
+  const [wasmAvailable, setWasmAvailable] = useState(false);
+
+  useEffect(() => {
+    initWasm().then(m => { if (m) setWasmAvailable(true); });
+  }, []);
 
   useEffect(() => {
     const dataFromCtx = extractDataFromContext(code, messageText);
@@ -487,6 +565,17 @@ function RunButton({ code, onResult, messageText }) {
         return !(t.startsWith("@") && t.includes("shape="));
       }).join("\n");
 
+      const dataContent = buildDataContent();
+
+      if (execMode === "wasm" && wasmAvailable) {
+        setState("executing");
+        const wasmResult = await runWasm(nmlOnly, dataContent);
+        setState(wasmResult.status === "OK" ? "done" : "error");
+        setResult(wasmResult);
+        if (onResult) onResult(wasmResult, nmlOnly);
+        return;
+      }
+
       const valR = await fetch(EXEC_BASE + "/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -503,7 +592,6 @@ function RunButton({ code, onResult, messageText }) {
       }
 
       setState("executing");
-      const dataContent = buildDataContent();
       const execR = await fetch(EXEC_BASE + "/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -514,10 +602,12 @@ function RunButton({ code, onResult, messageText }) {
       setResult(execData);
       if (onResult) onResult(execData, nmlOnly);
     } catch (e) {
-      setState("error");
-      const r = { status: "CONNECTION ERROR", errors: [e.message] };
-      setResult(r);
-      if (onResult) onResult(r, code);
+      if (execMode === "server") {
+        setState("error");
+        const r = { status: "CONNECTION ERROR", errors: [e.message + " — try WASM mode"] };
+        setResult(r);
+        if (onResult) onResult(r, code);
+      }
     }
   };
 
@@ -529,7 +619,8 @@ function RunButton({ code, onResult, messageText }) {
     error: { bg: "rgba(255,68,68,0.1)", border: COLORS.error, color: COLORS.error },
   };
   const s = btnColors[state];
-  const btnLabel = { idle: "▶ RUN", validating: "VALIDATING...", executing: "EXECUTING...", done: "▶ RE-RUN", error: "▶ RETRY" };
+  const modeLabel = execMode === "wasm" ? "WASM" : "SERVER";
+  const btnLabel = { idle: `▶ RUN (${modeLabel})`, validating: "VALIDATING...", executing: "EXECUTING...", done: `▶ RE-RUN (${modeLabel})`, error: "▶ RETRY" };
   const hasDataOrInputs = contextData.length > 0 || needsInputs;
 
   return (
@@ -542,6 +633,15 @@ function RunButton({ code, onResult, messageText }) {
           fontFamily: FONT, letterSpacing: 0.5, transition: "all 0.2s",
         }}>
           {btnLabel[state]}
+        </button>
+        <button onClick={() => setExecMode(execMode === "server" ? "wasm" : "server")} style={{
+          background: "transparent", border: `1px solid ${execMode === "wasm" ? "#ff9900" : "#555"}`,
+          color: execMode === "wasm" ? "#ff9900" : "#555",
+          padding: "3px 6px", borderRadius: 4, fontSize: 8,
+          cursor: "pointer", fontFamily: FONT, letterSpacing: 0.5,
+          opacity: wasmAvailable || execMode === "server" ? 1 : 0.4,
+        }} title={wasmAvailable ? "Toggle between server and WASM execution" : "WASM not loaded (need nml.js + nml.wasm)"}>
+          {execMode === "wasm" ? "⚡ WASM" : "🖥 SERVER"}
         </button>
         {hasDataOrInputs && (
           <button onClick={() => setShowInputs(v => !v)} style={{
@@ -691,16 +791,23 @@ export default function NMLChat() {
 
   const handleNMLResult = useCallback(async (result, code) => {
     let summary = "";
-    if (result.status === "HALTED") {
+    const runtimeTag = result.runtime === "wasm" ? " [WASM]" : "";
+    if (result.status === "OK" && result.runtime === "wasm") {
+      const memEntries = Object.entries(result.memory || {});
+      const outputLines = memEntries.map(([k, v]) =>
+        `@${k} = [${v.data.map(n => n.toFixed(4)).join(", ")}]`
+      );
+      summary = `**Execution result${runtimeTag}**:\n${outputLines.join("\n")}\n\n\`\`\`\n${result.output}\`\`\``;
+    } else if (result.status === "HALTED") {
       const outputs = result.outputs || {};
       const outputLines = Object.entries(outputs).map(([k, v]) =>
         `@${k} = ${Array.isArray(v) ? `[${v.map(n => n.toFixed(4)).join(", ")}]` : v.toFixed(4)}`
       );
       summary = `**Execution result** (${result.cycles} cycles, ${result.time_us} µs):\n${outputLines.join("\n")}`;
     } else if (result.errors) {
-      summary = `**Execution failed**: ${result.errors.join(", ")}`;
+      summary = `**Execution failed${runtimeTag}**: ${result.errors.join(", ")}`;
     } else {
-      summary = `**Execution**: ${result.status || "unknown"}${result.stderr ? " — " + result.stderr : ""}`;
+      summary = `**Execution${runtimeTag}**: ${result.status || "unknown"}${result.stderr ? " — " + result.stderr : ""}`;
     }
 
     setMessages(prev => [...prev, { role: "execution", content: summary, collapsed: true }]);
