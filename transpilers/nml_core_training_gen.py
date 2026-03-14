@@ -2,7 +2,7 @@
 """
 Generate ~100K NML core training pairs for language-level fine-tuning.
 
-Covers all 67 opcodes across 15 categories with NO domain vocabulary.
+Covers all 82 opcodes across 15 categories with NO domain vocabulary.
 Produces pairs in tri-syntax (classic ~60%, symbolic ~25%, verbose ~15%).
 
 Output: domain/output/training/nml_core_pairs.jsonl

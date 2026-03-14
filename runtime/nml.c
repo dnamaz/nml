@@ -797,6 +797,10 @@ typedef enum {
 #ifndef NML_NO_TRAINING
     /* Extension: NML-TR Training (4) — v0.7 */
     OP_BKWD, OP_WUPD, OP_LOSS, OP_TNET,
+    /* Extension: NML-TR Backward (11) — v0.8 */
+    OP_RELUBK, OP_SIGMBK, OP_TANHBK, OP_GELUBK, OP_SOFTBK,
+    OP_MMULBK, OP_CONVBK, OP_POOLBK, OP_NORMBK, OP_ATTNBK,
+    OP_TNDEEP,
 #endif
     OP_COUNT
 } Opcode;
@@ -1011,16 +1015,47 @@ static const OpcodeEntry OPCODE_TABLE[] = {
     {"WUPD", OP_WUPD, "NML-TR"},
     {"LOSS", OP_LOSS, "NML-TR"},
     {"TNET", OP_TNET, "NML-TR"},
+    /* NML-TR Backward (v0.8) — Classic */
+    {"RELUBK", OP_RELUBK, "NML-TR"}, {"SIGMBK", OP_SIGMBK, "NML-TR"},
+    {"TANHBK", OP_TANHBK, "NML-TR"}, {"GELUBK", OP_GELUBK, "NML-TR"},
+    {"SOFTBK", OP_SOFTBK, "NML-TR"}, {"MMULBK", OP_MMULBK, "NML-TR"},
+    {"CONVBK", OP_CONVBK, "NML-TR"}, {"POOLBK", OP_POOLBK, "NML-TR"},
+    {"NORMBK", OP_NORMBK, "NML-TR"}, {"ATTNBK", OP_ATTNBK, "NML-TR"},
+    {"TNDEEP", OP_TNDEEP, "NML-TR"},
     /* NML-TR Symbolic */
     {"\xe2\x88\x87", OP_BKWD, "NML-TR"},   /* ∇ nabla */
     {"\xe2\x9f\xb3", OP_WUPD, "NML-TR"},   /* ⟳ clockwise */
     {"\xe2\x96\xb3", OP_LOSS, "NML-TR"},   /* △ triangle */
     {"\xe2\xa5\x81", OP_TNET, "NML-TR"},   /* ⥁ closed circle */
+    /* NML-TR Backward — Symbolic (forward symbol + prime ˈ) */
+    {"\xe2\x8c\x90\xcb\x88", OP_RELUBK, "NML-TR"},  /* ⌐ˈ */
+    {"\xcf\x83\xcb\x88",     OP_SIGMBK, "NML-TR"},  /* σˈ */
+    {"\xcf\x84\xcb\x88",     OP_TANHBK, "NML-TR"},  /* τˈ */
+    {"\xe2\x84\x8a\xcb\x88", OP_GELUBK, "NML-TR"},  /* ℊˈ */
+    {"\xce\xa3\xcb\x88",     OP_SOFTBK, "NML-TR"},  /* Σˈ */
+    {"\xc3\x97\xcb\x88",     OP_MMULBK, "NML-TR"},  /* ×ˈ */
+    {"\xe2\x8a\x9b\xcb\x88", OP_CONVBK, "NML-TR"},  /* ⊛ˈ */
+    {"\xe2\x8a\x93\xcb\x88", OP_POOLBK, "NML-TR"},  /* ⊓ˈ */
+    {"\xe2\x80\x96\xcb\x88", OP_NORMBK, "NML-TR"},  /* ‖ˈ */
+    {"\xe2\x8a\x99\xcb\x88", OP_ATTNBK, "NML-TR"},  /* ⊙ˈ */
+    {"\xe2\xa5\x81\xcb\x88", OP_TNDEEP, "NML-TR"},  /* ⥁ˈ */
     /* NML-TR Verbose */
     {"BACKWARD",       OP_BKWD, "NML-TR"},
     {"WEIGHT_UPDATE",  OP_WUPD, "NML-TR"},
     {"COMPUTE_LOSS",   OP_LOSS, "NML-TR"},
     {"TRAIN_NETWORK",  OP_TNET, "NML-TR"},
+    /* NML-TR Backward — Verbose */
+    {"RELU_BACKWARD",    OP_RELUBK, "NML-TR"},
+    {"SIGMOID_BACKWARD", OP_SIGMBK, "NML-TR"},
+    {"TANH_BACKWARD",    OP_TANHBK, "NML-TR"},
+    {"GELU_BACKWARD",    OP_GELUBK, "NML-TR"},
+    {"SOFTMAX_BACKWARD", OP_SOFTBK, "NML-TR"},
+    {"MATMUL_BACKWARD",  OP_MMULBK, "NML-TR"},
+    {"CONV_BACKWARD",    OP_CONVBK, "NML-TR"},
+    {"POOL_BACKWARD",    OP_POOLBK, "NML-TR"},
+    {"NORM_BACKWARD",    OP_NORMBK, "NML-TR"},
+    {"ATTN_BACKWARD",    OP_ATTNBK, "NML-TR"},
+    {"TRAIN_DEEP",       OP_TNDEEP, "NML-TR"},
 #endif
     {NULL, 0, NULL}
 };
@@ -1664,6 +1699,55 @@ static int vm_assemble(VM *vm, const char *source) {
                 /* Short: TNET #epochs #lr #loss_type     (3 immediates)
                  * Long:  TNET R0 R1 ... #epochs #lr     (registers + immediates)
                  * Register convention: R0=input, R1=w1, R2=b1, R3=w2, R4=b2, R9=target */
+                {
+                    int fi = 1;
+                    while (fi < ntokens && is_register_token(tokens[fi])) fi++;
+                    instr->imm = (fi < ntokens) ? parse_imm(tokens[fi]) : 1000;
+                    instr->int_params[0] = (fi+1 < ntokens) ? (int)(parse_imm(tokens[fi+1]) * 1e6) : 1000;
+                    instr->int_params[1] = (fi+2 < ntokens) ? (int)parse_imm(tokens[fi+2]) : 0;
+                }
+                break;
+            /* NML-TR Backward — 3-register activation backward opcodes */
+            case OP_RELUBK: case OP_SIGMBK: case OP_TANHBK:
+            case OP_GELUBK: case OP_SOFTBK: case OP_NORMBK:
+                instr->reg[0] = parse_register(tokens[1]);
+                instr->reg[1] = parse_register(tokens[2]);
+                instr->reg[2] = parse_register(tokens[3]);
+                break;
+            /* MMULBK Rd_dinput Rd_dweight Rgrad Rinput Rweight */
+            case OP_MMULBK:
+                instr->reg[0] = parse_register(tokens[1]);
+                instr->reg[1] = parse_register(tokens[2]);
+                instr->reg[2] = parse_register(tokens[3]);
+                instr->int_params[0] = parse_register(tokens[4]);
+                instr->int_params[1] = ntokens > 5 ? parse_register(tokens[5]) : -1;
+                break;
+            /* CONVBK Rd_dinput Rd_dkernel Rgrad Rinput Rkernel */
+            case OP_CONVBK:
+                instr->reg[0] = parse_register(tokens[1]);
+                instr->reg[1] = parse_register(tokens[2]);
+                instr->reg[2] = parse_register(tokens[3]);
+                instr->int_params[0] = parse_register(tokens[4]);
+                instr->int_params[1] = ntokens > 5 ? parse_register(tokens[5]) : -1;
+                break;
+            /* POOLBK Rd Rgrad Rfwd_input [#pool_size [#stride]] */
+            case OP_POOLBK:
+                instr->reg[0] = parse_register(tokens[1]);
+                instr->reg[1] = parse_register(tokens[2]);
+                instr->reg[2] = parse_register(tokens[3]);
+                instr->int_params[0] = ntokens > 4 ? (int)parse_imm(tokens[4]) : 2;
+                instr->int_params[1] = ntokens > 5 ? (int)parse_imm(tokens[5]) : 2;
+                break;
+            /* ATTNBK Rd_dq Rgrad Rq Rk Rv — writes dK to Rd+1, dV to Rd+2 */
+            case OP_ATTNBK:
+                instr->reg[0] = parse_register(tokens[1]);
+                instr->reg[1] = parse_register(tokens[2]);
+                instr->reg[2] = parse_register(tokens[3]);
+                instr->int_params[0] = ntokens > 4 ? parse_register(tokens[4]) : instr->reg[2];
+                instr->int_params[1] = ntokens > 5 ? parse_register(tokens[5]) : -1;
+                break;
+            /* TNDEEP — same parsing as TNET */
+            case OP_TNDEEP:
                 {
                     int fi = 1;
                     while (fi < ntokens && is_register_token(tokens[fi])) fi++;
@@ -2392,6 +2476,511 @@ static int vm_execute(VM *vm) {
 
             break;
         }
+
+        /* ═══ NML-TR Backward Opcodes (v0.8) ═══ */
+
+        case OP_RELUBK: {
+            /* RELUBK Rd Rgrad Rinput: Rd = Rgrad * (Rinput > 0) */
+            Tensor *grad = &REG(ins->reg[1]);
+            Tensor *input = &REG(ins->reg[2]);
+            int n = grad->size < input->size ? grad->size : input->size;
+            tensor_init_typed(&REG(ins->reg[0]), input->ndim, input->shape, NML_F64);
+            for (int i = 0; i < n; i++)
+                tensor_setd(&REG(ins->reg[0]), i,
+                    tensor_getd(input, i) > 0 ? tensor_getd(grad, i) : 0.0);
+            RVALID(ins->reg[0]) = 1;
+            break;
+        }
+
+        case OP_SIGMBK: {
+            /* SIGMBK Rd Rgrad Rinput: Rd = Rgrad * sig(x) * (1 - sig(x)) */
+            Tensor *grad = &REG(ins->reg[1]);
+            Tensor *input = &REG(ins->reg[2]);
+            int n = grad->size < input->size ? grad->size : input->size;
+            tensor_init_typed(&REG(ins->reg[0]), input->ndim, input->shape, NML_F64);
+            for (int i = 0; i < n; i++) {
+                double s = 1.0 / (1.0 + exp(-tensor_getd(input, i)));
+                tensor_setd(&REG(ins->reg[0]), i, tensor_getd(grad, i) * s * (1.0 - s));
+            }
+            RVALID(ins->reg[0]) = 1;
+            break;
+        }
+
+        case OP_TANHBK: {
+            /* TANHBK Rd Rgrad Rinput: Rd = Rgrad * (1 - tanh(x)^2) */
+            Tensor *grad = &REG(ins->reg[1]);
+            Tensor *input = &REG(ins->reg[2]);
+            int n = grad->size < input->size ? grad->size : input->size;
+            tensor_init_typed(&REG(ins->reg[0]), input->ndim, input->shape, NML_F64);
+            for (int i = 0; i < n; i++) {
+                double t = tanh(tensor_getd(input, i));
+                tensor_setd(&REG(ins->reg[0]), i, tensor_getd(grad, i) * (1.0 - t * t));
+            }
+            RVALID(ins->reg[0]) = 1;
+            break;
+        }
+
+        case OP_GELUBK: {
+            /* GELUBK Rd Rgrad Rinput: Rd = Rgrad * gelu'(x)
+             * gelu(x) = 0.5*x*(1+tanh(a*(x+b*x^3))), a=0.7978845608, b=0.044715 */
+            Tensor *grad = &REG(ins->reg[1]);
+            Tensor *input = &REG(ins->reg[2]);
+            int n = grad->size < input->size ? grad->size : input->size;
+            tensor_init_typed(&REG(ins->reg[0]), input->ndim, input->shape, NML_F64);
+            const double A = 0.7978845608, B = 0.044715;
+            for (int i = 0; i < n; i++) {
+                double x = tensor_getd(input, i);
+                double inner = A * (x + B * x * x * x);
+                double t = tanh(inner);
+                double sech2 = 1.0 - t * t;
+                double dgelu = 0.5 * (1.0 + t) + 0.5 * x * sech2 * A * (1.0 + 3.0 * B * x * x);
+                tensor_setd(&REG(ins->reg[0]), i, tensor_getd(grad, i) * dgelu);
+            }
+            RVALID(ins->reg[0]) = 1;
+            break;
+        }
+
+        case OP_SOFTBK: {
+            /* SOFTBK Rd Rgrad Rinput: softmax backward via Jacobian-vector product
+             * d_i = s_i * (grad_i - sum(grad * s)) where s = softmax(input) */
+            Tensor *grad = &REG(ins->reg[1]);
+            Tensor *input = &REG(ins->reg[2]);
+            int n = grad->size < input->size ? grad->size : input->size;
+            tensor_init_typed(&REG(ins->reg[0]), input->ndim, input->shape, NML_F64);
+            double max_val = tensor_getd(input, 0);
+            for (int i = 1; i < n; i++) { double v = tensor_getd(input, i); if (v > max_val) max_val = v; }
+            double sum_exp = 0;
+            for (int i = 0; i < n; i++) sum_exp += exp(tensor_getd(input, i) - max_val);
+            double dot = 0;
+            for (int i = 0; i < n; i++) {
+                double si = exp(tensor_getd(input, i) - max_val) / sum_exp;
+                dot += tensor_getd(grad, i) * si;
+            }
+            for (int i = 0; i < n; i++) {
+                double si = exp(tensor_getd(input, i) - max_val) / sum_exp;
+                tensor_setd(&REG(ins->reg[0]), i, si * (tensor_getd(grad, i) - dot));
+            }
+            RVALID(ins->reg[0]) = 1;
+            break;
+        }
+
+        case OP_MMULBK: {
+            /* MMULBK Rd_dinput Rd_dweight Rgrad Rinput Rweight
+             * d_input = grad @ weight^T,  d_weight = input^T @ grad */
+            Tensor *grad   = &REG(ins->reg[2]);
+            int r_input  = ins->int_params[0];
+            int r_weight = ins->int_params[1];
+            if (r_input < 0 || r_weight < 0)
+                VM_ERROR(vm, NML_ERR_OPCODE, "MMULBK: missing input/weight register at PC=%d", vm->pc);
+            Tensor *input  = &REG(r_input);
+            Tensor *weight = &REG(r_weight);
+            Tensor wt, it;
+            tensor_transpose(&wt, weight);
+            tensor_matmul(&REG(ins->reg[0]), grad, &wt);
+            RVALID(ins->reg[0]) = 1;
+            tensor_transpose(&it, input);
+            tensor_matmul(&REG(ins->reg[1]), &it, grad);
+            RVALID(ins->reg[1]) = 1;
+            break;
+        }
+
+        case OP_CONVBK: {
+            /* CONVBK Rd_dinput Rd_dkernel Rgrad Rinput Rkernel
+             * d_input: full convolution of grad with flipped kernel
+             * d_kernel: correlation of input with grad */
+            Tensor *grad   = &REG(ins->reg[2]);
+            int r_input  = ins->int_params[0];
+            int r_kernel = ins->int_params[1];
+            if (r_input < 0 || r_kernel < 0)
+                VM_ERROR(vm, NML_ERR_OPCODE, "CONVBK: missing input/kernel register at PC=%d", vm->pc);
+            Tensor *input  = &REG(r_input);
+            Tensor *kernel = &REG(r_kernel);
+            int H = input->shape[0], W = input->shape[1];
+            int KH = kernel->shape[0], KW = kernel->shape[1];
+            int GH = grad->shape[0], GW = grad->shape[1];
+
+            /* d_input: full convolution (pad = KH-1, KW-1) */
+            int pad_h = KH - 1, pad_w = KW - 1;
+            int di_shape[] = {H, W};
+            tensor_init_typed(&REG(ins->reg[0]), 2, di_shape, NML_F64);
+            for (int h = 0; h < H; h++)
+                for (int w = 0; w < W; w++) {
+                    double sum = 0;
+                    for (int kh = 0; kh < KH; kh++)
+                        for (int kw = 0; kw < KW; kw++) {
+                            int gh = h - pad_h + kh, gw = w - pad_w + kw;
+                            if (gh >= 0 && gh < GH && gw >= 0 && gw < GW)
+                                sum += tensor_getd(grad, gh * GW + gw)
+                                     * tensor_getd(kernel, (KH - 1 - kh) * KW + (KW - 1 - kw));
+                        }
+                    tensor_setd(&REG(ins->reg[0]), h * W + w, sum);
+                }
+            RVALID(ins->reg[0]) = 1;
+
+            /* d_kernel: correlation of input with grad */
+            int dk_shape[] = {KH, KW};
+            tensor_init_typed(&REG(ins->reg[1]), 2, dk_shape, NML_F64);
+            for (int kh = 0; kh < KH; kh++)
+                for (int kw = 0; kw < KW; kw++) {
+                    double sum = 0;
+                    for (int gh = 0; gh < GH; gh++)
+                        for (int gw = 0; gw < GW; gw++) {
+                            int ih = gh + kh, iw = gw + kw;
+                            if (ih < H && iw < W)
+                                sum += tensor_getd(input, ih * W + iw)
+                                     * tensor_getd(grad, gh * GW + gw);
+                        }
+                    tensor_setd(&REG(ins->reg[1]), kh * KW + kw, sum);
+                }
+            RVALID(ins->reg[1]) = 1;
+            break;
+        }
+
+        case OP_POOLBK: {
+            /* POOLBK Rd Rgrad Rfwd_input [#pool_size [#stride]]
+             * Routes gradient through max-pool argmax positions */
+            Tensor *grad  = &REG(ins->reg[1]);
+            Tensor *input = &REG(ins->reg[2]);
+            int pool_size = ins->int_params[0];
+            int stride    = ins->int_params[1];
+            int H = input->shape[0], W = input->shape[1];
+            int OH = (H - pool_size) / stride + 1;
+            int OW = (W - pool_size) / stride + 1;
+            int di_shape[] = {H, W};
+            tensor_init_typed(&REG(ins->reg[0]), 2, di_shape, NML_F64);
+            for (int oh = 0; oh < OH && oh < grad->shape[0]; oh++)
+                for (int ow = 0; ow < OW && ow < grad->shape[1]; ow++) {
+                    int max_h = oh * stride, max_w = ow * stride;
+                    double mx = tensor_getd(input, max_h * W + max_w);
+                    for (int ph = 0; ph < pool_size; ph++)
+                        for (int pw = 0; pw < pool_size; pw++) {
+                            int ih = oh * stride + ph, iw = ow * stride + pw;
+                            if (ih < H && iw < W) {
+                                double v = tensor_getd(input, ih * W + iw);
+                                if (v > mx) { mx = v; max_h = ih; max_w = iw; }
+                            }
+                        }
+                    double cur = tensor_getd(&REG(ins->reg[0]), max_h * W + max_w);
+                    tensor_setd(&REG(ins->reg[0]), max_h * W + max_w,
+                                cur + tensor_getd(grad, oh * OW + ow));
+                }
+            RVALID(ins->reg[0]) = 1;
+            break;
+        }
+
+        case OP_NORMBK: {
+            /* NORMBK Rd Rgrad Rinput: LayerNorm backward
+             * Assumes gamma=1, beta=0 (no affine parameters) */
+            Tensor *grad  = &REG(ins->reg[1]);
+            Tensor *input = &REG(ins->reg[2]);
+            int last_dim = input->shape[input->ndim - 1];
+            int n_groups = input->size / last_dim;
+            tensor_init_typed(&REG(ins->reg[0]), input->ndim, input->shape, NML_F64);
+            for (int g = 0; g < n_groups; g++) {
+                int off = g * last_dim;
+                double mean = 0;
+                for (int i = 0; i < last_dim; i++) mean += tensor_getd(input, off + i);
+                mean /= last_dim;
+                double var = 0;
+                for (int i = 0; i < last_dim; i++) {
+                    double d = tensor_getd(input, off + i) - mean;
+                    var += d * d;
+                }
+                var /= last_dim;
+                double inv_std = 1.0 / sqrt(var + 1e-5);
+                double sum_grad = 0, sum_grad_xhat = 0;
+                for (int i = 0; i < last_dim; i++) {
+                    double xhat = (tensor_getd(input, off + i) - mean) * inv_std;
+                    sum_grad += tensor_getd(grad, off + i);
+                    sum_grad_xhat += tensor_getd(grad, off + i) * xhat;
+                }
+                for (int i = 0; i < last_dim; i++) {
+                    double xhat = (tensor_getd(input, off + i) - mean) * inv_std;
+                    double dx = (tensor_getd(grad, off + i) - sum_grad / last_dim
+                                 - xhat * sum_grad_xhat / last_dim) * inv_std;
+                    tensor_setd(&REG(ins->reg[0]), off + i, dx);
+                }
+            }
+            RVALID(ins->reg[0]) = 1;
+            break;
+        }
+
+        case OP_ATTNBK: {
+            /* ATTNBK Rd_dq Rgrad Rq Rk Rv
+             * Writes: Rd = dQ, Rd+1 = dK, Rd+2 = dV
+             * Recomputes attention weights internally */
+            Tensor *d_out = &REG(ins->reg[1]);
+            Tensor *Q = &REG(ins->reg[2]);
+            int r_k = ins->int_params[0], r_v = ins->int_params[1];
+            if (r_v < 0) r_v = r_k;
+            Tensor *K = &REG(r_k);
+            Tensor *V = &REG(r_v);
+            int seq = Q->shape[0], dk = Q->shape[1], dv = V->shape[1];
+            float scale = 1.0f / sqrtf((float)dk);
+            int rd = ins->reg[0];
+
+            /* Recompute attention weights: A = softmax(Q @ K^T / sqrt(dk)) */
+            int n_scores = seq * seq;
+            double *scores = (double *)calloc(n_scores, sizeof(double));
+            if (!scores) VM_ERROR(vm, NML_ERR_OVERFLOW, "ATTNBK: alloc failed");
+            for (int i = 0; i < seq; i++)
+                for (int j = 0; j < seq; j++) {
+                    double sum = 0;
+                    for (int p = 0; p < dk; p++)
+                        sum += tensor_getd(Q, i * dk + p) * tensor_getd(K, j * dk + p);
+                    scores[i * seq + j] = sum * scale;
+                }
+            for (int i = 0; i < seq; i++) {
+                double mx = scores[i * seq];
+                for (int j = 1; j < seq; j++) if (scores[i * seq + j] > mx) mx = scores[i * seq + j];
+                double sm = 0;
+                for (int j = 0; j < seq; j++) { scores[i * seq + j] = exp(scores[i * seq + j] - mx); sm += scores[i * seq + j]; }
+                for (int j = 0; j < seq; j++) scores[i * seq + j] /= sm;
+            }
+
+            /* dV = A^T @ d_out */
+            int dv_shape[] = {seq, dv};
+            tensor_init_typed(&REG(rd + 2), 2, dv_shape, NML_F64);
+            for (int i = 0; i < seq; i++)
+                for (int j = 0; j < dv; j++) {
+                    double sum = 0;
+                    for (int p = 0; p < seq; p++) sum += scores[p * seq + i] * tensor_getd(d_out, p * dv + j);
+                    tensor_setd(&REG(rd + 2), i * dv + j, sum);
+                }
+            RVALID(rd + 2) = 1;
+
+            /* dA = d_out @ V^T */
+            double *dA = (double *)calloc(n_scores, sizeof(double));
+            if (!dA) { free(scores); VM_ERROR(vm, NML_ERR_OVERFLOW, "ATTNBK: alloc failed"); }
+            for (int i = 0; i < seq; i++)
+                for (int j = 0; j < seq; j++) {
+                    double sum = 0;
+                    for (int p = 0; p < dv; p++) sum += tensor_getd(d_out, i * dv + p) * tensor_getd(V, j * dv + p);
+                    dA[i * seq + j] = sum;
+                }
+
+            /* dS = softmax_backward(dA, scores) per row */
+            double *dS = (double *)calloc(n_scores, sizeof(double));
+            if (!dS) { free(scores); free(dA); VM_ERROR(vm, NML_ERR_OVERFLOW, "ATTNBK: alloc failed"); }
+            for (int i = 0; i < seq; i++) {
+                double dot = 0;
+                for (int j = 0; j < seq; j++) dot += dA[i * seq + j] * scores[i * seq + j];
+                for (int j = 0; j < seq; j++)
+                    dS[i * seq + j] = scores[i * seq + j] * (dA[i * seq + j] - dot) * scale;
+            }
+            free(dA);
+
+            /* dQ = dS @ K */
+            int dq_shape[] = {seq, dk};
+            tensor_init_typed(&REG(rd), 2, dq_shape, NML_F64);
+            for (int i = 0; i < seq; i++)
+                for (int j = 0; j < dk; j++) {
+                    double sum = 0;
+                    for (int p = 0; p < seq; p++) sum += dS[i * seq + p] * tensor_getd(K, p * dk + j);
+                    tensor_setd(&REG(rd), i * dk + j, sum);
+                }
+            RVALID(rd) = 1;
+
+            /* dK = dS^T @ Q */
+            int dk_shape[] = {seq, dk};
+            tensor_init_typed(&REG(rd + 1), 2, dk_shape, NML_F64);
+            for (int i = 0; i < seq; i++)
+                for (int j = 0; j < dk; j++) {
+                    double sum = 0;
+                    for (int p = 0; p < seq; p++) sum += dS[p * seq + i] * tensor_getd(Q, p * dk + j);
+                    tensor_setd(&REG(rd + 1), i * dk + j, sum);
+                }
+            RVALID(rd + 1) = 1;
+
+            free(scores);
+            free(dS);
+            break;
+        }
+
+        case OP_TNDEEP: {
+            /* TNDEEP #epochs #lr #optimizer
+             * N-layer dense training. Architecture from RV: [n_layers, h1, act1, h2, act2, ...]
+             * Weights in R1, R2, ... (weight, bias pairs). R0=input, R9=target.
+             * Activations: 0=ReLU, 1=sigmoid, 2=tanh, 3=GELU
+             * Result: trained weights in-place, R8 = final loss */
+            int epochs = (int)ins->imm;
+            float lr = (float)(ins->int_params[0] / 1e6);
+            int use_adam = ins->int_params[1];
+
+            Tensor *arch = &REG(31); /* RV */
+            if (!RVALID(31) || arch->size < 1)
+                VM_ERROR(vm, NML_ERR_OPCODE, "TNDEEP: RV must contain architecture descriptor");
+            int n_layers = (int)tensor_getd(arch, 0);
+            if (n_layers < 1 || n_layers > 10)
+                VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: n_layers must be 1-10, got %d", n_layers);
+
+            Tensor *input  = &REG(0);
+            Tensor *target = &REG(9);
+            int N = input->shape[0];
+
+            /* Allocate per-layer forward/backward buffers on heap */
+            typedef struct { int rows, cols; int act; int w_reg, b_reg; } Layer;
+            Layer layers[10];
+            int prev_size = input->ndim >= 2 ? input->shape[1] : input->shape[0];
+            for (int l = 0; l < n_layers; l++) {
+                int h = (int)tensor_getd(arch, 1 + l * 2);
+                int act = (1 + l * 2 + 1 < arch->size) ? (int)tensor_getd(arch, 1 + l * 2 + 1) : 0;
+                layers[l].rows = prev_size;
+                layers[l].cols = h;
+                layers[l].act = act;
+                layers[l].w_reg = 1 + l * 2;
+                layers[l].b_reg = 2 + l * 2;
+                prev_size = h;
+            }
+
+            /* Forward + backward training loop */
+            size_t max_dim = 0;
+            for (int l = 0; l < n_layers; l++)
+                if ((size_t)layers[l].cols > max_dim) max_dim = layers[l].cols;
+            size_t buf_per_sample = max_dim * (n_layers + 1);
+            double *fwd_buf = (double *)calloc((size_t)N * buf_per_sample, sizeof(double));
+            if (!fwd_buf) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: alloc failed");
+
+            float loss = 0;
+            const float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
+            int adam_t = 0;
+            size_t total_params = 0;
+            for (int l = 0; l < n_layers; l++)
+                total_params += (size_t)layers[l].rows * layers[l].cols + layers[l].cols;
+            double *adam_m = NULL, *adam_v = NULL;
+            if (use_adam) {
+                adam_m = (double *)calloc(total_params, sizeof(double));
+                adam_v = (double *)calloc(total_params, sizeof(double));
+                if (!adam_m || !adam_v) {
+                    free(fwd_buf); free(adam_m); free(adam_v);
+                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: adam alloc failed");
+                }
+            }
+
+            for (int epoch = 0; epoch < epochs; epoch++) {
+                loss = 0;
+                for (int sample = 0; sample < N; sample++) {
+                    /* Forward: store activations for backward pass */
+                    double *prev_act = fwd_buf + (size_t)sample * buf_per_sample;
+                    int prev_n = layers[0].rows;
+                    for (int j = 0; j < prev_n; j++)
+                        prev_act[j] = tensor_getd(input, sample * prev_n + j);
+
+                    double *layer_acts[11];
+                    layer_acts[0] = prev_act;
+                    for (int l = 0; l < n_layers; l++) {
+                        double *cur_act = prev_act + (l + 1) * (int)max_dim;
+                        layer_acts[l + 1] = cur_act;
+                        Tensor *w = &REG(layers[l].w_reg);
+                        Tensor *b = &REG(layers[l].b_reg);
+                        int in_sz = layers[l].rows, out_sz = layers[l].cols;
+                        for (int j = 0; j < out_sz; j++) {
+                            double sum = tensor_getd(b, j);
+                            for (int p = 0; p < in_sz; p++)
+                                sum += layer_acts[l][p] * tensor_getd(w, p * out_sz + j);
+                            /* Apply activation */
+                            switch (layers[l].act) {
+                                case 0: cur_act[j] = sum > 0 ? sum : 0; break;
+                                case 1: cur_act[j] = 1.0 / (1.0 + exp(-sum)); break;
+                                case 2: cur_act[j] = tanh(sum); break;
+                                default: cur_act[j] = sum > 0 ? sum : 0; break;
+                            }
+                        }
+                    }
+
+                    /* Loss */
+                    int out_sz = layers[n_layers - 1].cols;
+                    double *final_act = layer_acts[n_layers];
+                    for (int j = 0; j < out_sz; j++) {
+                        double diff = final_act[j] - tensor_getd(target, sample * out_sz + j);
+                        loss += diff * diff;
+                    }
+
+                    /* Backward */
+                    double d_buf[1024];
+                    double d_buf2[1024];
+                    double *d_cur = d_buf, *d_prev = d_buf2;
+                    for (int j = 0; j < out_sz; j++)
+                        d_cur[j] = 2.0 * (final_act[j] - tensor_getd(target, sample * out_sz + j)) / N;
+
+                    size_t adam_off = total_params;
+                    for (int l = n_layers - 1; l >= 0; l--) {
+                        Tensor *w = &REG(layers[l].w_reg);
+                        Tensor *b = &REG(layers[l].b_reg);
+                        int in_sz = layers[l].rows, o_sz = layers[l].cols;
+                        adam_off -= (size_t)in_sz * o_sz + o_sz;
+
+                        /* Activation derivative */
+                        double d_pre[1024];
+                        for (int j = 0; j < o_sz; j++) {
+                            double a = layer_acts[l + 1][j];
+                            double da;
+                            switch (layers[l].act) {
+                                case 0: da = a > 0 ? 1.0 : 0.0; break;
+                                case 1: da = a * (1.0 - a); break;
+                                case 2: da = 1.0 - a * a; break;
+                                default: da = a > 0 ? 1.0 : 0.0; break;
+                            }
+                            d_pre[j] = d_cur[j] * da;
+                        }
+
+                        /* Weight and bias gradients + update */
+                        if (use_adam) {
+                            adam_t = epoch * N + sample + 1;
+                            float bc1 = 1.0f - powf(BETA1, (float)adam_t);
+                            float bc2 = 1.0f - powf(BETA2, (float)adam_t);
+                            for (int p = 0; p < in_sz; p++)
+                                for (int j = 0; j < o_sz; j++) {
+                                    double g = layer_acts[l][p] * d_pre[j];
+                                    size_t idx = adam_off + p * o_sz + j;
+                                    adam_m[idx] = BETA1 * adam_m[idx] + (1 - BETA1) * g;
+                                    adam_v[idx] = BETA2 * adam_v[idx] + (1 - BETA2) * g * g;
+                                    double mh = adam_m[idx] / bc1, vh = adam_v[idx] / bc2;
+                                    tensor_setd(w, p * o_sz + j,
+                                        tensor_getd(w, p * o_sz + j) - lr * mh / (sqrt(vh) + EPS));
+                                }
+                            for (int j = 0; j < o_sz; j++) {
+                                size_t idx = adam_off + (size_t)in_sz * o_sz + j;
+                                adam_m[idx] = BETA1 * adam_m[idx] + (1 - BETA1) * d_pre[j];
+                                adam_v[idx] = BETA2 * adam_v[idx] + (1 - BETA2) * d_pre[j] * d_pre[j];
+                                double mh = adam_m[idx] / bc1, vh = adam_v[idx] / bc2;
+                                tensor_setd(b, j, tensor_getd(b, j) - lr * mh / (sqrt(vh) + EPS));
+                            }
+                        } else {
+                            for (int p = 0; p < in_sz; p++)
+                                for (int j = 0; j < o_sz; j++)
+                                    tensor_setd(w, p * o_sz + j,
+                                        tensor_getd(w, p * o_sz + j) - lr * layer_acts[l][p] * d_pre[j]);
+                            for (int j = 0; j < o_sz; j++)
+                                tensor_setd(b, j, tensor_getd(b, j) - lr * d_pre[j]);
+                        }
+
+                        /* Propagate gradient to previous layer */
+                        if (l > 0) {
+                            for (int p = 0; p < in_sz; p++) {
+                                double sum = 0;
+                                for (int j = 0; j < o_sz; j++)
+                                    sum += d_pre[j] * tensor_getd(w, p * o_sz + j);
+                                d_prev[p] = sum;
+                            }
+                            double *tmp = d_cur; d_cur = d_prev; d_prev = tmp;
+                        }
+                    }
+                }
+                loss /= N;
+            }
+
+            free(fwd_buf);
+            free(adam_m);
+            free(adam_v);
+
+            int ls[] = {1};
+            tensor_init_typed(&REG(8), 1, ls, NML_F64);
+            tensor_setd(&REG(8), 0, (double)loss);
+            RVALID(8) = 1;
+            break;
+        }
+
 #endif /* NML_NO_TRAINING */
 
             case OP_HALT: vm->halted = 1; return NML_OK;

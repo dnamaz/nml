@@ -30,7 +30,7 @@ NML is a minimal machine language designed for AI workloads. It supports neural 
 | RJ | LearningRate | Learning rate scalar |
 | RK–RV | Training/Hive | Training workspace and hive collective registers (12) |
 
-## Instruction Set (35 Core + 14 Extensions + 13 M2M + 5 General + 4 Training = 71 Total)
+## Instruction Set (35 Core + 14 Extensions + 13 M2M + 5 General + 4 Training + 11 Backward = 82 Total)
 
 ### Arithmetic (8 instructions)
 ```
@@ -141,12 +141,15 @@ FFT   Rd_real Rd_imag Rs           — Discrete Fourier Transform
 FILT  Rd Rs Rs_coeffs              — FIR filter (1D convolution)
 ```
 
-### Extension: NML-TR — Training (4 instructions)
+### Extension: NML-TR — Training (4 instructions + 11 backward)
 ```
 BKWD  Rd Rs Rtarget               — Backpropagation: compute gradient of loss w.r.t. Rs into Rd
 WUPD  Rd Rs Rgrad [Rlr]           — Weight update: Rd = Rs - lr * Rgrad (default lr from RJ)
 LOSS  Rd Rs Rtarget [#mode]       — Loss computation: mode 0=MSE (default), 1=cross-entropy, 2=MAE
 TNET  #epochs #lr [#seed]         — Self-training loop: train network in R1-R8 for N epochs at learning rate lr
+RELUBK SIGMBK TANHBK GELUBK SOFTBK — Backward pass for RELU, SIGM, TANH, GELU, SOFT
+MMULBK CONVBK POOLBK NORMBK ATTNBK — Backward pass for MMUL, CONV, POOL, NORM, ATTN
+TNDEEP                            — Deep backward through transformer block
 ```
 
 TNET performs end-to-end training using the current register state as the network:
@@ -761,7 +764,7 @@ Build with NML-G disabled: `gcc -DNML_NO_GENERAL -o nml nml.c -lm`
 | v0.6.2 | 35 | 14 + 13 M2M + 5 GP | 67 | NML-G general-purpose extension: SYS (multiplexed I/O — print, read, time, rand, exit), MOD (integer modulo), ITOF/FTOI (type conversion), BNOT (bitwise NOT); configurable resource limits via compile flags; CMP operand count fix |
 | v0.6.3 | 35 | 14 + 13 M2M + 5 GP | 67 | Compact form: `¶` (U+00B6, pilcrow) as native instruction delimiter for single-line NML; runtime parses both `\n` and `¶`; `nml_format.py` CLI for compact/format conversion; MCP toolchain server with 9 tools (spec_lookup, transpile, validate, execute, library_lookup, scan, intent, compact, format) |
 | v0.6.4 | 35 | 14 + 13 M2M + 5 GP | 67 | Alternative aliases for LLM trainability: `ϟ` (Greek koppa) for CMPI, `ϛ` (Greek stigma) for RDUC, `DOT` for SDOT, `SCTR` for SCAT (Rd-first order); bare number tolerance on JUMP/JMPT/JMPF/CALL |
-| v0.7.0 | 35 | 14 + 13 M2M + 5 GP + 4 TR | 71 | 32 registers (R0–RV); NML-TR training extension: BKWD (backpropagation), WUPD (weight update), LOSS (loss computation), TNET (self-training loop); optional BLAS acceleration |
+| v0.7.0 | 35 | 14 + 13 M2M + 5 GP + 4 TR + 11 BK | 82 | 32 registers (R0–RV); NML-TR training extension: BKWD, WUPD, LOSS, TNET; 11 backward opcodes (RELUBK, SIGMBK, TANHBK, GELUBK, SOFTBK, MMULBK, CONVBK, POOLBK, NORMBK, ATTNBK, TNDEEP); optional BLAS acceleration |
 
 ## Alternative Aliases (v0.6.4)
 

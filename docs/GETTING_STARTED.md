@@ -275,5 +275,5 @@ TNET trains the network defined by R1–R4 (weight/bias pairs for up to 2 layers
 ## Next Steps
 
 - [NML Specification](NML_SPEC.md) — full instruction set reference with encoding details
-- [Usage Guide](NML_Usage_Guide.md) — all 71 instructions with detailed examples
+- [Usage Guide](NML_Usage_Guide.md) — all 82 instructions with detailed examples
 - [M2M Specification](NML_M2M_Spec.md) — machine-to-machine extensions

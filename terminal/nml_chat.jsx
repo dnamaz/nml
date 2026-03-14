@@ -35,6 +35,9 @@ const NML_OPCODES = new Set([
   "RDUC","WHER","CLMP","CMPR","FFT","FILT",
   "META","FRAG","ENDF","LINK","VOTE","PROJ","DIST","GATH","SCAT","SCTR",
   "SYS","MOD","ITOF","FTOI","BNOT","SIGN","VRFY","PTCH",
+  "BKWD","WUPD","LOSS","TNET",
+  "RELUBK","SIGMBK","TANHBK","GELUBK","SOFTBK",
+  "MMULBK","CONVBK","POOLBK","NORMBK","ATTNBK","TNDEEP",
 ]);
 const NML_SYMBOLIC = new Set([
   "×","⊕","⊖","⊗","⊘","·","∗","÷","⌐","σ","τ","Σ","ℊ",
@@ -42,10 +45,12 @@ const NML_SYMBOLIC = new Set([
   "↗","↘","→","↻","↺","∎","∑","⇒","⇐","⏸","◼","⚠",
   "⊛","⊓","⊔","⊡","⊙","‖","⊏","⊥","ϛ","⊻","⊧","⊜",
   "∿","⋐","§","◆","◇","⚖","✦","✓","⟐","⟂","⊃","⊂","⚙",
+  "∇","⟳","△","⥁",
+  "⌐ˈ","σˈ","τˈ","ℊˈ","Σˈ","×ˈ","⊛ˈ","⊓ˈ","‖ˈ","⊙ˈ","⥁ˈ",
 ]);
 
 const SYSTEM_PROMPTS = {
-  classic: `You are an NML v0.7.0 code generator. NML is a 71-opcode tensor register machine with 32 registers (R0-RV).
+  classic: `You are an NML v0.8.0 code generator. NML is an 82-opcode tensor register machine with 32 registers (R0-RV).
 
 CRITICAL RULES:
 - LEAF R0 #42.0 loads constants (# prefix). LD R0 @name loads from memory (@ prefix). Never mix them.
@@ -55,7 +60,7 @@ CRITICAL RULES:
 - No ADD, SUB, MUL, INCR, or LDI instruction exists. Use TACC for addition, EMUL for element-wise multiply, SCLR for scalar multiply.
 - Increment pattern: LEAF RC #1.0 then TACC RD RD RC.
 
-ALL 71 OPCODES:
+ALL 82 OPCODES:
 Arithmetic: MMUL MADD MSUB EMUL EDIV SDOT/DOT SCLR SDIV
 Activation: RELU SIGM TANH SOFT GELU
 Memory: LD ST MOV ALLC LEAF
@@ -69,10 +74,17 @@ Reduction: RDUC WHER CLMP CMPR
 Signal: FFT FILT
 M2M: META FRAG ENDF LINK PTCH SIGN VRFY VOTE PROJ DIST GATH SCAT/SCTR
 Training: BKWD WUPD LOSS TNET
+Backward: RELUBK SIGMBK TANHBK GELUBK SOFTBK MMULBK CONVBK POOLBK NORMBK ATTNBK TNDEEP
+
+BACKWARD OPCODE PATTERNS:
+- Activation backward: RELUBK Rd Rgrad Rinput (gradient through activation)
+- MMULBK Rd_dinput Rd_dweight Rgrad Rinput Rweight (matmul backward, outputs 2 gradients)
+- CONVBK/POOLBK: same pattern as MMULBK for vision backward
+- Training loop: LOOP #N ... forward ... LOSS ... backward ... WUPD ... ENDP
 
 REGISTERS: R0-R9 (general), RA (accumulator), RB (general), RC (scratch), RD (counter), RE (condition flag set by CMP/CMPI/CMPF), RF (stack pointer), RG-RI (gradients), RJ (learning rate), RK-RV (training/hive).`,
 
-  symbolic: `You are an NML v0.7.0 code generator. ALWAYS use symbolic syntax with Greek register names. Never use classic opcode mnemonics.
+  symbolic: `You are an NML v0.8.0 code generator. ALWAYS use symbolic syntax with Greek register names. Never use classic opcode mnemonics.
 
 CRITICAL RULES:
 - ∎ ι #42.0 loads constants (# prefix). ↓ ι @name loads from memory (@ prefix). Never mix them.
@@ -82,7 +94,7 @@ CRITICAL RULES:
 - No ADD, SUB, MUL, or INCR exists. Use ∑ for addition, ⊗ for element-wise multiply, ∗ for scalar multiply.
 - Increment pattern: ∎ γ #1.0 then ∑ δ δ γ.
 
-ALL 71 SYMBOLIC OPCODES:
+ALL 82 SYMBOLIC OPCODES:
 Arithmetic: × (matmul) ⊕ (add) ⊖ (sub) ⊗ (emul) ⊘ (ediv) · (dot) ∗ (scale) ÷ (sdiv)
 Activation: ⌐ (relu) σ (sigmoid) τ (tanh) Σ (softmax) ℊ (gelu)
 Memory: ↓ (load) ↑ (store) ← (move) □ (alloc) ∎ (leaf/constant)
@@ -97,6 +109,7 @@ Reduction: ⊥/ϛ (rduc) ⊻ (wher) ⊧ (clmp) ⊜ (cmpr)
 Signal: ∿ (fft) ⋐ (filt)
 M2M: § (meta) ◆ (frag) ◇ (endf) ⊿ (ptch) ✦ (sign) ✓ (vrfy) ⚖ (vote) ⟐ (proj) ⟂ (dist) ⊃ (gath) ⊂ (scat)
 Training: ∇ (bkwd) ⟳ (wupd) △ (loss) ⥁ (tnet)
+Backward: ⌐ˈ (relubk) σˈ (sigmbk) τˈ (tanhbk) ℊˈ (gelubk) Σˈ (softbk) ×ˈ (mmulbk) ⊛ˈ (convbk) ⊓ˈ (poolbk) ‖ˈ (normbk) ⊙ˈ (attnbk) ⥁ˈ (tndeep)
 
 REGISTERS (always use Greek): ι κ λ μ ν ξ ο π ρ ς (R0-R9), α (accumulator), β (general), γ (scratch), δ (counter), φ (flag), ψ (stack), η θ ζ (gradients), ω (learning rate), χ υ ε (training).`,
 };

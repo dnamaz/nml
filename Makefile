@@ -13,7 +13,7 @@ LDFLAGS = -lm
 
 nml: runtime/nml.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
-	@echo "  Built: nml (v0.7.0, 70 instructions, 32 registers — portable)"
+	@echo "  Built: nml (v0.7.0, 82 instructions, 32 registers — portable)"
 
 nmld: runtime/nmld.c runtime/nml.c
 	$(CC) $(CFLAGS) -o $@ runtime/nmld.c $(LDFLAGS)
@@ -171,7 +171,7 @@ help:
 	@echo "  ═════════════════════════════════════"
 	@echo ""
 	@echo "  Build:"
-	@echo "    make nml              Build the NML runtime (67 instructions, all extensions)"
+	@echo "    make nml              Build the NML runtime (82 instructions, all extensions)"
 	@echo "    make release          Build + strip"
 	@echo ""
 	@echo "  Test (core):"

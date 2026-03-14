@@ -2,7 +2,7 @@
 
 ## Overview
 
-NML v0.7.0 runtime: ~2,400 lines of C99, compiles to a 67 KB portable binary (83 KB with BLAS). Supports 71 opcodes across 32 tensor registers.
+NML v0.7.0 runtime: ~2,400 lines of C99, compiles to a 67 KB portable binary (83 KB with BLAS). Supports 82 opcodes across 32 tensor registers.
 
 All benchmarks: Apple M1 Pro, 32 GB RAM, macOS. 20 runs (median) unless noted. Both NML and Python use identical initial weights, data, hyperparameters, and mini-batch size.
 

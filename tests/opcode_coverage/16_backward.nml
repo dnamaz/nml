@@ -1,0 +1,80 @@
+; Opcode Coverage: NML-TR Backward (11 opcodes)
+; Tests: RELUBK, SIGMBK, TANHBK, GELUBK, SOFTBK,
+;        MMULBK, CONVBK, POOLBK, NORMBK, ATTNBK, TNDEEP
+
+; --- Activation backward opcodes ---
+LD    R0 @act_input
+LD    R1 @grad_ones
+
+; RELUBK: gradient through ReLU
+RELUBK R2 R1 R0
+ST     R2 @relubk_out
+
+; SIGMBK: gradient through sigmoid
+SIGMBK R2 R1 R0
+ST     R2 @sigmbk_out
+
+; TANHBK: gradient through tanh
+TANHBK R2 R1 R0
+ST     R2 @tanhbk_out
+
+; GELUBK: gradient through GELU
+GELUBK R2 R1 R0
+ST     R2 @gelubk_out
+
+; SOFTBK: gradient through softmax
+SOFTBK R2 R1 R0
+ST     R2 @softbk_out
+
+; --- MMULBK: matmul backward ---
+LD    R0 @mm_grad
+LD    R1 @mm_input
+LD    R2 @mm_weight
+MMULBK R3 R4 R0 R1 R2
+ST    R3 @mmulbk_dinput
+ST    R4 @mmulbk_dweight
+
+; --- CONVBK: convolution backward ---
+LD    R0 @conv_grad
+LD    R1 @conv_input
+LD    R2 @conv_kernel
+CONVBK R3 R4 R0 R1 R2
+ST    R3 @convbk_dinput
+ST    R4 @convbk_dkernel
+
+; --- POOLBK: max pool backward ---
+LD    R0 @pool_grad
+LD    R1 @pool_input
+POOLBK R2 R0 R1 #2 #2
+ST    R2 @poolbk_dinput
+
+; --- NORMBK: layer norm backward ---
+LD    R0 @norm_grad
+LD    R1 @norm_input
+NORMBK R2 R0 R1
+ST    R2 @normbk_out
+
+; --- ATTNBK: attention backward ---
+LD    R0 @attn_grad
+LD    R1 @attn_q
+LD    R2 @attn_k
+LD    R3 @attn_v
+ATTNBK R5 R0 R1 R2 R3
+ST    R5 @attnbk_dq
+ST    R6 @attnbk_dk
+ST    R7 @attnbk_dv
+
+; --- TNDEEP: N-layer dense training ---
+LD    R0 @deep_input
+LD    R9 @deep_target
+LD    R1 @deep_w1
+LD    R2 @deep_b1
+LD    R3 @deep_w2
+LD    R4 @deep_b2
+; Architecture: 2 layers, hidden=4 (ReLU), output=1 (ReLU)
+LEAF  RV #2.0
+LD    RV @deep_arch
+TNDEEP #500 #0.01 #0
+ST    R8 @deep_loss
+
+HALT

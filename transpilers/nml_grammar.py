@@ -108,6 +108,8 @@ _CLASSIC_OPCODES = [
     "PROJ", "DIST", "GATH", "SCAT",
     "SYS", "MOD", "ITOF", "FTOI", "BNOT",
     "BKWD", "WUPD", "LOSS", "TNET",
+    "RELUBK", "SIGMBK", "TANHBK", "GELUBK", "SOFTBK",
+    "MMULBK", "CONVBK", "POOLBK", "NORMBK", "ATTNBK", "TNDEEP",
 ]
 for _op in _CLASSIC_OPCODES:
     _OPCODE_TO_CANONICAL[_op] = _op
@@ -146,6 +148,9 @@ _SYMBOLIC_TO_CANONICAL = {
     "⚖": "VOTE", "⟐": "PROJ", "⟂": "DIST", "⊃": "GATH", "⊂": "SCAT",
     "⚙": "SYS", "%": "MOD", "⊶": "ITOF", "⊷": "FTOI", "¬": "BNOT",
     "∇": "BKWD", "⟳": "WUPD", "△": "LOSS", "⥁": "TNET",
+    "⌐ˈ": "RELUBK", "σˈ": "SIGMBK", "τˈ": "TANHBK", "ℊˈ": "GELUBK", "Σˈ": "SOFTBK",
+    "×ˈ": "MMULBK", "⊛ˈ": "CONVBK", "⊓ˈ": "POOLBK", "‖ˈ": "NORMBK", "⊙ˈ": "ATTNBK",
+    "⥁ˈ": "TNDEEP",
 }
 _OPCODE_TO_CANONICAL.update(_SYMBOLIC_TO_CANONICAL)
 
@@ -185,6 +190,10 @@ _VERBOSE_TO_CANONICAL = {
     "CONSENSUS": "VOTE", "PROJECT": "PROJ", "DISTANCE": "DIST", "GATHER": "GATH", "SCATTER": "SCAT",
     "SYSTEM": "SYS", "MODULO": "MOD", "INT_TO_FLOAT": "ITOF", "FLOAT_TO_INT": "FTOI", "BITWISE_NOT": "BNOT",
     "BACKWARD": "BKWD", "WEIGHT_UPDATE": "WUPD", "COMPUTE_LOSS": "LOSS", "TRAIN_NETWORK": "TNET",
+    "RELU_BACKWARD": "RELUBK", "SIGMOID_BACKWARD": "SIGMBK", "TANH_BACKWARD": "TANHBK",
+    "GELU_BACKWARD": "GELUBK", "SOFTMAX_BACKWARD": "SOFTBK", "MATMUL_BACKWARD": "MMULBK",
+    "CONV_BACKWARD": "CONVBK", "POOL_BACKWARD": "POOLBK", "NORM_BACKWARD": "NORMBK",
+    "ATTN_BACKWARD": "ATTNBK", "TRAIN_DEEP": "TNDEEP",
 }
 _OPCODE_TO_CANONICAL.update(_VERBOSE_TO_CANONICAL)
 
@@ -270,6 +279,17 @@ _OPERAND_COUNTS: dict[str, tuple[int, int]] = {
     "WUPD": (3, 4),
     "LOSS": (3, 4),
     "TNET": (2, 9),
+    "RELUBK": (3, 3),
+    "SIGMBK": (3, 3),
+    "TANHBK": (3, 3),
+    "GELUBK": (3, 3),
+    "SOFTBK": (3, 3),
+    "MMULBK": (5, 5),
+    "CONVBK": (5, 5),
+    "POOLBK": (3, 5),
+    "NORMBK": (3, 3),
+    "ATTNBK": (4, 5),
+    "TNDEEP": (2, 9),
 }
 
 _STRUCTURAL_OPCODES = {"META", "PTCH", "SIGN"}

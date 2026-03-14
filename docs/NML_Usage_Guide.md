@@ -1,6 +1,6 @@
 # NML Usage Guide
 
-## A Complete Reference with Examples for All 67 Instructions
+## A Complete Reference with Examples for All 82 Instructions
 
 ---
 

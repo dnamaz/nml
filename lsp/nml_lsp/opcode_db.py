@@ -1,5 +1,5 @@
 """
-Static opcode metadata for all 71 NML opcodes.
+Static opcode metadata for all 82 NML opcodes.
 
 Each entry provides: category, description, operand schema, snippet template,
 and all known aliases (classic, symbolic, verbose, extra).

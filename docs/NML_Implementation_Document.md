@@ -2,7 +2,7 @@
 
 ## What Was Built
 
-This document describes the complete implementation of the NML (Neural Machine Language) system: a 71-instruction machine language for AI workloads with an 83KB C runtime, three transpiler pipelines (XGBoost, deterministic rules, and STE tax rule transpilation), a tri-syntax system (classic/symbolic/verbose), a training data generator for LLM fine-tuning, a general-purpose extension (NML-G) enabling console I/O and integer math, an NML daemon (nmld) for high-performance execution, and a domain services layer providing standalone tax calculation with penny-exact accuracy against the Symmetry Tax Engine.
+This document describes the complete implementation of the NML (Neural Machine Language) system: a 82-instruction machine language for AI workloads with an 83KB C runtime, three transpiler pipelines (XGBoost, deterministic rules, and STE tax rule transpilation), a tri-syntax system (classic/symbolic/verbose), a training data generator for LLM fine-tuning, a general-purpose extension (NML-G) enabling console I/O and integer math, an NML daemon (nmld) for high-performance execution, and a domain services layer providing standalone tax calculation with penny-exact accuracy against the Symmetry Tax Engine.
 
 ---
 
@@ -34,7 +34,7 @@ flowchart TD
     end
 
     subgraph runtime [NML Runtime]
-        NMLFull["nml (full) — ~68 KB, 71 instructions"]
+        NMLFull["nml (full) — ~68 KB, 82 instructions"]
         NMLCore["nml-core — ~50 KB, 35 instructions"]
         NMLGP["nml-gp — ~68 KB, expanded limits"]
     end
@@ -85,15 +85,15 @@ flowchart TD
 
 ## Component 1: NML Runtime (`nml.c` + `nmld.c`)
 
-**~2,600 lines of C99.** Single-file runtime implementing the full 71-instruction NML instruction set with tri-syntax support, M2M extensions, training extensions (BKWD, WUPD, LOSS, TNET), and general-purpose I/O. The daemon (`nmld.c`, ~700 lines) adds pre-fork worker pools, binary cache with mmap for sub-second startup, Unix socket API, and zero-downtime cache reload (SIGHUP).
+**~2,600 lines of C99.** Single-file runtime implementing the full 82-instruction NML instruction set with tri-syntax support, M2M extensions, training extensions (BKWD, WUPD, LOSS, TNET, plus 11 backward opcodes: RELUBK, SIGMBK, TANHBK, GELUBK, SOFTBK, MMULBK, CONVBK, POOLBK, NORMBK, ATTNBK, TNDEEP), and general-purpose I/O. The daemon (`nmld.c`, ~700 lines) adds pre-fork worker pools, binary cache with mmap for sub-second startup, Unix socket API, and zero-downtime cache reload (SIGHUP).
 
 ### Build
 
 | Binary | Instructions | Size (stripped) | Build |
 |--------|-------------|-----------------|-------|
-| `nml` | 71 (35 core + 14 ext + 13 M2M + 5 GP + 4 TR) | ~68 KB | `make` |
+| `nml` | 82 (35 core + 14 ext + 13 M2M + 5 GP + 4 TR + 11 BK) | ~68 KB | `make` |
 | `nml-core` | 35 (core only) | ~50 KB | `make nml-core` |
-| `nml-gp` | 71 (expanded limits for GP programs) | ~68 KB | `make nml-gp` |
+| `nml-gp` | 82 (expanded limits for GP programs) | ~68 KB | `make nml-gp` |
 
 ```bash
 make all       # Build full + core binaries
@@ -139,7 +139,7 @@ graph LR
     end
 ```
 
-All 71 instructions support three syntax forms: classic (MMUL), symbolic (×), and verbose (MATRIX_MULTIPLY).
+All 82 instructions support three syntax forms: classic (MMUL), symbolic (×), and verbose (MATRIX_MULTIPLY).
 
 ### Register File
 
@@ -305,9 +305,9 @@ Net pay (annual): $86,906.36
 ```mermaid
 flowchart TD
     subgraph core [NML Core]
-        Runtime["C Runtime\nnml.c — ~2,600 lines\n71 instructions, 83 KB\nTri-syntax: classic | symbolic | verbose"]
+        Runtime["C Runtime\nnml.c — ~2,600 lines\n82 instructions, 83 KB\nTri-syntax: classic | symbolic | verbose"]
         Daemon["NML Daemon\nnmld.c — ~700 lines\nPre-fork workers, binary cache, Unix socket"]
-        Spec["NML Spec v0.7.1\n35 core + 14 ext + 13 M2M + 5 GP + 4 TR"]
+        Spec["NML Spec v0.7.1\n35 core + 14 ext + 13 M2M + 5 GP + 4 TR + 11 BK"]
     end
 
     subgraph transpilers [Transpilers]
@@ -332,7 +332,7 @@ flowchart TD
 | Metric | Value |
 |--------|-------|
 | NML runtime size (stripped) | 83 KB (full), ~50 KB (core) |
-| NML vocabulary | 71 symbols (classic) + symbolic + verbose aliases |
+| NML vocabulary | 82 symbols (classic) + symbolic + verbose aliases |
 | Token count (typical NN program) | 20-50 tokens |
 | Tax library size | 7,549 NML programs |
 | Inference time (FIT bracket lookup) | 145 µs |
@@ -492,7 +492,7 @@ make nml-gp    # Build with expanded resource limits
 
 | Binary | Instructions | Description |
 |--------|-------------|-------------|
-| `nml-gp` | 71 (35 core + 14 ext + 13 M2M + 5 GP + 4 TR) | Full runtime with expanded limits |
+| `nml-gp` | 82 (35 core + 14 ext + 13 M2M + 5 GP + 4 TR + 11 BK) | Full runtime with expanded limits |
 
 ### New Instructions
 
@@ -552,7 +552,7 @@ gcc -O2 -o nml-gp nml.c -lm \
 
 ## Component 9: NML v0.7.0 — Training Extension
 
-NML v0.7.0 extends the register file to 32 registers (R0–RV) and adds 4 training opcodes (BKWD, WUPD, LOSS, TNET) that enable self-training capability within NML programs. The extended register file dedicates RG–RI for gradient tensors, RJ for learning rate, and RK–RV for training workspace and hive collective operations. Optional BLAS acceleration is available for matrix operations during training via compile flag `-DNML_USE_BLAS`.
+NML v0.7.0 extends the register file to 32 registers (R0–RV) and adds 4 training opcodes (BKWD, WUPD, LOSS, TNET) plus 11 backward opcodes (RELUBK, SIGMBK, TANHBK, GELUBK, SOFTBK, MMULBK, CONVBK, POOLBK, NORMBK, ATTNBK, TNDEEP) that enable self-training capability within NML programs. The extended register file dedicates RG–RI for gradient tensors, RJ for learning rate, and RK–RV for training workspace and hive collective operations. Optional BLAS acceleration is available for matrix operations during training via compile flag `-DNML_USE_BLAS`.
 
 ### New Instructions
 

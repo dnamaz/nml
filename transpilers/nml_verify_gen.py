@@ -215,7 +215,7 @@ def main():
     args = parser.parse_args()
 
     random.seed(args.seed)
-    runtime = Path(args.runtime)
+    runtime = Path(args.runtime).resolve()
 
     print("=" * 60)
     print("  NML Verification Loop")

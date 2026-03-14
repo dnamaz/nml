@@ -119,6 +119,8 @@ class NMLEmulator {
       "⇒":"CALL","⇐":"RET","∑":"TACC",
       "◼":"HALT","⚠":"TRAP","⏸":"SYNC","⚙":"SYS",
       "∇":"BKWD","⟳":"WUPD","△":"LOSS","⥁":"TNET",
+      "⌐ˈ":"RELUBK","σˈ":"SIGMBK","τˈ":"TANHBK","ℊˈ":"GELUBK","Σˈ":"SOFTBK",
+      "×ˈ":"MMULBK","⊛ˈ":"CONVBK","⊓ˈ":"POOLBK","‖ˈ":"NORMBK","⊙ˈ":"ATTNBK","⥁ˈ":"TNDEEP",
       "⊛":"CONV","⊓":"POOL","⊔":"UPSC","⊡":"PADZ",
       "⊙":"ATTN","‖":"NORM","⊏":"EMBD",
       "⊥":"RDUC","ϛ":"RDUC","⊻":"WHER","⊧":"CLMP","⊜":"CMPR",
@@ -971,7 +973,7 @@ export default function NMLTerminal() {
                 <div style={{ color: COLORS.textDim, fontSize: 12, padding: 20, textAlign: "center", lineHeight: 1.8 }}>
                   Press <span style={{ color: COLORS.accent, fontWeight: 700 }}>EXECUTE</span> or <span style={{ color: COLORS.accent }}>Ctrl+Enter</span> to run
                   <br />
-                  <span style={{ fontSize: 10, opacity: 0.6 }}>67 opcodes. Tri-syntax. Zero ambiguity. Machine-first.</span>
+                  <span style={{ fontSize: 10, opacity: 0.6 }}>82 opcodes. Tri-syntax. Zero ambiguity. Machine-first.</span>
                 </div>
               ) : (
                 output.map((entry, i) => (
@@ -1066,7 +1068,7 @@ export default function NMLTerminal() {
         letterSpacing: 1,
         flexShrink: 0,
       }}>
-        <span>71 OPCODES • 32 REGISTERS • TRI-SYNTAX • FIXED-WIDTH ENCODING</span>
+        <span>82 OPCODES • 32 REGISTERS • TRI-SYNTAX • FIXED-WIDTH ENCODING</span>
         <span>NML EMULATOR v0.7.0</span>
       </div>
     </div>

@@ -1,6 +1,6 @@
 # NML — Neural Machine Language
 
-A minimal, deterministic machine language designed for AI workloads. 71 instructions. ~2,600 lines of C. Zero ambiguity.
+A minimal, deterministic machine language designed for AI workloads. 82 instructions. ~3,300 lines of C. Zero ambiguity.
 
 NML supports neural network inference, decision tree execution, transformer attention, signal processing, and general-purpose computation within a single instruction set and runtime — compiled to an 83 KB binary.
 
@@ -8,7 +8,7 @@ NML supports neural network inference, decision tree execution, transformer atte
 
 | Property | NML | Python/PyTorch |
 |----------|-----|---------------|
-| Vocabulary | 71 opcodes | 50,000+ tokens |
+| Vocabulary | 82 opcodes | 50,000+ tokens |
 | Grammar rules | ~10 | 100+ |
 | Syntactic ambiguity | Zero | High |
 | Ways to express same op | 1 | 5-10+ |
@@ -29,7 +29,9 @@ ONNX handles neural networks. XGBoost has its own runtime. Decision trees need a
 
 - **Neural networks**: `MMUL`, `MADD`, `RELU`, `SIGM`, `SOFT`, `ATTN`, `NORM`, `GELU`
 - **Decision trees**: `CMPF` (feature compare), `LEAF` (leaf value), `TACC` (accumulate)
-- **Training**: `BKWD` (backprop), `WUPD` (weight update), `LOSS`, `TNET` (fused training loop)
+- **Training**: `BKWD` (backprop), `WUPD` (weight update), `LOSS`, `TNET` (fused 2-layer training)
+- **Backward ops**: `RELUBK`, `SIGMBK`, `TANHBK`, `GELUBK`, `SOFTBK`, `MMULBK`, `CONVBK`, `POOLBK`, `NORMBK`, `ATTNBK` (arbitrary-architecture training)
+- **Deep training**: `TNDEEP` (fused N-layer dense training with Adam/SGD)
 - **Signal processing**: `FFT`, `FILT`
 - **Vision**: `CONV`, `POOL`, `UPSC`, `PADZ`
 - **General computation**: `LOOP`, `CALL`/`RET`, `SYS`, `MOD`
@@ -54,7 +56,7 @@ Most ISAs separate inference from training — you train in Python, export weigh
 
 ### Designed for LLM Generation
 
-NML's zero-ambiguity grammar exists specifically so that language models can learn to generate correct programs. With 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7B parameter model achieves 100% grammar validity with constrained decoding (Outlines CFG) and 95% with temperature-varied retries after training on 228K pairs. With optional Outlines CFG constrained decoding, every generated token is guaranteed to be valid NML — 100% syntactic correctness by construction.
+NML's zero-ambiguity grammar exists specifically so that language models can learn to generate correct programs. With 82 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7B parameter model achieves 100% grammar validity with constrained decoding (Outlines CFG) and 95% with temperature-varied retries after training on 228K pairs. With optional Outlines CFG constrained decoding, every generated token is guaranteed to be valid NML — 100% syntactic correctness by construction.
 
 ## Use Cases
 
@@ -84,7 +86,7 @@ An NML program can train its own neural network, then immediately run inference 
 
 ### Training LLMs to Generate Structured Code
 
-NML's zero-ambiguity grammar makes it dramatically easier to train models to write correct code. With only 71 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7B parameter model achieves 100% grammar accuracy (with Outlines CFG constrained decoding) or 95% (with 2 retries and temperature escalation) after training on 228K pairs. The additive-alias design philosophy — when models generate semantically valid alternative forms, accept them rather than fighting them — drove grammar pass rates from 85% to 100% without retraining.
+NML's zero-ambiguity grammar makes it dramatically easier to train models to write correct code. With only 82 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7B parameter model achieves 100% grammar accuracy (with Outlines CFG constrained decoding) or 95% (with 2 retries and temperature escalation) after training on 228K pairs. The additive-alias design philosophy — when models generate semantically valid alternative forms, accept them rather than fighting them — drove grammar pass rates from 85% to 100% without retraining.
 
 ## Quick Start
 
@@ -139,7 +141,7 @@ STORE       ACCUMULATOR @result
 STOP
 ```
 
-## Instruction Set (71 Total)
+## Instruction Set (82 Total)
 
 ### Core (35 Instructions)
 
@@ -170,8 +172,9 @@ STOP
 ### NML-M2M: Machine-to-Machine (13)
 `META` `FRAG` `ENDF` `LINK` `PTCH` `SIGN` `VRFY` `VOTE` `PROJ` `DIST` `GATH` `SCAT`
 
-### NML-TR: Training (4)
+### NML-TR: Training (15)
 `BKWD` `WUPD` `LOSS` `TNET`
+`RELUBK` `SIGMBK` `TANHBK` `GELUBK` `SOFTBK` `MMULBK` `CONVBK` `POOLBK` `NORMBK` `ATTNBK` `TNDEEP`
 
 ### NML-G: General Purpose (5)
 `SYS` `MOD` `ITOF` `FTOI` `BNOT`
@@ -485,7 +488,7 @@ docs/                Full specification, architecture documents, usage guide
 ## Building
 
 ```bash
-# Full build (71 instructions, all extensions)
+# Full build (82 instructions, all extensions)
 make
 
 # With BLAS acceleration (10x faster training)
@@ -532,7 +535,7 @@ Memory contents are loaded from simple text files:
 
 ### Go Deeper
 
-3. **[Usage Guide](docs/NML_Usage_Guide.md)** — all 71 instructions with detailed examples and edge cases
+3. **[Usage Guide](docs/NML_Usage_Guide.md)** — all 82 instructions with detailed examples and edge cases
 4. **[NML-G Specification](docs/NML_G_Spec.md)** — general-purpose extensions (SYS, MOD, ITOF, FTOI, BNOT)
 5. **[NML-M2M Specification](docs/NML_M2M_Spec.md)** — machine-to-machine extensions (META, FRAG, SIGN, VOTE, PROJ, DIST)
 
@@ -561,3 +564,4 @@ Memory contents are loaded from simple text files:
 | v0.6.4 | 67 | Alternative aliases for LLM trainability, bare number tolerance |
 | v0.7.0 | 71 | NML-TR training extensions (BKWD, WUPD, LOSS, TNET), BLAS acceleration |
 | v0.7.1 | 71 | NML daemon (nmld) with pre-fork workers and binary cache, constrained decoding (Outlines CFG), additive alias tolerance |
+| v0.8.0 | 82 | Backward opcodes (RELUBK, SIGMBK, TANHBK, GELUBK, SOFTBK, MMULBK, CONVBK, POOLBK, NORMBK, ATTNBK), TNDEEP N-layer training |

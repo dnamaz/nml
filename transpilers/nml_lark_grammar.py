@@ -147,10 +147,28 @@ training_instr: BKWD_OP WS register WS register WS register (WS register)?
               | WUPD_OP WS register WS register WS register WS operand
               | LOSS_OP WS register WS register WS register (WS immediate)?
               | TNET_OP (WS operand)+
+              | ACT_BK_OP WS register WS register WS register
+              | MMULBK_OP WS register WS register WS register WS register WS register
+              | CONVBK_OP WS register WS register WS register WS register WS register
+              | POOLBK_OP WS register WS register WS register (WS immediate (WS immediate)?)?
+              | NORMBK_OP WS register WS register WS register
+              | ATTNBK_OP WS register WS register WS register WS register (WS register)?
+              | TNDEEP_OP (WS operand)+
 BKWD_OP: "BKWD" | "∇" | "BACKWARD"
 WUPD_OP: "WUPD" | "⟳" | "WEIGHT_UPDATE"
 LOSS_OP: "LOSS" | "△" | "COMPUTE_LOSS"
 TNET_OP: "TNET" | "⥁" | "TRAIN_NETWORK"
+ACT_BK_OP: "RELUBK" | "⌐ˈ" | "RELU_BACKWARD"
+          | "SIGMBK" | "σˈ" | "SIGMOID_BACKWARD"
+          | "TANHBK" | "τˈ" | "TANH_BACKWARD"
+          | "GELUBK" | "ℊˈ" | "GELU_BACKWARD"
+          | "SOFTBK" | "Σˈ" | "SOFTMAX_BACKWARD"
+MMULBK_OP: "MMULBK" | "×ˈ" | "MATMUL_BACKWARD"
+CONVBK_OP: "CONVBK" | "⊛ˈ" | "CONV_BACKWARD"
+POOLBK_OP: "POOLBK" | "⊓ˈ" | "POOL_BACKWARD"
+NORMBK_OP: "NORMBK" | "‖ˈ" | "NORM_BACKWARD"
+ATTNBK_OP: "ATTNBK" | "⊙ˈ" | "ATTN_BACKWARD"
+TNDEEP_OP: "TNDEEP" | "⥁ˈ" | "TRAIN_DEEP"
 
 operand: register | immediate | memory_ref | shape_literal
 
@@ -190,6 +208,11 @@ if __name__ == "__main__":
         "LEAF R4 R2\nST R4 @result\nHALT",
         "META @name \"test\"\nLD R0 @input\nHALT",
         "WUPD R0 R0 R7 R4\nHALT",
+        "RELUBK R2 R1 R0\nHALT",
+        "MMULBK R3 R4 R0 R1 R2\nHALT",
+        "POOLBK R2 R0 R1 #2 #2\nHALT",
+        "ATTNBK R5 R0 R1 R2 R3\nHALT",
+        "TNDEEP #500 #0.01 #0\nHALT",
     ]
 
     passed = 0
