@@ -123,6 +123,66 @@ def validate_nml_grammar(nml_code: str) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Auto-generate .nml.data for programs that reference @memory
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def generate_data_file(nml_code: str) -> str:
+    """Scan NML for @memory refs used as inputs and generate a .nml.data file."""
+    import re
+    all_refs = set(re.findall(r'@(\w+)', nml_code))
+    st_refs = set()
+    for line in nml_code.splitlines():
+        tokens = line.strip().split()
+        if len(tokens) >= 3:
+            op = tokens[0].upper()
+            if op in ("ST", "↑", "STORE"):
+                ref = tokens[2].lstrip("@")
+                st_refs.add(ref)
+    input_refs = all_refs - st_refs
+    if not input_refs:
+        return None
+
+    lines = []
+    for ref in sorted(input_refs):
+        r = ref.lower()
+        if any(kw in r for kw in ['w1', 'w2', 'w3', 'weight', 'matrix', 'projection']):
+            shape = "4,4"
+        elif any(kw in r for kw in ['b1', 'b2', 'b3', 'bias', 'offset', 'shift']):
+            shape = "1,4"
+        elif any(kw in r for kw in ['kernel', 'filter', 'conv']):
+            shape = "3,3"
+        elif any(kw in r for kw in ['image', 'img', 'frame']):
+            shape = "8,8"
+        elif any(kw in r for kw in ['query', 'key', 'value', 'q', 'k', 'v']):
+            shape = "4,4"
+        elif any(kw in r for kw in ['embed', 'table', 'vocab']):
+            shape = "8,4"
+        elif any(kw in r for kw in ['target', 'label']):
+            shape = "1,4"
+        elif any(kw in r for kw in ['scalar', 'threshold', 'rate', 'lr', 'limit']):
+            shape = "1"
+        elif any(kw in r for kw in ['signal', 'readings', 'sequence', 'series']):
+            shape = "1,8"
+        elif any(kw in r for kw in ['arch']):
+            shape = "1,4"
+        else:
+            shape = "1,4"
+
+        n = 1
+        for d in shape.split(","):
+            n *= int(d)
+        data = ",".join(f"{random.uniform(-1,1):.4f}" for _ in range(n))
+        lines.append(f"@{ref} shape={shape} dtype=f64 data={data}")
+
+    if not lines:
+        return None
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".nml.data", delete=False)
+    tmp.write("\n".join(lines) + "\n")
+    tmp.close()
+    return tmp.name
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Runtime execution
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -287,7 +347,10 @@ def main():
             })
             continue
 
-        exec_result = execute_nml(nml_code, str(runtime))
+        data_path = generate_data_file(nml_code)
+        exec_result = execute_nml(nml_code, str(runtime), data_file=data_path)
+        if data_path:
+            Path(data_path).unlink(missing_ok=True)
         if exec_result["success"]:
             stats["execute_pass"] += 1
             verified.append({
