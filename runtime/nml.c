@@ -2908,6 +2908,8 @@ static int vm_execute(VM *vm) {
             size_t max_dim = 0;
             for (int l = 0; l < n_layers; l++)
                 if ((size_t)layers[l].cols > max_dim) max_dim = layers[l].cols;
+            if (max_dim > 1024)
+                VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: max layer width %zu exceeds 1024", max_dim);
             size_t buf_per_sample = max_dim * (n_layers + 1);
             double *fwd_buf = (double *)calloc((size_t)N * buf_per_sample, sizeof(double));
             if (!fwd_buf) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: alloc failed");

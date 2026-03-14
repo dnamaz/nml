@@ -548,6 +548,69 @@ Memory contents are loaded from simple text files:
 
 8. **[Multi-Agent Architecture](docs/NML_Multi_Agent_Architecture.md)** — distributed LLM communication using NML as a formal protocol
 
+## Limitations and Runtime Bounds
+
+NML is intentionally constrained — these limits are design choices for determinism, small binary size, and edge deployability, not bugs.
+
+### Tensor Limits
+
+| Limit | Default | Override | Impact |
+|-------|---------|----------|--------|
+| Max elements per tensor | 65,536 (256x256) | `-DNML_MAX_TENSOR_SIZE=N` | Largest matrix multiply is 256x256. Sufficient for edge inference, not for large model layers. |
+| Max dimensions | 4 | Not overridable | Supports up to 4D tensors (batch x channel x height x width). |
+| Storage per tensor | ~512 KB | Scales with tensor size | Static allocation in union (f32/f64/i32 share space). 32 registers = ~16 MB register file. |
+
+### Program Limits
+
+| Limit | Default | Override |
+|-------|---------|----------|
+| Max instructions | 8,192 | `-DNML_MAX_INSTRUCTIONS=N` |
+| Max memory slots | 64 | `-DNML_MAX_MEMORY_SLOTS=N` |
+| Max loop nesting | 8 | `-DNML_MAX_LOOP_DEPTH=N` |
+| Max call depth | 32 | `-DNML_MAX_CALL_DEPTH=N` |
+| Max tokens per line | 8 | Not overridable |
+| Max line length | 256 chars | Not overridable |
+| Execution cycle limit | 1,000,000 | `--max-cycles N` |
+
+### Training Limits
+
+| Limit | Value | Notes |
+|-------|-------|-------|
+| TNET architecture | 2-layer ReLU only | Fixed: input→hidden→output. Use backward opcodes for other architectures. |
+| TNET precision | f32 internally | Weights stored as register dtype, but forward/backward computed in float. |
+| TNET mini-batch | 64 max | `B = min(N, 64)` — hardcoded in the fused loop. |
+| TNDEEP max layers | 10 | Architecture descriptor in RV register. |
+| TNDEEP max layer width | 1,024 | Backward gradient buffers are stack-allocated at 1,024 elements. |
+| TNDEEP optimizers | SGD (0) or Adam (1) | No learning rate schedules, no weight decay. |
+
+### Precision
+
+| Context | Dtype | Notes |
+|---------|-------|-------|
+| General computation | f32 or f64 | Per-tensor, set at creation. BLAS accelerates both. |
+| TNET fused training | f32 only | All internal computation in float. |
+| TNDEEP training | f64 activations, f32 Adam | Mixed — activation buffers are double, optimizer uses float constants. |
+| Metal GPU | f32 only | MPS dispatch converts to float. BLAS fallback handles f64. |
+| LEAF immediates | f64 | Parsed as double, stored in register's dtype. |
+
+### GPU / Acceleration
+
+| Constraint | Details |
+|------------|---------|
+| Metal GPU crossover | ~1M elements (1024x1024). Below this, BLAS outperforms GPU due to dispatch overhead. NML's 65K max tensor size means GPU path never fires in practice. |
+| BLAS acceleration | MMUL only. CONV, ATTN, FFT, POOL use scalar C loops regardless of build. |
+| No GPU for TNET/TNDEEP | Fused training loops use scalar C code. BLAS-accelerated MMUL helps only the non-fused path. |
+
+### Not Supported
+
+- **Automatic differentiation** — backward ops must be written explicitly (no computation graph).
+- **Dynamic tensor shapes** — all tensors have fixed max allocation at compile time.
+- **Multi-threading** — single-threaded execution; `nmld` uses pre-fork processes instead.
+- **Sparse tensors** — all tensors are dense.
+- **Complex numbers** — f32, f64, i32 only.
+- **String/text data** — NML operates on numeric tensors only.
+- **GPU training** — TNET/TNDEEP are CPU-only. Metal dispatch applies only to individual MMUL ops.
+
 ## Version History
 
 | Version | Instructions | Key Changes |
