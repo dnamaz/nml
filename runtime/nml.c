@@ -597,17 +597,18 @@ static void tensor_conv2d(Tensor *out, const Tensor *input, const Tensor *kernel
     OH = (H + 2*pad - KH) / stride + 1;
     OW = (W + 2*pad - KW) / stride + 1;
     int shape[] = {OH, OW};
-    tensor_init(out, 2, shape);
+    DType dt = dtype_promote(input->dtype, kernel->dtype);
+    tensor_init_typed(out, 2, shape, dt);
     for (int oh = 0; oh < OH; oh++)
         for (int ow = 0; ow < OW; ow++) {
-            float sum = 0.0f;
+            double sum = 0.0;
             for (int kh = 0; kh < KH; kh++)
                 for (int kw = 0; kw < KW; kw++) {
                     int ih = oh * stride - pad + kh, iw = ow * stride - pad + kw;
                     if (ih >= 0 && ih < H && iw >= 0 && iw < W)
-                        sum += input->data.f32[ih * W + iw] * kernel->data.f32[kh * KW + kw];
+                        sum += tensor_getd(input, ih * W + iw) * tensor_getd(kernel, kh * KW + kw);
                 }
-            out->data.f32[oh * OW + ow] = sum;
+            tensor_setd(out, oh * OW + ow, sum);
         }
 }
 
@@ -615,17 +616,19 @@ static void tensor_maxpool(Tensor *out, const Tensor *input, int pool_size, int 
     int H = input->shape[0], W = input->shape[1];
     int OH = (H - pool_size) / stride + 1, OW = (W - pool_size) / stride + 1;
     int shape[] = {OH, OW};
-    tensor_init(out, 2, shape);
+    tensor_init_typed(out, 2, shape, input->dtype);
     for (int oh = 0; oh < OH; oh++)
         for (int ow = 0; ow < OW; ow++) {
-            float mx = -1e30f;
+            double mx = -1e30;
             for (int ph = 0; ph < pool_size; ph++)
                 for (int pw = 0; pw < pool_size; pw++) {
                     int ih = oh * stride + ph, iw = ow * stride + pw;
-                    if (ih < H && iw < W && input->data.f32[ih * W + iw] > mx)
-                        mx = input->data.f32[ih * W + iw];
+                    if (ih < H && iw < W) {
+                        double v = tensor_getd(input, ih * W + iw);
+                        if (v > mx) mx = v;
+                    }
                 }
-            out->data.f32[oh * OW + ow] = mx;
+            tensor_setd(out, oh * OW + ow, mx);
         }
 }
 
@@ -633,20 +636,20 @@ static void tensor_upscale(Tensor *out, const Tensor *input, int scale) {
     int H = input->shape[0], W = input->shape[1];
     int OH = H * scale, OW = W * scale;
     int shape[] = {OH, OW};
-    tensor_init(out, 2, shape);
+    tensor_init_typed(out, 2, shape, input->dtype);
     for (int oh = 0; oh < OH; oh++)
         for (int ow = 0; ow < OW; ow++)
-            out->data.f32[oh * OW + ow] = input->data.f32[(oh/scale) * W + (ow/scale)];
+            tensor_setd(out, oh * OW + ow, tensor_getd(input, (oh/scale) * W + (ow/scale)));
 }
 
 static void tensor_pad(Tensor *out, const Tensor *input, int pad) {
     int H = input->shape[0], W = input->shape[1];
     int OH = H + 2*pad, OW = W + 2*pad;
     int shape[] = {OH, OW};
-    tensor_init(out, 2, shape);
+    tensor_init_typed(out, 2, shape, input->dtype);
     for (int h = 0; h < H; h++)
         for (int w = 0; w < W; w++)
-            out->data.f32[(h+pad)*OW + (w+pad)] = input->data.f32[h*W + w];
+            tensor_setd(out, (h+pad)*OW + (w+pad), tensor_getd(input, h*W + w));
 }
 
 #endif /* NML_EXT_VISION */
@@ -659,30 +662,31 @@ static void tensor_pad(Tensor *out, const Tensor *input, int pad) {
 
 static void tensor_attention(Tensor *out, const Tensor *Q, const Tensor *K, const Tensor *V) {
     int seq_len = Q->shape[0], d_k = Q->shape[1], d_v = V->shape[1];
-    float scale = 1.0f / sqrtf((float)d_k);
+    double scale = 1.0 / sqrt((double)d_k);
+    DType dt = dtype_promote(Q->dtype, dtype_promote(K->dtype, V->dtype));
     Tensor scores = {0};
     int score_shape[] = {seq_len, seq_len};
-    tensor_init(&scores, 2, score_shape);
+    tensor_init_typed(&scores, 2, score_shape, dt);
     for (int i = 0; i < seq_len; i++)
         for (int j = 0; j < seq_len; j++) {
-            float sum = 0.0f;
-            for (int k = 0; k < d_k; k++) sum += Q->data.f32[i*d_k+k] * K->data.f32[j*d_k+k];
-            scores.data.f32[i*seq_len+j] = sum * scale;
+            double sum = 0.0;
+            for (int k = 0; k < d_k; k++) sum += tensor_getd(Q, i*d_k+k) * tensor_getd(K, j*d_k+k);
+            tensor_setd(&scores, i*seq_len+j, sum * scale);
         }
     for (int i = 0; i < seq_len; i++) {
-        float mx = scores.data.f32[i*seq_len];
-        for (int j = 1; j < seq_len; j++) if (scores.data.f32[i*seq_len+j] > mx) mx = scores.data.f32[i*seq_len+j];
-        float sum = 0.0f;
-        for (int j = 0; j < seq_len; j++) { scores.data.f32[i*seq_len+j] = expf(scores.data.f32[i*seq_len+j] - mx); sum += scores.data.f32[i*seq_len+j]; }
-        for (int j = 0; j < seq_len; j++) scores.data.f32[i*seq_len+j] /= sum;
+        double mx = tensor_getd(&scores, i*seq_len);
+        for (int j = 1; j < seq_len; j++) { double v = tensor_getd(&scores, i*seq_len+j); if (v > mx) mx = v; }
+        double sum = 0.0;
+        for (int j = 0; j < seq_len; j++) { double e = exp(tensor_getd(&scores, i*seq_len+j) - mx); tensor_setd(&scores, i*seq_len+j, e); sum += e; }
+        for (int j = 0; j < seq_len; j++) tensor_setd(&scores, i*seq_len+j, tensor_getd(&scores, i*seq_len+j) / sum);
     }
     int out_shape[] = {seq_len, d_v};
-    tensor_init(out, 2, out_shape);
+    tensor_init_typed(out, 2, out_shape, dt);
     for (int i = 0; i < seq_len; i++)
         for (int j = 0; j < d_v; j++) {
-            float sum = 0.0f;
-            for (int k = 0; k < seq_len; k++) sum += scores.data.f32[i*seq_len+k] * V->data.f32[k*d_v+j];
-            out->data.f32[i*d_v+j] = sum;
+            double sum = 0.0;
+            for (int k = 0; k < seq_len; k++) sum += tensor_getd(&scores, i*seq_len+k) * tensor_getd(V, k*d_v+j);
+            tensor_setd(out, i*d_v+j, sum);
         }
     tensor_free(&scores);
 }
@@ -693,18 +697,18 @@ static void tensor_layernorm(Tensor *out, const Tensor *input, const Tensor *gam
     int n_groups = input->size / last_dim;
     for (int g = 0; g < n_groups; g++) {
         int off = g * last_dim;
-        float mean = 0.0f;
-        for (int i = 0; i < last_dim; i++) mean += input->data.f32[off + i];
+        double mean = 0.0;
+        for (int i = 0; i < last_dim; i++) mean += tensor_getd(input, off + i);
         mean /= last_dim;
-        float var = 0.0f;
-        for (int i = 0; i < last_dim; i++) { float d = input->data.f32[off + i] - mean; var += d * d; }
+        double var = 0.0;
+        for (int i = 0; i < last_dim; i++) { double d = tensor_getd(input, off + i) - mean; var += d * d; }
         var /= last_dim;
-        float inv_std = 1.0f / sqrtf(var + 1e-5f);
+        double inv_std = 1.0 / sqrt(var + 1e-5);
         for (int i = 0; i < last_dim; i++) {
-            float norm = (input->data.f32[off + i] - mean) * inv_std;
-            float gv = (gamma && i < gamma->size) ? gamma->data.f32[i] : 1.0f;
-            float bv = (beta && i < beta->size) ? beta->data.f32[i] : 0.0f;
-            out->data.f32[off + i] = norm * gv + bv;
+            double norm = (tensor_getd(input, off + i) - mean) * inv_std;
+            double gv = (gamma && i < gamma->size) ? tensor_getd(gamma, i) : 1.0;
+            double bv = (beta && i < beta->size) ? tensor_getd(beta, i) : 0.0;
+            tensor_setd(out, off + i, norm * gv + bv);
         }
     }
 }
@@ -712,20 +716,20 @@ static void tensor_layernorm(Tensor *out, const Tensor *input, const Tensor *gam
 static void tensor_embedding(Tensor *out, const Tensor *table, const Tensor *indices) {
     int embed_dim = table->shape[1], seq_len = indices->size;
     int shape[] = {seq_len, embed_dim};
-    tensor_init(out, 2, shape);
+    tensor_init_typed(out, 2, shape, table->dtype);
     for (int i = 0; i < seq_len; i++) {
-        int idx = (int)indices->data.f32[i];
+        int idx = (int)tensor_getd(indices, i);
         if (idx >= 0 && idx < table->shape[0])
             for (int j = 0; j < embed_dim; j++)
-                out->data.f32[i * embed_dim + j] = table->data.f32[idx * embed_dim + j];
+                tensor_setd(out, i * embed_dim + j, tensor_getd(table, idx * embed_dim + j));
     }
 }
 
 static void tensor_gelu(Tensor *out, const Tensor *t) {
     tensor_copy(out, t);
     for (int i = 0; i < t->size; i++) {
-        float x = t->data.f32[i];
-        out->data.f32[i] = 0.5f * x * (1.0f + tanhf(0.7978845608f * (x + 0.044715f * x * x * x)));
+        double x = tensor_getd(t, i);
+        tensor_setd(out, i, 0.5 * x * (1.0 + tanh(0.7978845608 * (x + 0.044715 * x * x * x))));
     }
 }
 
@@ -745,36 +749,37 @@ static void tensor_gelu(Tensor *out, const Tensor *t) {
 static void tensor_reduce(Tensor *out, const Tensor *input, int op, int dim) {
     if (dim == -1) {
         int shape[] = {1};
-        tensor_init(out, 1, shape);
-        float r = input->data.f32[0];
+        tensor_init_typed(out, 1, shape, input->dtype);
+        double r = tensor_getd(input, 0);
         for (int i = 1; i < input->size; i++) {
+            double v = tensor_getd(input, i);
             switch (op) {
-                case RDUC_SUM: case RDUC_MEAN: r += input->data.f32[i]; break;
-                case RDUC_MAX: if (input->data.f32[i] > r) r = input->data.f32[i]; break;
-                case RDUC_MIN: if (input->data.f32[i] < r) r = input->data.f32[i]; break;
+                case RDUC_SUM: case RDUC_MEAN: r += v; break;
+                case RDUC_MAX: if (v > r) r = v; break;
+                case RDUC_MIN: if (v < r) r = v; break;
             }
         }
         if (op == RDUC_MEAN) r /= input->size;
-        out->data.f32[0] = r;
+        tensor_setd(out, 0, r);
     } else if (input->ndim == 2) {
         int rows = input->shape[0], cols = input->shape[1];
         if (dim == 0) {
             int shape[] = {1, cols};
-            tensor_init(out, 2, shape);
+            tensor_init_typed(out, 2, shape, input->dtype);
             for (int j = 0; j < cols; j++) {
-                float r = input->data.f32[j];
-                for (int i = 1; i < rows; i++) { float v = input->data.f32[i*cols+j]; switch(op){ case RDUC_SUM:case RDUC_MEAN:r+=v;break; case RDUC_MAX:if(v>r)r=v;break; case RDUC_MIN:if(v<r)r=v;break; }}
+                double r = tensor_getd(input, j);
+                for (int i = 1; i < rows; i++) { double v = tensor_getd(input, i*cols+j); switch(op){ case RDUC_SUM:case RDUC_MEAN:r+=v;break; case RDUC_MAX:if(v>r)r=v;break; case RDUC_MIN:if(v<r)r=v;break; }}
                 if (op == RDUC_MEAN) r /= rows;
-                out->data.f32[j] = r;
+                tensor_setd(out, j, r);
             }
         } else {
             int shape[] = {rows, 1};
-            tensor_init(out, 2, shape);
+            tensor_init_typed(out, 2, shape, input->dtype);
             for (int i = 0; i < rows; i++) {
-                float r = input->data.f32[i*cols];
-                for (int j = 1; j < cols; j++) { float v = input->data.f32[i*cols+j]; switch(op){ case RDUC_SUM:case RDUC_MEAN:r+=v;break; case RDUC_MAX:if(v>r)r=v;break; case RDUC_MIN:if(v<r)r=v;break; }}
+                double r = tensor_getd(input, i*cols);
+                for (int j = 1; j < cols; j++) { double v = tensor_getd(input, i*cols+j); switch(op){ case RDUC_SUM:case RDUC_MEAN:r+=v;break; case RDUC_MAX:if(v>r)r=v;break; case RDUC_MIN:if(v<r)r=v;break; }}
                 if (op == RDUC_MEAN) r /= cols;
-                out->data.f32[i] = r;
+                tensor_setd(out, i, r);
             }
         }
     }
@@ -783,14 +788,15 @@ static void tensor_reduce(Tensor *out, const Tensor *input, int op, int dim) {
 static void tensor_where(Tensor *out, const Tensor *cond, const Tensor *a, const Tensor *b) {
     tensor_copy(out, a);
     for (int i = 0; i < a->size; i++)
-        out->data.f32[i] = (cond->data.f32[i] > 0.0f) ? a->data.f32[i] : b->data.f32[i];
+        tensor_setd(out, i, (tensor_getd(cond, i) > 0.0) ? tensor_getd(a, i) : tensor_getd(b, i));
 }
 
 static void tensor_clamp(Tensor *out, const Tensor *input, float lo, float hi) {
     tensor_copy(out, input);
     for (int i = 0; i < input->size; i++) {
-        if (out->data.f32[i] < lo) out->data.f32[i] = lo;
-        if (out->data.f32[i] > hi) out->data.f32[i] = hi;
+        double v = tensor_getd(out, i);
+        if (v < lo) tensor_setd(out, i, lo);
+        if (v > hi) tensor_setd(out, i, hi);
     }
 }
 
@@ -826,28 +832,30 @@ static void tensor_compare(Tensor *out, const Tensor *a, float threshold, int cm
 static void tensor_fft(Tensor *out_real, Tensor *out_imag, const Tensor *input) {
     int N = input->size;
     int shape[] = {N};
-    tensor_init(out_real, 1, shape);
-    tensor_init(out_imag, 1, shape);
+    tensor_init_typed(out_real, 1, shape, input->dtype);
+    tensor_init_typed(out_imag, 1, shape, input->dtype);
     for (int k = 0; k < N; k++) {
-        float sr = 0.0f, si = 0.0f;
+        double sr = 0.0, si = 0.0;
         for (int n = 0; n < N; n++) {
-            float angle = -2.0f * 3.14159265358979f * k * n / N;
-            sr += input->data.f32[n] * cosf(angle);
-            si += input->data.f32[n] * sinf(angle);
+            double angle = -2.0 * 3.14159265358979 * k * n / N;
+            double v = tensor_getd(input, n);
+            sr += v * cos(angle);
+            si += v * sin(angle);
         }
-        out_real->data.f32[k] = sr;
-        out_imag->data.f32[k] = si;
+        tensor_setd(out_real, k, sr);
+        tensor_setd(out_imag, k, si);
     }
 }
 
 static void tensor_fir_filter(Tensor *out, const Tensor *input, const Tensor *coeffs) {
     int N = input->size, M = coeffs->size;
     int shape[] = {N};
-    tensor_init(out, 1, shape);
+    DType dt = dtype_promote(input->dtype, coeffs->dtype);
+    tensor_init_typed(out, 1, shape, dt);
     for (int n = 0; n < N; n++) {
-        float sum = 0.0f;
-        for (int k = 0; k < M; k++) { int idx = n - k; if (idx >= 0 && idx < N) sum += input->data.f32[idx] * coeffs->data.f32[k]; }
-        out->data.f32[n] = sum;
+        double sum = 0.0;
+        for (int k = 0; k < M; k++) { int idx = n - k; if (idx >= 0 && idx < N) sum += tensor_getd(input, idx) * tensor_getd(coeffs, k); }
+        tensor_setd(out, n, sum);
     }
 }
 
@@ -2977,11 +2985,18 @@ static int vm_execute(VM *vm) {
                 }
             }
 
+            int B = (N <= 64) ? N : 64;
+            int nbatch = (N + B - 1) / B;
+
             for (int epoch = 0; epoch < epochs; epoch++) {
                 loss = 0;
-                for (int sample = 0; sample < N; sample++) {
+                for (int batch = 0; batch < nbatch; batch++) {
+                    int s0 = batch * B;
+                    int Bn = (s0 + B <= N) ? B : N - s0;
+
+                    for (int sample = s0; sample < s0 + Bn; sample++) {
                     /* Forward: store activations for backward pass */
-                    double *prev_act = fwd_buf + (size_t)sample * buf_per_sample;
+                    double *prev_act = fwd_buf + (size_t)(sample - s0) * buf_per_sample;
                     int prev_n = layers[0].rows;
                     for (int j = 0; j < prev_n; j++)
                         prev_act[j] = tensor_getd(input, sample * prev_n + j);
@@ -2998,7 +3013,6 @@ static int vm_execute(VM *vm) {
                             double sum = tensor_getd(b, j);
                             for (int p = 0; p < in_sz; p++)
                                 sum += layer_acts[l][p] * tensor_getd(w, p * out_sz + j);
-                            /* Apply activation */
                             switch (layers[l].act) {
                                 case 0: cur_act[j] = sum > 0 ? sum : 0; break;
                                 case 1: cur_act[j] = 1.0 / (1.0 + exp(-sum)); break;
@@ -3021,7 +3035,7 @@ static int vm_execute(VM *vm) {
                     double d_buf2[1024];
                     double *d_cur = d_buf, *d_prev = d_buf2;
                     for (int j = 0; j < out_sz; j++)
-                        d_cur[j] = 2.0 * (final_act[j] - tensor_getd(target, sample * out_sz + j)) / N;
+                        d_cur[j] = 2.0 * (final_act[j] - tensor_getd(target, sample * out_sz + j)) / Bn;
 
                     size_t adam_off = total_params;
                     for (int l = n_layers - 1; l >= 0; l--) {
@@ -3086,7 +3100,8 @@ static int vm_execute(VM *vm) {
                             double *tmp = d_cur; d_cur = d_prev; d_prev = tmp;
                         }
                     }
-                }
+                    } /* end sample in batch */
+                } /* end batch */
                 loss /= N;
             }
 
