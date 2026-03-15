@@ -206,7 +206,11 @@ def main():
     parser.add_argument("--programs-per-round", type=int, default=500)
     parser.add_argument("--iters-per-round", type=int, default=1000)
     parser.add_argument("--target-exec", type=float, default=95.0, help="Target execution %")
-    parser.add_argument("--lr", type=float, default=3e-6)
+    parser.add_argument("--lr", type=float, default=1e-6)
+    parser.add_argument("--anchor-data", default=None, nargs="+",
+                        help="JSONL files with anchor pairs to mix in (prevents forgetting)")
+    parser.add_argument("--min-train-pairs", type=int, default=500,
+                        help="Minimum training pairs per round (padded from anchors)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -226,6 +230,17 @@ def main():
     current_model = args.model
     current_adapter = args.adapter
     resume_adapter = Path(args.initial_adapter) if args.initial_adapter else None
+
+    anchor_pairs = []
+    if args.anchor_data:
+        for path in args.anchor_data:
+            with open(path) as f:
+                for line in f:
+                    anchor_pairs.append(json.loads(line))
+        print(f"  Loaded {len(anchor_pairs)} anchor pairs from {len(args.anchor_data)} files")
+
+    all_verified = []
+    prev_exec_pct = 0
 
     for round_num in range(1, args.rounds + 1):
         print(f"\n{'═' * 60}")
@@ -248,29 +263,44 @@ def main():
         print(f"    Execute: {stats['execute_pass']}/{total} ({exec_pct:.1f}%)")
         print(f"    Verified: {len(verified)}, Repair: {len(repair)}")
 
+        if round_num > 1 and exec_pct < prev_exec_pct * 0.8:
+            print(f"\n  EARLY STOP: Accuracy dropped from {prev_exec_pct:.1f}% to {exec_pct:.1f}%")
+            print(f"  Rolling back to previous adapter.")
+            break
+
+        prev_exec_pct = exec_pct
+
         if exec_pct >= args.target_exec:
             print(f"\n  TARGET REACHED: {exec_pct:.1f}% >= {args.target_exec}%")
             print(f"  Stopping self-training.")
             break
 
+        all_verified.extend(verified)
+
+        train_pairs = list(verified)
+        if len(train_pairs) < args.min_train_pairs and anchor_pairs:
+            needed = args.min_train_pairs - len(train_pairs)
+            anchor_sample = random.sample(anchor_pairs, min(needed, len(anchor_pairs)))
+            train_pairs.extend(anchor_sample)
+            print(f"  Padded with {len(anchor_sample)} anchor pairs (total: {len(train_pairs)})")
+
+        if not train_pairs:
+            print("  No verified pairs generated. Skipping training.")
+            continue
+
         round_dir = output_dir / f"round_{round_num}"
         round_dir.mkdir(parents=True, exist_ok=True)
 
-        all_pairs = verified + repair
-        if not all_pairs:
-            print("  No training data generated. Skipping training.")
-            continue
-
-        random.shuffle(all_pairs)
-        split = int(len(all_pairs) * 0.9)
+        random.shuffle(train_pairs)
+        split = int(len(train_pairs) * 0.9)
         with open(round_dir / "train.jsonl", "w") as f:
-            for p in all_pairs[:split]:
+            for p in train_pairs[:split]:
                 f.write(json.dumps(p, ensure_ascii=False) + "\n")
         with open(round_dir / "valid.jsonl", "w") as f:
-            for p in all_pairs[split:]:
+            for p in train_pairs[split:]:
                 f.write(json.dumps(p, ensure_ascii=False) + "\n")
 
-        print(f"\n  Training on {len(all_pairs)} pairs...")
+        print(f"\n  Training on {len(train_pairs)} verified pairs (NO repair pairs)...")
         adapter_dir = output_dir / f"adapters_round_{round_num}"
 
         ok = run_training_round(
