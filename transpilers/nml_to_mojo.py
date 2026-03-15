@@ -342,13 +342,13 @@ struct Tensor(Movable, Copyable):
         self.data = List[Float64]()
         self.shape = List[Int]()
 
-    fn __copyinit__(out self, *, copy: Self):
-        self.data = copy.data.copy()
-        self.shape = copy.shape.copy()
+    fn __copyinit__(out self, existing: Self):
+        self.data = existing.data.copy()
+        self.shape = existing.shape.copy()
 
-    fn __moveinit__(out self, *, deinit take: Self):
-        self.data = take.data^
-        self.shape = take.shape^
+    fn __moveinit__(out self, owned existing: Self):
+        self.data = existing.data^
+        self.shape = existing.shape^
 
     fn __add__(self, other: Self) -> Self:
         var out = self.copy()
