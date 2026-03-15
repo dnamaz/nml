@@ -10,7 +10,7 @@ This document captures the design, rationale, and architecture for NML (Neural M
 
 The core thesis is simple: if AI generates the code and AI executes the code, then designing code for human eyes is an unnecessary constraint that slows down training, bloats runtimes, and limits where AI can run.
 
-We built a working system — a 49-instruction language covering neural networks, decision tree models, and general-purpose computation, with a browser-based emulator, a portable C runtime that compiles to ~51KB, a validated XGBoost-to-NML transpiler, a domain-specific rule transpiler (covering structured JSON rule definitions), and a tri-syntax system (classic/symbolic/verbose). Benchmarks show NML achieves 4.6x faster inference than XGBoost in Python, with a runtime 1,000x smaller, while generating programs that require 4x fewer tokens than equivalent Python.
+We built a working system — an 82-instruction language covering neural networks, decision trees, training (forward+backward), transformers, vision, signal processing, and general-purpose computation. The C99 runtime compiles to ~83KB. A 7B parameter model generates correct NML programs at 91% grammar / 84% execution accuracy. The M2M extensions enable signed, verifiable, distributable AI programs — a fraud detection model fits in 340 bytes and broadcasts to agent fleets in a single UDP packet. The NML Collective provides autonomous peer-to-peer agent meshes with zero-config discovery.
 
 ---
 
@@ -742,3 +742,174 @@ NML is not a better programming language. It's a bet that programming languages 
 The proof of concept is no longer theoretical. We have a working transpiler that converts structured domain rule files to NML programs with zero errors. We have a ~51KB runtime that executes those programs in microseconds. We have a tri-syntax system where the same program can be expressed in dense symbolic form (for LLM training), classic assembly mnemonics (for developers), or fully verbose English (for auditors) — all producing identical bytecode. The training dataset is prepared and ready for fine-tuning.
 
 The next step is running the training experiment that proves — or disproves — that a model trained to generate NML converges meaningfully faster than one trained on Python for the same tasks. If it does, everything else follows.
+
+---
+
+## Appendix: Current State (v0.8.1)
+
+*This section reflects the system as built, updated from the original vision above.*
+
+### System Architecture
+
+```mermaid
+flowchart TB
+    subgraph core [NML Core — github.com/dnamaz/nml]
+        runtime["runtime/nml.c\n~3400 lines C99\n83 KB binary\n82 opcodes"]
+        crypto["runtime/nml_crypto.h\nEd25519 + HMAC-SHA256\nruntime/tweetnacl.c"]
+        grammar["transpilers/nml_grammar.py\nGrammar validator"]
+        training["transpilers/\n14+ training generators\n~440K pairs"]
+        server["serve/nml_server.py\nMCP + HTTP + LLM chat"]
+    end
+    subgraph collective [NML Collective — github.com/dnamaz/nml-collective]
+        agent["serve/nml_collective.py\nAutonomous gossip agent"]
+        relay["serve/nml_relay.py\nWebSocket WAN relay"]
+        dashboard["dashboard/\nReal-time web UI"]
+    end
+    subgraph model [Trained Models — private]
+        nml_next["nml-next-merged\n7B params, 84% exec"]
+        base["Qwen2.5-Coder-7B\nBase model"]
+    end
+    runtime --> server
+    crypto --> runtime
+    server --> agent
+    training --> model
+    model --> server
+    agent --> dashboard
+    agent <--> relay
+```
+
+### Instruction Set (82 Opcodes)
+
+```mermaid
+graph LR
+    subgraph core35 [Core — 35]
+        arith[Arithmetic: MMUL MADD MSUB EMUL EDIV SDOT SCLR SDIV]
+        act[Activation: RELU SIGM TANH SOFT]
+        mem[Memory: LD ST MOV ALLC]
+        flow[Data Flow: RSHP TRNS SPLT MERG]
+        cmp[Compare: CMPF CMP CMPI]
+        ctrl[Control: JMPT JMPF JUMP LOOP ENDP]
+        sub[Subroutine: CALL RET]
+        tree[Tree: LEAF TACC]
+        sys[System: SYNC HALT TRAP]
+    end
+    subgraph ext47 [Extensions — 47]
+        vision[NML-V: CONV POOL UPSC PADZ]
+        transformer[NML-T: ATTN NORM EMBD GELU]
+        reduction[NML-R: RDUC WHER CLMP CMPR]
+        signal_ext[NML-S: FFT FILT]
+        m2m[NML-M2M: META FRAG ENDF LINK PTCH SIGN VRFY VOTE PROJ DIST GATH SCAT]
+        tr[NML-TR: BKWD WUPD LOSS TNET + 11 backward ops]
+        gen[NML-G: SYS MOD ITOF FTOI BNOT]
+    end
+```
+
+### M2M Signed Distribution Flow
+
+```mermaid
+sequenceDiagram
+    participant Auth as Authority
+    participant NML as nml-crypto
+    participant A1 as Agent 1
+    participant A2 as Agent 2
+    participant A3 as Agent 3
+
+    Auth->>NML: --keygen (Ed25519)
+    NML-->>Auth: private_key : public_key
+
+    Auth->>NML: --sign program.nml --key private_key
+    NML-->>Auth: signed.nml (public key in header)
+
+    Auth->>A1: Submit signed program
+    A1->>A1: VRFY signature (Ed25519)
+    A1->>A1: Execute (TNET train + infer)
+    
+    A1->>A2: UDP multicast (340 bytes)
+    A1->>A3: UDP multicast (340 bytes)
+    
+    A2->>A2: VRFY + Execute
+    A3->>A3: VRFY + Execute
+    
+    A1-->>Auth: score=0.7362
+    A2-->>Auth: score=0.7226
+    A3-->>Auth: score=0.7354
+    
+    Auth->>Auth: VOTE median = 0.7354
+
+    Auth->>NML: --patch (update threshold)
+    NML-->>Auth: patched.nml
+    Auth->>NML: --sign patched.nml
+    Auth->>A1: Re-distribute
+```
+
+### Agent Collective Architecture
+
+```mermaid
+flowchart TB
+    subgraph discovery [Discovery — 4 layers]
+        mdns["mDNS/Bonjour\n_nml._tcp.local.\nLAN, zero-config"]
+        udp["UDP Multicast\n239.78.77.76:7776\nSame subnet, 11µs"]
+        wan_relay["WebSocket Relay\nws://relay:7777\nCross-network, NAT-friendly"]
+        seeds["HTTP Seeds\n--seeds URL\nManual fallback"]
+    end
+    subgraph agent_node [Each Agent]
+        http_api[HTTP API\n/submit /broadcast\n/consensus /results]
+        ws_push[WebSocket /ws\nReal-time push]
+        dash_serve[/dashboard\nSelf-hosted UI]
+        exec[NML Runtime\nVerify → Assemble → Execute]
+    end
+    mdns --> agent_node
+    udp --> agent_node
+    wan_relay --> agent_node
+    seeds --> agent_node
+```
+
+### Training Pipeline
+
+```mermaid
+flowchart LR
+    subgraph generators [Training Data Generators]
+        core["nml_core_training_gen.py\n105K pairs"]
+        boost["nml_boost_gen.py\n26K pairs"]
+        realworld["nml_realworld_gen.py\n3.5K pairs"]
+        cmpi["nml_cmpi_fix_gen.py\n1K pairs"]
+        gap["nml_gap_training_gen.py\n3.2K pairs"]
+    end
+    subgraph pipeline [Fine-Tuning]
+        data["nml_round_next.jsonl\n34K pairs"]
+        train["finetune_pipeline.py\nLoRA, 5K iters"]
+        merge["Merge adapters"]
+    end
+    subgraph eval [Evaluation]
+        verify["nml_verify_gen.py\n89 prompts"]
+        results["Grammar: 91%\nExecution: 84%"]
+    end
+    generators --> data
+    data --> train
+    train --> merge
+    merge --> eval
+    verify --> results
+```
+
+### Key Metrics
+
+| Metric | Value |
+|--------|-------|
+| Opcodes | 82 (35 core + 47 extensions) |
+| Runtime binary | 83 KB (stripped) |
+| Runtime source | ~3,400 lines C99 |
+| Crypto | Ed25519 + HMAC-SHA256 (TweetNaCl, public domain) |
+| Compact program size | 340 bytes (fraud detection, 23 instructions) |
+| UDP broadcast latency | 11 µs median |
+| Training pairs | ~440K across 14+ generators |
+| Model accuracy | 91% grammar, 84% execution (89 prompts) |
+| TNET training speed | 166x faster than Python/NumPy |
+| Inference latency | 34 µs (anomaly detector, 18 instructions) |
+
+### Repository Structure (Post-Split)
+
+| Repository | Purpose | Visibility |
+|------------|---------|------------|
+| [dnamaz/nml](https://github.com/dnamaz/nml) | Core runtime, ISA, crypto, spec, training | Public |
+| [dnamaz/nml-collective](https://github.com/dnamaz/nml-collective) | Agent mesh, relay, dashboard, demos | Public |
+| domain/ (local) | Trained models, training data | Private |
