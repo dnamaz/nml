@@ -283,7 +283,7 @@ def emit_instruction(ins: NMLInstruction, indent: str = "    ") -> list[str]:
         lines.append(f"regs[8] = tndeep_train(regs, epochs={imm(0)}, lr={imm(1)}, optimizer={imm(2) if len(ops) > 2 else '0'})")
 
     elif op == "HALT":
-        lines.append("return regs, mem")
+        lines.append("return (regs^, mem^)")
     elif op == "SYNC":
         lines.append("barrier()")
     elif op == "TRAP":
@@ -324,16 +324,16 @@ MOJO_PRELUDE = '''\
 # Auto-generated from NML by nml_to_mojo.py
 # NML: 82-opcode tensor register machine -> Mojo CPU code
 #
-# Requires: Mojo SDK
+# Requires: Mojo SDK >= 0.26
 # Run: mojo run {filename}
 
-from collections import Dict
-from math import exp, tanh, sqrt
+from std.collections import Dict
+from std.math import exp, tanh, sqrt
 
-alias NUM_REGS = 32
+comptime NUM_REGS = 32
 
 
-struct Tensor:
+struct Tensor(Movable, Copyable):
     """Minimal tensor stub — replace with MAX Tensor for GPU support."""
     var data: List[Float64]
     var shape: List[Int]
@@ -342,12 +342,45 @@ struct Tensor:
         self.data = List[Float64]()
         self.shape = List[Int]()
 
+    fn __copyinit__(out self, *, copy: Self):
+        self.data = copy.data.copy()
+        self.shape = copy.shape.copy()
+
+    fn __moveinit__(out self, *, deinit take: Self):
+        self.data = take.data^
+        self.shape = take.shape^
+
+    fn __add__(self, other: Self) -> Self:
+        var out = self.copy()
+        for i in range(min(len(self.data), len(other.data))):
+            out.data[i] += other.data[i]
+        return out^
+
+    fn __sub__(self, other: Self) -> Self:
+        var out = self.copy()
+        for i in range(min(len(self.data), len(other.data))):
+            out.data[i] -= other.data[i]
+        return out^
+
+    fn __mul__(self, other: Self) -> Self:
+        var out = self.copy()
+        for i in range(min(len(self.data), len(other.data))):
+            out.data[i] *= other.data[i]
+        return out^
+
+    fn __truediv__(self, other: Self) -> Self:
+        var out = self.copy()
+        for i in range(min(len(self.data), len(other.data))):
+            if other.data[i] != 0:
+                out.data[i] /= other.data[i]
+        return out^
+
     @staticmethod
     fn scalar(val: Float64) -> Tensor:
         var t = Tensor()
         t.data.append(val)
         t.shape.append(1)
-        return t
+        return t^
 
     @staticmethod
     fn zeros(size: Int) -> Tensor:
@@ -355,13 +388,13 @@ struct Tensor:
         for _ in range(size):
             t.data.append(0.0)
         t.shape.append(size)
-        return t
+        return t^
 
     fn copy(self) -> Tensor:
         var t = Tensor()
-        t.data = self.data
-        t.shape = self.shape
-        return t
+        t.data = self.data.copy()
+        t.shape = self.shape.copy()
+        return t^
 
     fn item(self) -> Float64:
         if len(self.data) > 0:
@@ -369,21 +402,27 @@ struct Tensor:
         return 0.0
 
 
+fn _make_shape2(a: Int, b: Int) -> List[Int]:
+    var s = List[Int]()
+    s.append(a)
+    s.append(b)
+    return s^
+
+
 fn matmul(a: Tensor, b: Tensor) -> Tensor:
     """Matrix multiply — dispatch to GPU via MAX for large tensors."""
-    # TODO: Replace with MAX linalg.matmul for GPU acceleration
     var m = a.shape[0] if len(a.shape) >= 2 else 1
     var k = a.shape[1] if len(a.shape) >= 2 else a.shape[0]
     var n = b.shape[1] if len(b.shape) >= 2 else 1
     var out = Tensor.zeros(m * n)
-    out.shape = List[Int](m, n)
+    out.shape = _make_shape2(m, n)
     for i in range(m):
         for j in range(n):
             var s: Float64 = 0.0
             for p in range(k):
                 s += a.data[i * k + p] * b.data[p * n + j]
             out.data[i * n + j] = s
-    return out
+    return out^
 
 
 fn relu(t: Tensor) -> Tensor:
@@ -391,21 +430,21 @@ fn relu(t: Tensor) -> Tensor:
     for i in range(len(out.data)):
         if out.data[i] < 0:
             out.data[i] = 0.0
-    return out
+    return out^
 
 
 fn sigmoid(t: Tensor) -> Tensor:
     var out = t.copy()
     for i in range(len(out.data)):
         out.data[i] = 1.0 / (1.0 + exp(-out.data[i]))
-    return out
+    return out^
 
 
 fn tanh_act(t: Tensor) -> Tensor:
     var out = t.copy()
     for i in range(len(out.data)):
         out.data[i] = tanh(out.data[i])
-    return out
+    return out^
 
 
 fn softmax(t: Tensor) -> Tensor:
@@ -420,7 +459,7 @@ fn softmax(t: Tensor) -> Tensor:
         s += out.data[i]
     for i in range(len(out.data)):
         out.data[i] /= s
-    return out
+    return out^
 
 
 fn gelu(t: Tensor) -> Tensor:
@@ -428,38 +467,38 @@ fn gelu(t: Tensor) -> Tensor:
     for i in range(len(out.data)):
         var x = out.data[i]
         out.data[i] = 0.5 * x * (1.0 + tanh(0.7978845608 * (x + 0.044715 * x * x * x)))
-    return out
+    return out^
 
 
 fn relu_backward(grad: Tensor, inp: Tensor) -> Tensor:
     var out = Tensor.zeros(len(grad.data))
-    out.shape = inp.shape
+    out.shape = inp.shape.copy()
     for i in range(len(grad.data)):
         out.data[i] = grad.data[i] if inp.data[i] > 0 else 0.0
-    return out
+    return out^
 
 
 fn sigmoid_backward(grad: Tensor, inp: Tensor) -> Tensor:
     var out = Tensor.zeros(len(grad.data))
-    out.shape = inp.shape
+    out.shape = inp.shape.copy()
     for i in range(len(grad.data)):
         var s = 1.0 / (1.0 + exp(-inp.data[i]))
         out.data[i] = grad.data[i] * s * (1.0 - s)
-    return out
+    return out^
 
 
 fn tanh_backward(grad: Tensor, inp: Tensor) -> Tensor:
     var out = Tensor.zeros(len(grad.data))
-    out.shape = inp.shape
+    out.shape = inp.shape.copy()
     for i in range(len(grad.data)):
         var t = tanh(inp.data[i])
         out.data[i] = grad.data[i] * (1.0 - t * t)
-    return out
+    return out^
 
 
 fn gelu_backward(grad: Tensor, inp: Tensor) -> Tensor:
     var out = Tensor.zeros(len(grad.data))
-    out.shape = inp.shape
+    out.shape = inp.shape.copy()
     for i in range(len(grad.data)):
         var x = inp.data[i]
         var inner = 0.7978845608 * (x + 0.044715 * x * x * x)
@@ -467,17 +506,7 @@ fn gelu_backward(grad: Tensor, inp: Tensor) -> Tensor:
         var sech2 = 1.0 - t * t
         var dg = 0.5 * (1.0 + t) + 0.5 * x * sech2 * 0.7978845608 * (1.0 + 3.0 * 0.044715 * x * x)
         out.data[i] = grad.data[i] * dg
-    return out
-
-
-fn matmul_backward(grad: Tensor, inp: Tensor, weight: Tensor) -> Tuple[Tensor, Tensor]:
-    """d_input = grad @ weight^T, d_weight = input^T @ grad"""
-    # TODO: GPU-dispatch via MAX
-    var wt = transpose(weight)
-    var d_input = matmul(grad, wt)
-    var it = transpose(inp)
-    var d_weight = matmul(it, grad)
-    return (d_input, d_weight)
+    return out^
 
 
 fn transpose(t: Tensor) -> Tensor:
@@ -486,11 +515,11 @@ fn transpose(t: Tensor) -> Tensor:
     var r = t.shape[0]
     var c = t.shape[1]
     var out = Tensor.zeros(r * c)
-    out.shape = List[Int](c, r)
+    out.shape = _make_shape2(c, r)
     for i in range(r):
         for j in range(c):
             out.data[j * r + i] = t.data[i * c + j]
-    return out
+    return out^
 
 
 fn mse_loss(pred: Tensor, target: Tensor) -> Tensor:
@@ -510,7 +539,7 @@ def transpile(prog: NMLProgram, source_name: str = "program.nml", use_max: bool 
     prelude = MOJO_MAX_PRELUDE if use_max else MOJO_PRELUDE
     lines = [prelude.replace("{filename}", source_name)]
 
-    lines.append(f"fn nml_main() -> Tuple[List[Tensor], Dict[String, Tensor]]:")
+    lines.append(f"fn nml_main() raises -> Tuple[List[Tensor], Dict[String, Tensor]]:")
     lines.append(f"    var regs = List[Tensor]()")
     lines.append(f"    for _ in range(NUM_REGS):")
     lines.append(f"        regs.append(Tensor())")
@@ -541,11 +570,11 @@ def transpile(prog: NMLProgram, source_name: str = "program.nml", use_max: bool 
             lines.append(code)
 
     if not any(ins.opcode == "HALT" for ins in prog.instructions):
-        lines.append(f"    return regs, mem")
+        lines.append(f"    return (regs^, mem^)")
 
     lines.append("")
-    lines.append("fn main():")
-    lines.append('    var regs, mem = nml_main()')
+    lines.append("fn main() raises:")
+    lines.append('    var result = nml_main()')
     lines.append('    print("NML program complete.")')
     lines.append("")
     return "\n".join(lines)
