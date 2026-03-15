@@ -482,38 +482,49 @@ def gen_tndeep(count):
         "Use TNDEEP for fused {n}-layer training with {opt}",
         "Train a {n}-layer network with TNDEEP (epochs={ep}, lr={lr})",
         "NML fused deep training: TNDEEP with {n} layers",
+        "Write NML using TNDEEP to train a {desc} network",
+        "Use TNDEEP with {opt} optimizer to train on input data for {ep} epochs",
+        "Write NML that loads weights into R1-R4, architecture into RV, and calls TNDEEP",
+        "Train a neural network using the TNDEEP opcode with architecture descriptor in RV",
+        "Write NML for TNDEEP: load R0=input, R9=target, R1/R2=w1/b1, R3/R4=w2/b2, RV=arch, then TNDEEP",
+        "Use the TNDEEP fused training opcode to train a {n}-layer {desc} network with {opt}",
     ]
     configs = [
-        (2, [4, 0, 1, 0]),     # 2 layers: hidden=4 ReLU, output=1 ReLU
-        (2, [8, 0, 1, 1]),     # 2 layers: hidden=8 ReLU, output=1 sigmoid
-        (3, [8, 0, 4, 0, 1, 0]),  # 3 layers
-        (2, [16, 0, 1, 0]),    # wider
-        (2, [4, 2, 1, 1]),     # tanh + sigmoid
+        (2, [4, 0, 1, 0], "2-layer 4-hidden ReLU"),
+        (2, [8, 0, 1, 1], "2-layer 8-hidden ReLU+sigmoid"),
+        (3, [8, 0, 4, 0, 1, 0], "3-layer 8-4-1"),
+        (2, [16, 0, 1, 0], "2-layer 16-hidden ReLU"),
+        (2, [4, 2, 1, 1], "2-layer tanh+sigmoid"),
+        (2, [4, 0, 1, 0], "2-layer 4-hidden ReLU"),
+        (2, [8, 1, 1, 0], "2-layer sigmoid+ReLU"),
+        (2, [32, 0, 1, 0], "2-layer 32-hidden ReLU"),
     ]
     for _ in range(count):
         syntax = pick_syntax()
-        n_layers, arch = random.choice(configs)
+        n_layers, arch, desc = random.choice(configs)
         opt = random.choice(["SGD", "Adam"])
         opt_val = "0" if opt == "SGD" else "1"
         lr = _lr()
         ep = _epochs()
-        q = random.choice(prompts).format(n=n_layers, opt=opt, ep=ep, lr=lr) + syntax_tag(syntax)
+        q = random.choice(prompts).format(n=n_layers, opt=opt, ep=ep, lr=lr, desc=desc) + syntax_tag(syntax)
 
         arch_data = [float(n_layers)] + [float(x) for x in arch]
-        arch_str = ",".join(str(x) for x in arch_data)
 
         lines = [
+            f"; TNDEEP: {desc} with {opt}",
+            f"; Register convention: R0=input, R1=w1, R2=b1, R3=w2, R4=b2, R9=target, RV=arch",
             _fmt("LD", "R0", "@training_input"),
             _fmt("LD", "R9", "@training_target"),
         ]
         for i in range(n_layers):
             lines.append(_fmt("LD", f"R{1 + i*2}", f"@w{i+1}"))
             lines.append(_fmt("LD", f"R{2 + i*2}", f"@b{i+1}"))
+        lines.append(f"; Architecture: {arch_data}")
         lines.append(_fmt("LD", "RV", "@architecture"))
         lines.append(_fmt("TNDEEP", f"#{ep}", f"#{lr}", f"#{opt_val}"))
         lines.append(_fmt("ST", "R8", "@final_loss"))
         lines.append("HALT")
-        pairs.append(_pair(q, apply_syntax(lines, syntax)))
+        pairs.append(_pair(q, apply_syntax([l for l in lines], syntax)))
     return pairs
 
 

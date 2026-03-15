@@ -313,6 +313,40 @@ def main():
             resume_adapter = adapter_dir / "adapters.safetensors"
             current_adapter = str(adapter_dir)
             print(f"  Round {round_num} training complete.")
+
+            metrics = {
+                "round": round_num,
+                "grammar_pass": stats["grammar_pass"],
+                "grammar_total": total,
+                "grammar_pct": round(grammar_pct, 1),
+                "execute_pass": stats["execute_pass"],
+                "execute_total": total,
+                "execute_pct": round(exec_pct, 1),
+                "verified": len(verified),
+                "repair": len(repair),
+                "train_pairs": len(train_pairs),
+                "adapter": str(adapter_dir),
+            }
+            with open(round_dir / "metrics.json", "w") as f:
+                json.dump(metrics, f, indent=2)
+            print(f"  Metrics saved to {round_dir / 'metrics.json'}")
+
+            print(f"\n  Post-training verification (50 prompts)...")
+            post_verified, _, post_stats = run_verification_round(
+                current_model, current_adapter, runtime,
+                expand_prompts(50)
+            )
+            post_total = post_stats["total"]
+            post_exec = post_stats["execute_pass"] / post_total * 100 if post_total else 0
+            post_gram = post_stats["grammar_pass"] / post_total * 100 if post_total else 0
+            print(f"  Post-training: grammar={post_gram:.1f}%, exec={post_exec:.1f}%")
+
+            if post_exec < prev_exec_pct * 0.7:
+                print(f"\n  ROLLBACK: Post-training exec {post_exec:.1f}% < 70% of pre-training {prev_exec_pct:.1f}%")
+                print(f"  Reverting to previous adapter.")
+                resume_adapter = Path(args.initial_adapter) if args.initial_adapter else None
+                current_adapter = args.adapter
+                break
         else:
             print(f"  Round {round_num} training FAILED.")
             break
