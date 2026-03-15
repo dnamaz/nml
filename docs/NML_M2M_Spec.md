@@ -6,6 +6,26 @@ NML v0.6 adds 13 new instructions and a type annotation system for machine-to-ma
 
 All existing v0.5 programs run unchanged. The new instructions use 13 of the 15 remaining opcode slots (6-bit field supports 64 total; v0.5 uses 49), leaving 2 spare for future use.
 
+### Implementation Status (v0.8.1)
+
+| Opcode | Runtime Status | Notes |
+|--------|---------------|-------|
+| META | Implemented | Assembly-time metadata, `--describe` flag |
+| FRAG/ENDF | **Implemented** | Assembly-time fragment scoping via `vm_resolve_fragments()` |
+| LINK | **Implemented** | Inline expansion at assembly time |
+| PTCH | **Implemented** | CLI tool: `nml-crypto program.nml --patch patch.ptch` |
+| SIGN | **Implemented** | CLI: `nml-crypto --sign program.nml --key <hex> --agent <name>` (HMAC-SHA256) |
+| VRFY | **Implemented** | Loader guard: auto-verifies before assembly, TRAP on failure |
+| VOTE | Implemented | Runtime opcode: median, mean, quorum, min, max |
+| PROJ | Implemented | Runtime opcode: matmul + L2 normalize |
+| DIST | Implemented | Runtime opcode: cosine, euclidean, dot product |
+| GATH | Implemented | Runtime opcode: tensor index lookup |
+| SCAT/SCTR | Implemented | Runtime opcode: tensor index write |
+
+Build with `make nml-crypto` (`-DNML_CRYPTO`) for SIGN/VRFY/PTCH. Without it, SIGN/VRFY are no-ops (backward compatible).
+
+End-to-end demo: `bash demos/distributed_fraud.sh`
+
 ## New Instructions Summary
 
 | Opcode | Classic | Symbolic | Verbose | Category | Purpose |
@@ -279,9 +299,30 @@ VRFY  @hash  @signer
 ### Compile-Time Control
 
 ```bash
-gcc -O2 -DNML_CRYPTO -o nml-signed runtime/nml.c -lm  # With verification
+make nml-crypto                                        # With HMAC-SHA256 verification
+make nml                                               # SIGN=nop, VRFY=pass (default)
+
+# Or directly:
+gcc -O2 -DNML_CRYPTO -o nml-crypto runtime/nml.c -lm  # With verification
 gcc -O2 -o nml runtime/nml.c -lm                       # SIGN=nop, VRFY=pass
 ```
+
+### Signing and Verification (CLI)
+
+```bash
+# Sign a program
+./nml-crypto --sign program.nml --key deadbeef01020304 --agent authority_v1 > signed.nml
+
+# Execute signed program (auto-verifies)
+./nml-crypto signed.nml data.nml.data
+# → [NML] Signature verified — signed by agent 'authority_v1'
+
+# Tampered programs are rejected
+./nml-crypto tampered.nml data.nml.data
+# → [NML] SIGNATURE VERIFICATION FAILED (code -3) — refusing to execute
+```
+
+**Note:** The current implementation uses HMAC-SHA256 (symmetric key). The key is embedded in the SIGN header. For production use with untrusted agents, Ed25519 (asymmetric) should be used — the crypto header (`runtime/nml_crypto.h`) is designed to be extended.
 
 ---
 

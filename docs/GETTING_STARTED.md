@@ -261,19 +261,57 @@ HALT
 
 TNET trains the network defined by R1–R4 (weight/bias pairs for up to 2 layers) using input R0 and target R9. After training, RA holds the final prediction.
 
+## Fraud Detection Example (Train + Infer + Decide)
+
+A complete ML pipeline in 23 instructions:
+
+```bash
+./nml programs/fraud_detection.nml programs/fraud_detection.nml.data
+```
+
+The program trains a 6→8→1 network on labeled transactions using TNET, classifies a new transaction, and flags it as fraud if the score >= 0.5. See `programs/fraud_detection.nml` for the full source.
+
+## Signed Programs (M2M)
+
+Build with crypto support to sign and verify programs:
+
+```bash
+make nml-crypto
+
+# Sign a program
+./nml-crypto --sign programs/fraud_detection.nml --key deadbeef01020304 --agent authority > signed.nml
+
+# Verify and execute (tampered programs are rejected)
+./nml-crypto signed.nml programs/fraud_detection.nml.data
+
+# Run the full distributed demo
+bash demos/distributed_fraud.sh
+```
+
 ## Command-Line Options
 
 ```bash
-./nml program.nml [data.nml.data] [--trace] [--max-cycles N]
+./nml program.nml [data.nml.data] [--trace] [--max-cycles N] [--fragment NAME]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--trace` | Print each instruction as it executes (to stderr) |
+| `--trace` | Print each instruction as it executes |
 | `--max-cycles N` | Override the default 1,000,000 cycle limit |
+| `--fragment NAME` | Run only the named fragment (for FRAG/LINK programs) |
+| `--describe` | Print META metadata without executing |
+
+With `nml-crypto` build:
+
+| Flag | Description |
+|------|-------------|
+| `--sign` | Sign a program (requires `--key`) |
+| `--key <hex>` | HMAC key in hex for signing |
+| `--agent <name>` | Signer identity for SIGN header |
+| `--patch <file>` | Apply differential patch (@set/@del/@ins) |
 
 ## Next Steps
 
 - [NML Specification](NML_SPEC.md) — full instruction set reference with encoding details
 - [Usage Guide](NML_Usage_Guide.md) — all 82 instructions with detailed examples
-- [M2M Specification](NML_M2M_Spec.md) — machine-to-machine extensions
+- [M2M Specification](NML_M2M_Spec.md) — machine-to-machine extensions (SIGN/VRFY, FRAG/LINK, PTCH)

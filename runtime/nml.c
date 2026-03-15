@@ -80,6 +80,10 @@
 #include <math.h>
 #include <time.h>
 
+#ifdef NML_CRYPTO
+#include "nml_crypto.h"
+#endif
+
 #ifndef NML_NO_DEFAULT_EXTENSIONS
   #ifndef NML_EXT_VISION
     #define NML_EXT_VISION
@@ -1225,6 +1229,12 @@ typedef struct {
     char        error_msg[256];
     unsigned    extensions;
     ProgramDescriptor descriptor;
+#ifdef NML_CRYPTO
+    int         signed_program;
+    char        signer_agent[64];
+    char        sign_key_hex[129];
+    char        sign_sig_hex[65];
+#endif
 } VM;
 
 #define EXT_VISION      0x01
@@ -1879,6 +1889,154 @@ static int vm_assemble(VM *vm, const char *source) {
 }
 
 /* ═══════════════════════════════════════════
+   FRAGMENT RESOLUTION (M2M)
+   ═══════════════════════════════════════════ */
+
+#ifndef NML_NO_M2M
+#define NML_MAX_FRAGMENTS 64
+
+typedef struct {
+    char name[NML_MAX_LABEL_LEN];
+    int  start;  /* first instruction AFTER the FRAG opcode */
+    int  end;    /* instruction index of the ENDF opcode */
+} FragmentEntry;
+
+static int vm_resolve_fragments(VM *vm, const char *entry_fragment) {
+    FragmentEntry frags[NML_MAX_FRAGMENTS];
+    int frag_count = 0;
+
+    /* Pass 1: Build fragment table */
+    int in_frag = 0;
+    for (int i = 0; i < vm->program_len; i++) {
+        Instruction *ins = &vm->program[i];
+        if (ins->op == OP_FRAG) {
+            if (in_frag) {
+                fprintf(stderr, "ERROR: Nested FRAG '%s' at instruction %d\n", ins->addr, i);
+                return NML_ERR_ASSEMBLE;
+            }
+            if (frag_count >= NML_MAX_FRAGMENTS) {
+                fprintf(stderr, "ERROR: Too many fragments (max %d)\n", NML_MAX_FRAGMENTS);
+                return NML_ERR_ASSEMBLE;
+            }
+            in_frag = 1;
+            strncpy(frags[frag_count].name, ins->addr, NML_MAX_LABEL_LEN - 1);
+            frags[frag_count].start = i + 1;
+            frags[frag_count].end = -1;
+        } else if (ins->op == OP_ENDF) {
+            if (!in_frag) {
+                fprintf(stderr, "ERROR: ENDF without matching FRAG at instruction %d\n", i);
+                return NML_ERR_ASSEMBLE;
+            }
+            frags[frag_count].end = i;
+            frag_count++;
+            in_frag = 0;
+        }
+    }
+    if (in_frag) {
+        fprintf(stderr, "ERROR: FRAG without matching ENDF\n");
+        return NML_ERR_ASSEMBLE;
+    }
+
+    if (frag_count == 0) return NML_OK;
+
+    /* Find entry fragment (default: "main", or --fragment NAME) */
+    const char *entry = entry_fragment ? entry_fragment : "main";
+    int entry_idx = -1;
+    for (int f = 0; f < frag_count; f++) {
+        if (strcmp(frags[f].name, entry) == 0) { entry_idx = f; break; }
+    }
+
+    if (entry_idx < 0) {
+        /* No main fragment — run the whole program as-is (backward compatible) */
+        return NML_OK;
+    }
+
+    /* Pass 2: Expand the entry fragment, resolving LINKs inline */
+    Instruction expanded[NML_MAX_INSTRUCTIONS];
+    int exp_len = 0;
+
+    /* Helper: copy fragment body into expanded, recursively resolving LINKs */
+    /* Use a stack to prevent infinite recursion */
+    int link_stack[NML_MAX_FRAGMENTS];
+    int link_depth = 0;
+
+    /* Iterative expansion using a work queue */
+    typedef struct { int frag_idx; int pos; } WorkItem;
+    WorkItem work[NML_MAX_INSTRUCTIONS];
+    int work_len = 0;
+
+    /* Seed with the entry fragment's instructions */
+    for (int i = frags[entry_idx].start; i < frags[entry_idx].end; i++) {
+        if (work_len >= NML_MAX_INSTRUCTIONS) break;
+        work[work_len].frag_idx = entry_idx;
+        work[work_len].pos = i;
+        work_len++;
+    }
+
+    /* Process work items, expanding LINKs */
+    int wi = 0;
+    while (wi < work_len && exp_len < NML_MAX_INSTRUCTIONS) {
+        int idx = work[wi].pos;
+        Instruction *ins = &vm->program[idx];
+        wi++;
+
+        if (ins->op == OP_LINK) {
+            /* Find the referenced fragment */
+            const char *link_name = ins->addr;
+            if (link_name[0] == '@') link_name++;
+
+            int found = -1;
+            for (int f = 0; f < frag_count; f++) {
+                if (strcmp(frags[f].name, link_name) == 0) { found = f; break; }
+            }
+            if (found < 0) {
+                fprintf(stderr, "ERROR: LINK references unknown fragment '%s'\n", link_name);
+                return NML_ERR_ASSEMBLE;
+            }
+
+            /* Check for circular references */
+            for (int d = 0; d < link_depth; d++) {
+                if (link_stack[d] == found) {
+                    fprintf(stderr, "ERROR: Circular LINK detected for fragment '%s'\n", link_name);
+                    return NML_ERR_ASSEMBLE;
+                }
+            }
+
+            /* Insert the fragment's instructions into the work queue */
+            int frag_len = frags[found].end - frags[found].start;
+            int remaining = work_len - wi;
+
+            if (wi + frag_len + remaining > NML_MAX_INSTRUCTIONS) {
+                fprintf(stderr, "ERROR: LINK expansion exceeds max instructions\n");
+                return NML_ERR_ASSEMBLE;
+            }
+
+            /* Shift remaining work items forward */
+            memmove(&work[wi + frag_len], &work[wi], remaining * sizeof(WorkItem));
+            work_len += frag_len;
+
+            /* Insert the linked fragment's instructions */
+            for (int j = 0; j < frag_len; j++) {
+                work[wi + j].frag_idx = found;
+                work[wi + j].pos = frags[found].start + j;
+            }
+        } else if (ins->op == OP_FRAG || ins->op == OP_ENDF) {
+            /* Skip fragment markers */
+            continue;
+        } else {
+            expanded[exp_len++] = *ins;
+        }
+    }
+
+    /* Replace the program with the expanded version */
+    memcpy(vm->program, expanded, exp_len * sizeof(Instruction));
+    vm->program_len = exp_len;
+
+    return NML_OK;
+}
+#endif /* NML_NO_M2M */
+
+/* ═══════════════════════════════════════════
    STATIC VALIDATION
    ═══════════════════════════════════════════ */
 
@@ -2142,6 +2300,10 @@ static int vm_execute(VM *vm) {
             break;
         
         case OP_VRFY:
+#ifdef NML_CRYPTO
+            if (!vm->signed_program)
+                VM_ERROR(vm, NML_ERR_TRAP, "VRFY failed: program is not signed");
+#endif
             break;
         
         case OP_VOTE: {
@@ -3229,6 +3391,13 @@ int main(int argc, char **argv) {
     int max_cycles = NML_DEFAULT_MAX_CYCLES;
     int describe_only = 0;
     const char *fragment_name = NULL;
+#ifdef NML_CRYPTO
+    int sign_mode = 0;
+    int keygen_mode = 0;
+    const char *sign_key = NULL;
+    const char *sign_agent = NULL;
+    const char *patch_path = NULL;
+#endif
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--trace") == 0) {
@@ -3239,6 +3408,18 @@ int main(int argc, char **argv) {
             describe_only = 1;
         } else if (strcmp(argv[i], "--fragment") == 0 && i + 1 < argc) {
             fragment_name = argv[++i];
+#ifdef NML_CRYPTO
+        } else if (strcmp(argv[i], "--keygen") == 0) {
+            keygen_mode = 1;
+        } else if (strcmp(argv[i], "--sign") == 0) {
+            sign_mode = 1;
+        } else if (strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
+            sign_key = argv[++i];
+        } else if (strcmp(argv[i], "--agent") == 0 && i + 1 < argc) {
+            sign_agent = argv[++i];
+        } else if (strcmp(argv[i], "--patch") == 0 && i + 1 < argc) {
+            patch_path = argv[++i];
+#endif
         } else if (!program_path) {
             program_path = argv[i];
         } else if (!data_path) {
@@ -3248,11 +3429,25 @@ int main(int argc, char **argv) {
 
     int core_ops = count_unique_ops("core");
 
-    (void)fragment_name;
+#ifdef NML_CRYPTO
+    if (keygen_mode) {
+        char keypair[512];
+        if (nml_keygen(keypair, sizeof(keypair)) == 0) {
+            printf("%s\n", keypair);
+            return 0;
+        }
+        fprintf(stderr, "ERROR: keygen failed\n");
+        return 1;
+    }
+#endif
 
     if (!program_path) {
         printf("NML — Neural Machine Language v%d.%d\n", NML_VERSION_MAJOR, NML_VERSION_MINOR);
-        printf("Usage: nml <program.nml> [data.nml.data] [--trace] [--max-cycles N] [--describe] [--fragment NAME]\n\n");
+        printf("Usage: nml <program.nml> [data.nml.data] [--trace] [--max-cycles N] [--describe] [--fragment NAME]\n");
+#ifdef NML_CRYPTO
+        printf("       nml --sign <program.nml> --key <hex> [--agent <name>]    Sign a program\n");
+#endif
+        printf("\n");
         printf("Core opcodes:    %d\n", core_ops);
         printf("Extensions:\n");
         printf("  NML-V (Vision):      %s\n",
@@ -3323,11 +3518,71 @@ int main(int argc, char **argv) {
     char *source = read_file(program_path);
     if (!source) { vm_cleanup(vm); free(vm); return 1; }
 
+#ifdef NML_CRYPTO
+    /* --patch mode: apply differential patch and write to stdout */
+    if (patch_path) {
+        char *patch_src = read_file(patch_path);
+        if (!patch_src) { free(source); vm_cleanup(vm); free(vm); return 1; }
+        size_t out_size = strlen(source) + 65536;
+        char *patched = (char *)malloc(out_size);
+        if (nml_apply_patch(source, patch_src, patched, out_size) != 0) {
+            fprintf(stderr, "ERROR: Failed to apply patch\n"); free(patched); free(patch_src); free(source); vm_cleanup(vm); free(vm); return 1;
+        }
+        printf("%s\n", patched);
+        free(patched); free(patch_src); free(source); vm_cleanup(vm); free(vm);
+        return 0;
+    }
+
+    /* --sign mode: sign the program and write to stdout */
+    if (sign_mode) {
+        if (!sign_key) { fprintf(stderr, "ERROR: --sign requires --key <hex>\n"); free(source); vm_cleanup(vm); free(vm); return 1; }
+        const char *agent = sign_agent ? sign_agent : "nml";
+        size_t out_size = strlen(source) + 512;
+        char *signed_out = (char *)malloc(out_size);
+        if (nml_sign_program(source, agent, sign_key, signed_out, out_size) != 0) {
+            fprintf(stderr, "ERROR: Failed to sign program\n"); free(signed_out); free(source); vm_cleanup(vm); free(vm); return 1;
+        }
+        printf("%s", signed_out);
+        free(signed_out); free(source); vm_cleanup(vm); free(vm);
+        return 0;
+    }
+
+    /* VRFY loader guard: if program starts with SIGN, verify before assembly */
+    if (strncmp(source, "SIGN ", 5) == 0) {
+        char agent[64] = {0};
+        const char *body = NULL;
+        int vrc = nml_verify_program(source, agent, sizeof(agent), &body);
+        if (vrc != 0) {
+            fprintf(stderr, "[NML] SIGNATURE VERIFICATION FAILED (code %d) — refusing to execute\n", vrc);
+            free(source); vm_cleanup(vm); free(vm);
+            return 1;
+        }
+        printf("[NML] Signature verified — signed by agent '%s'\n", agent);
+        vm->signed_program = 1;
+        strncpy(vm->signer_agent, agent, 63);
+
+        /* Re-point source to body (skip SIGN line) */
+        char *body_copy = strdup(body);
+        free(source);
+        source = body_copy;
+    }
+#endif
+
     printf("[NML] Assembling %s\n", program_path);
     int ninstr = vm_assemble(vm, source);
     free(source);
     if (ninstr < 0) { fprintf(stderr, "ERROR: Assembly failed (code %d)\n", ninstr); vm_cleanup(vm); free(vm); return 1; }
     printf("[NML] %d instructions assembled\n", ninstr);
+
+#ifndef NML_NO_M2M
+    int frc = vm_resolve_fragments(vm, fragment_name);
+    if (frc != NML_OK) {
+        fprintf(stderr, "ERROR: Fragment resolution failed (code %d)\n", frc);
+        vm_cleanup(vm); free(vm); return 1;
+    }
+    if (vm->program_len != ninstr)
+        printf("[NML] Fragments resolved: %d → %d instructions\n", ninstr, vm->program_len);
+#endif
 
     printf("[NML] Extensions:");
     if (vm->extensions & EXT_VISION) printf(" NML-V");

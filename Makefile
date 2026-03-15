@@ -41,6 +41,10 @@ else
 	@exit 1
 endif
 
+nml-crypto: runtime/nml.c runtime/nml_crypto.h runtime/tweetnacl.c runtime/tweetnacl.h
+	$(CC) $(CFLAGS) -DNML_CRYPTO -o $@ runtime/nml.c runtime/tweetnacl.c $(LDFLAGS)
+	@echo "  Built: nml-crypto (v0.7.0, Ed25519 + HMAC-SHA256 signing)"
+
 nml-wasm: runtime/nml.c
 	emcc -O2 -std=c99 -o terminal/nml.js runtime/nml.c -lm \
 	    -s MODULARIZE=1 -s EXPORT_NAME='NMLModule' \

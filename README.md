@@ -91,7 +91,7 @@ NML's zero-ambiguity grammar makes it dramatically easier to train models to wri
 ## Quick Start
 
 ```bash
-# Build the runtime (and daemon)
+# Build the runtime
 make
 
 # Run Hello World
@@ -100,11 +100,17 @@ make
 # Run anomaly detector (neural network)
 ./nml programs/anomaly_detector.nml programs/anomaly_weights.nml.data
 
-# Run Fibonacci
-./nml programs/fibonacci.nml
+# Run fraud detection (train + infer + decide)
+./nml programs/fraud_detection.nml programs/fraud_detection.nml.data
 
 # Run all tests
 make test
+
+# Build with crypto (SIGN/VRFY)
+make nml-crypto
+
+# Run the M2M demo (sign, distribute, train, vote, patch)
+bash demos/distributed_fraud.sh
 
 # Start the NML server (LLM chat + execution)
 serve/start_agents.sh
@@ -435,28 +441,56 @@ NML can train its own neural networks using the TNET fused opcode. Same weights,
 | Rate neural (32 neurons) | 12 | 12 | 194 µs |
 | Fibonacci (20 numbers) | 13 | 165 | 89 µs |
 
+## M2M: Signed Program Distribution
+
+NML programs can be signed, verified, and distributed to fleets of agents. Build with `make nml-crypto` to enable HMAC-SHA256 signing.
+
+```bash
+# Sign a program
+./nml-crypto --sign programs/fraud_detection.nml --key deadbeef01020304 --agent authority_v1 > signed.nml
+
+# Agents verify before executing (tampered programs are rejected)
+./nml-crypto signed.nml data.nml.data
+# → [NML] Signature verified — signed by agent 'authority_v1'
+
+# Patch a program (update threshold from 0.5 to 0.6)
+echo 'PTCH @set 49 CMPI  RE RA #0.6' > update.ptch
+echo 'PTCH @end' >> update.ptch
+./nml-crypto programs/fraud_detection.nml --patch update.ptch > patched.nml
+
+# Full demo: sign → distribute → train locally → vote consensus → patch → re-distribute
+bash demos/distributed_fraud.sh
+```
+
+The demo signs a fraud detection model, distributes it to 3 regional agents, each trains on local data with TNET, classifies a test transaction, and a hub collects scores via VOTE (median consensus). A PTCH updates the threshold, the program is re-signed and re-distributed.
+
 ## Architecture
 
 ```
 runtime/
-  nml.c              Single-file C99 runtime (~2,600 lines, 83 KB binary)
-  nmld.c             NML daemon — pre-fork worker pool, binary cache, Unix socket API
+  nml.c              Single-file C99 runtime (~3,400 lines, 83 KB binary)
+  nml_crypto.h       SHA-256 + HMAC-SHA256 for SIGN/VRFY (standalone, no deps)
+  nmld.c             NML daemon — pre-fork worker pool, binary cache
 
 transpilers/         Grammar validator (nml_grammar.py), Lark CFG for constrained
                      decoding (nml_lark_grammar.py), training data generators
 
 serve/
-  nml_server.py      HTTP server: LLM chat, NML execution, validation endpoints
+  nml_server.py      HTTP server: LLM chat, NML execution, M2M distribution
+  nml_agent.py       M2M agent client (register, verify, execute)
   start_agents.sh    Starts NML server + optional RAG gateway + chat UI
+
+demos/
+  distributed_fraud.sh   M2M demo: sign, distribute, TNET, VOTE, PTCH
 
 terminal/
   nml_chat.jsx       LLM chat UI for NML code generation
   nml_terminal.jsx   Interactive NML emulator
 
-programs/            Example NML programs (anomaly detector, fibonacci,
-                     fizzbuzz, primes, rate calculations, hello world)
+programs/            Example NML programs (fraud detection, anomaly detector,
+                     fibonacci, fizzbuzz, primes, rate calculations)
 
-tests/               Opcode coverage tests, LLM generation tests, model comparison
+tests/               Opcode coverage tests, LLM generation tests
 
 docs/                Full specification, architecture documents, usage guide
 ```
@@ -494,27 +528,35 @@ make
 # With BLAS acceleration (10x faster training)
 make nml-fast
 
+# With HMAC-SHA256 crypto (SIGN/VRFY, --patch)
+make nml-crypto
+
 # Or directly with gcc
 gcc -O2 -o nml runtime/nml.c -lm
 
+# With crypto
+gcc -O2 -DNML_CRYPTO -o nml-crypto runtime/nml.c -lm
+
 # Core only (35 instructions, no extensions)
 gcc -O2 -o nml-core runtime/nml.c -lm -DNML_NO_DEFAULT_EXTENSIONS
-
-# With expanded limits for large programs
-gcc -O2 -o nml-gp runtime/nml.c -lm \
-    -DNML_MAX_INSTRUCTIONS=65536 \
-    -DNML_MAX_MEMORY_SLOTS=256 \
-    -DNML_MAX_CALL_DEPTH=128
 ```
 
 ## Running
 
 ```bash
-./nml <program.nml> [data.nml.data] [--trace] [--max-cycles N]
+./nml <program.nml> [data.nml.data] [--trace] [--max-cycles N] [--fragment NAME]
+
+# With crypto build:
+./nml-crypto --sign <program.nml> --key <hex> [--agent <name>]   # Sign
+./nml-crypto <program.nml> --patch <patch.ptch>                  # Patch
+./nml-crypto <signed.nml> [data.nml.data]                        # Verify + Execute
 ```
 
 - `--trace` prints each instruction as it executes
 - `--max-cycles N` overrides the default 1M cycle limit
+- `--fragment NAME` runs only the named fragment (for FRAG/LINK programs)
+- `--sign` signs a program with HMAC-SHA256 (requires `nml-crypto`)
+- `--patch` applies differential patch directives (@set/@del/@ins)
 
 ## Data Files (.nml.data)
 
@@ -628,3 +670,4 @@ NML is intentionally constrained — these limits are design choices for determi
 | v0.7.0 | 71 | NML-TR training extensions (BKWD, WUPD, LOSS, TNET), BLAS acceleration |
 | v0.7.1 | 71 | NML daemon (nmld) with pre-fork workers and binary cache, constrained decoding (Outlines CFG), additive alias tolerance |
 | v0.8.0 | 82 | Backward opcodes (RELUBK, SIGMBK, TANHBK, GELUBK, SOFTBK, MMULBK, CONVBK, POOLBK, NORMBK, ATTNBK), TNDEEP N-layer training |
+| v0.8.1 | 82 | FRAG/LINK assembly-time resolution, SIGN/VRFY with HMAC-SHA256 (`-DNML_CRYPTO`), PTCH differential patching, M2M agent distribution protocol, fraud detection example |

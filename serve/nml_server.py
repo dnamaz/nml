@@ -509,6 +509,84 @@ def create_http_app(model_path: str = None):
             "constrained": constrained,
         })
 
+    # ═══════════════════════════════════════════
+    # M2M: Agent Fleet Distribution
+    # ═══════════════════════════════════════════
+
+    registered_agents = {}
+
+    async def handle_agent_register(request):
+        body = await request.json()
+        name = body.get("name")
+        url = body.get("url")
+        capabilities = body.get("capabilities", [])
+        if not name or not url:
+            return _json({"error": "name and url required"}, 400)
+        registered_agents[name] = {"url": url, "capabilities": capabilities}
+        print(f"  [M2M] Agent registered: {name} at {url} ({', '.join(capabilities)})")
+        return _json({"status": "registered", "agent": name})
+
+    async def handle_agent_list(request):
+        return _json({"agents": registered_agents})
+
+    async def handle_distribute(request):
+        """Distribute a signed program to all registered agents."""
+        from aiohttp import ClientSession
+        body = await request.json()
+        program = body.get("program", "")
+        data = body.get("data", None)
+
+        if not program:
+            return _json({"error": "No program provided"}, 400)
+        if not registered_agents:
+            return _json({"error": "No agents registered"}, 400)
+
+        results = {}
+        async with ClientSession() as session:
+            tasks = []
+            for name, info in registered_agents.items():
+                payload = {"program": program}
+                if data:
+                    payload["data"] = data
+                tasks.append((name, session.post(f"{info['url']}/execute", json=payload)))
+
+            for name, coro in tasks:
+                try:
+                    resp = await coro
+                    results[name] = await resp.json()
+                except Exception as e:
+                    results[name] = {"success": False, "error": str(e)}
+
+        return _json({"distributed_to": list(registered_agents.keys()), "results": results})
+
+    async def handle_vote(request):
+        """Collect a numeric value from agent results and apply VOTE consensus."""
+        body = await request.json()
+        values = body.get("values", [])
+        strategy = body.get("strategy", "median")
+
+        if not values:
+            return _json({"error": "No values provided"}, 400)
+
+        nums = [float(v) for v in values if v is not None]
+        if not nums:
+            return _json({"error": "No numeric values"}, 400)
+
+        if strategy == "median":
+            nums.sort()
+            mid = len(nums) // 2
+            result = nums[mid] if len(nums) % 2 == 1 else (nums[mid-1] + nums[mid]) / 2
+        elif strategy == "mean":
+            result = sum(nums) / len(nums)
+        elif strategy == "min":
+            result = min(nums)
+        elif strategy == "max":
+            result = max(nums)
+        else:
+            result = sum(nums) / len(nums)
+
+        return _json({"strategy": strategy, "values": nums, "consensus": result})
+
     app = web.Application()
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/models", handle_models)
@@ -517,6 +595,10 @@ def create_http_app(model_path: str = None):
     app.router.add_post("/execute", handle_execute)
     app.router.add_post("/format", handle_format)
     app.router.add_post("/spec", handle_spec)
+    app.router.add_post("/agent/register", handle_agent_register)
+    app.router.add_get("/agent/list", handle_agent_list)
+    app.router.add_post("/distribute", handle_distribute)
+    app.router.add_post("/vote", handle_vote)
     app.router.add_route("OPTIONS", "/{path:.*}", handle_options)
 
     return app
