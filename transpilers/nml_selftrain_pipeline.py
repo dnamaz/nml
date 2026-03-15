@@ -159,6 +159,14 @@ def run_verification_round(model_path, adapter_path, runtime_path, prompts, max_
 
 def run_training_round(base_model, data_path, adapter_dir, resume_from, iters=1000, lr=3e-6):
     """Run a short LoRA training round."""
+    import yaml
+    adapter_dir = Path(adapter_dir)
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    config_path = adapter_dir / "train_config.yaml"
+    config_path.write_text(yaml.dump({
+        "lora_parameters": {"rank": 16, "dropout": 0.0, "scale": 20.0}
+    }))
+
     cmd = [
         sys.executable, "-m", "mlx_lm.lora",
         "--model", str(base_model),
@@ -166,12 +174,12 @@ def run_training_round(base_model, data_path, adapter_dir, resume_from, iters=10
         "--adapter-path", str(adapter_dir),
         "--iters", str(iters),
         "--learning-rate", str(lr),
-        "--lora-rank", "16",
         "--num-layers", "22",
         "--max-seq-length", "1280",
         "--batch-size", "1",
         "--grad-checkpoint",
         "--save-every", "100",
+        "-c", str(config_path),
         "--train",
     ]
     if resume_from:
@@ -179,6 +187,8 @@ def run_training_round(base_model, data_path, adapter_dir, resume_from, iters=10
 
     print(f"  Training: {iters} iters, lr={lr}, resume={resume_from}")
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+    if result.returncode != 0:
+        print(f"  Training stderr: {result.stderr[-300:]}")
     return result.returncode == 0
 
 
@@ -187,6 +197,8 @@ def main():
     parser.add_argument("--model", required=True, help="Current merged model path")
     parser.add_argument("--base-model", required=True, help="Base model for LoRA")
     parser.add_argument("--adapter", default=None, help="Current adapter (if not merged)")
+    parser.add_argument("--initial-adapter", default=None,
+                        help="Adapter .safetensors to resume from on round 1")
     parser.add_argument("--runtime", default=str(Path(__file__).parent.parent / "nml"))
     parser.add_argument("--output-dir", default=str(
         Path(__file__).parent.parent / "domain" / "output" / "training" / "selftrain"))
@@ -213,7 +225,7 @@ def main():
 
     current_model = args.model
     current_adapter = args.adapter
-    resume_adapter = None
+    resume_adapter = Path(args.initial_adapter) if args.initial_adapter else None
 
     for round_num in range(1, args.rounds + 1):
         print(f"\n{'═' * 60}")
