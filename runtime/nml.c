@@ -438,7 +438,7 @@ static int tensor_ediv(Tensor *out, const Tensor *a, const Tensor *b) {
     Tensor *dest = (out == a || out == b) ? &tmp : out;
     tensor_init_typed(dest, a->ndim, a->shape, dt); dest->size = a->size;
     for (int i = 0; i < a->size; i++) {
-        if (tensor_getd(b, i) == 0.0) return NML_ERR_DIVZERO;
+        if (tensor_getd(b, i) == 0.0) { if (dest == &tmp) tensor_free(&tmp); return NML_ERR_DIVZERO; }
         tensor_setd(dest, i, tensor_getd(a, i) / tensor_getd(b, i));
     }
     if (dest == &tmp) { tensor_free(out); *out = tmp; }
@@ -497,11 +497,14 @@ static int tensor_transpose(Tensor *out, const Tensor *t) {
     if (t->ndim != 2) return NML_ERR_SHAPE;
     int r = t->shape[0], c = t->shape[1];
     int shape[] = {c, r};
-    int rc = tensor_init_typed(out, 2, shape, t->dtype);
+    Tensor tmp = {0};
+    Tensor *dest = (out == t) ? &tmp : out;
+    int rc = tensor_init_typed(dest, 2, shape, t->dtype);
     if (rc) return rc;
     for (int i = 0; i < r; i++)
         for (int j = 0; j < c; j++)
-            tensor_setd(out, j*r+i, tensor_getd(t, i*c+j));
+            tensor_setd(dest, j*r+i, tensor_getd(t, i*c+j));
+    if (dest == &tmp) { tensor_free(out); *out = tmp; }
     return NML_OK;
 }
 
@@ -681,6 +684,7 @@ static void tensor_attention(Tensor *out, const Tensor *Q, const Tensor *K, cons
             for (int k = 0; k < seq_len; k++) sum += scores.data.f32[i*seq_len+k] * V->data.f32[k*d_v+j];
             out->data.f32[i*d_v+j] = sum;
         }
+    tensor_free(&scores);
 }
 
 static void tensor_layernorm(Tensor *out, const Tensor *input, const Tensor *gamma, const Tensor *beta) {
@@ -1352,7 +1356,7 @@ static void parse_shape(const char *s, int *shape, int *ndim) {
     if (*p == '#') p++;
     if (*p == '[') p++;
     *ndim = 0;
-    while (*p && *p != ']') {
+    while (*p && *p != ']' && *ndim < NML_MAX_DIMS) {
         shape[(*ndim)++] = atoi(p);
         while (*p && *p != ',' && *p != ']') p++;
         if (*p == ',') p++;
@@ -1939,13 +1943,6 @@ static int vm_execute(VM *vm) {
     vm->error_code = NML_OK;
     vm->error_msg[0] = '\0';
 
-    /* Pre-validate register indices for the hot path */
-    for (int i = 0; i < vm->program_len; i++) {
-        Instruction *ins = &vm->program[i];
-        for (int r = 0; r < 3; r++)
-            if (ins->reg[r] < 0) ins->reg[r] = 0;
-    }
-
     while (vm->pc < vm->program_len && !vm->halted) {
         if (vm->cycles >= vm->max_cycles)
             VM_ERROR(vm, NML_ERR_CYCLE_LIMIT, "Cycle limit %d exceeded at PC=%d", vm->max_cycles, vm->pc);
@@ -2004,7 +2001,15 @@ static int vm_execute(VM *vm) {
                 RVALID(ins->reg[0])=1; break;
             }
             case OP_ALLC: { rc=tensor_init_typed(&REG(ins->reg[0]),ins->shape_ndim,ins->shape,(DType)ins->int_params[3]); if(rc) VM_ERROR(vm,rc,"ALLC overflow at PC=%d",vm->pc); RVALID(ins->reg[0])=1; break; }
-            case OP_RSHP: { Tensor *s=&REG(ins->reg[1]); Tensor *d=&REG(ins->reg[0]); memcpy(d->data.f32,s->data.f32,sizeof(float)*s->size); d->ndim=ins->shape_ndim; memcpy(d->shape,ins->shape,sizeof(int)*ins->shape_ndim); d->size=s->size; RVALID(ins->reg[0])=1; break; }
+            case OP_RSHP: {
+                Tensor *s = &REG(ins->reg[1]);
+                Tensor *d = &REG(ins->reg[0]);
+                if (d != s) tensor_copy(d, s);
+                d->ndim = ins->shape_ndim;
+                memcpy(d->shape, ins->shape, sizeof(int) * ins->shape_ndim);
+                RVALID(ins->reg[0]) = 1;
+                break;
+            }
             case OP_TRNS: rc=tensor_transpose(&REG(ins->reg[0]),&REG(ins->reg[1])); if(rc) VM_ERROR(vm,rc,"TRNS requires 2D at PC=%d",vm->pc); RVALID(ins->reg[0])=1; break;
 
             case OP_SPLT: {
@@ -2142,6 +2147,7 @@ static int vm_execute(VM *vm) {
             
             if (strategy == 0) { /* median */
                 double *tmp = (double *)malloc(rs->size * sizeof(double));
+                if (!tmp) VM_ERROR(vm, NML_ERR_OVERFLOW, "VOTE: alloc failed");
                 for (int i = 0; i < rs->size; i++) tmp[i] = tensor_getd(rs, i);
                 for (int i = 0; i < rs->size - 1; i++)
                     for (int j = i + 1; j < rs->size; j++)
@@ -2654,19 +2660,18 @@ static int vm_execute(VM *vm) {
             Tensor *input = &REG(ins->reg[2]);
             int n = grad->size < input->size ? grad->size : input->size;
             tensor_init_typed(&REG(ins->reg[0]), input->ndim, input->shape, NML_F64);
+            double *softmax_cache = (double *)malloc(n * sizeof(double));
+            if (!softmax_cache) VM_ERROR(vm, NML_ERR_OVERFLOW, "SOFTBK: alloc failed");
             double max_val = tensor_getd(input, 0);
             for (int i = 1; i < n; i++) { double v = tensor_getd(input, i); if (v > max_val) max_val = v; }
             double sum_exp = 0;
-            for (int i = 0; i < n; i++) sum_exp += exp(tensor_getd(input, i) - max_val);
+            for (int i = 0; i < n; i++) { softmax_cache[i] = exp(tensor_getd(input, i) - max_val); sum_exp += softmax_cache[i]; }
+            for (int i = 0; i < n; i++) softmax_cache[i] /= sum_exp;
             double dot = 0;
-            for (int i = 0; i < n; i++) {
-                double si = exp(tensor_getd(input, i) - max_val) / sum_exp;
-                dot += tensor_getd(grad, i) * si;
-            }
-            for (int i = 0; i < n; i++) {
-                double si = exp(tensor_getd(input, i) - max_val) / sum_exp;
-                tensor_setd(&REG(ins->reg[0]), i, si * (tensor_getd(grad, i) - dot));
-            }
+            for (int i = 0; i < n; i++) dot += tensor_getd(grad, i) * softmax_cache[i];
+            for (int i = 0; i < n; i++)
+                tensor_setd(&REG(ins->reg[0]), i, softmax_cache[i] * (tensor_getd(grad, i) - dot));
+            free(softmax_cache);
             RVALID(ins->reg[0]) = 1;
             break;
         }
@@ -2683,10 +2688,12 @@ static int vm_execute(VM *vm) {
             Tensor *weight = &REG(r_weight);
             Tensor wt = {0}, it = {0};
             tensor_transpose(&wt, weight);
-            tensor_matmul(&REG(ins->reg[0]), grad, &wt);
+            rc = tensor_matmul(&REG(ins->reg[0]), grad, &wt);
+            if (rc) { tensor_free(&wt); VM_ERROR(vm, rc, "MMULBK d_input shape error at PC=%d", vm->pc); }
             RVALID(ins->reg[0]) = 1;
             tensor_transpose(&it, input);
-            tensor_matmul(&REG(ins->reg[1]), &it, grad);
+            rc = tensor_matmul(&REG(ins->reg[1]), &it, grad);
+            if (rc) { tensor_free(&wt); tensor_free(&it); VM_ERROR(vm, rc, "MMULBK d_weight shape error at PC=%d", vm->pc); }
             RVALID(ins->reg[1]) = 1;
             tensor_free(&wt);
             tensor_free(&it);
@@ -2818,6 +2825,8 @@ static int vm_execute(VM *vm) {
             /* ATTNBK Rd_dq Rgrad Rq Rk Rv
              * Writes: Rd = dQ, Rd+1 = dK, Rd+2 = dV
              * Recomputes attention weights internally */
+            if (ins->reg[0] + 2 >= NML_MAX_REGISTERS)
+                VM_ERROR(vm, NML_ERR_OOB, "ATTNBK: Rd=%d needs Rd+2=%d, max is %d", ins->reg[0], ins->reg[0]+2, NML_MAX_REGISTERS-1);
             Tensor *d_out = &REG(ins->reg[1]);
             Tensor *Q = &REG(ins->reg[2]);
             int r_k = ins->int_params[0], r_v = ins->int_params[1];
@@ -3112,7 +3121,7 @@ static char* read_file(const char *path) {
     fseek(f, 0, SEEK_END); long len = ftell(f); fseek(f, 0, SEEK_SET);
     char *buf = (char*)malloc(len + 1);
     if (!buf) { fclose(f); return NULL; }
-    fread(buf, 1, len, f); buf[len] = '\0'; fclose(f);
+    size_t nread = fread(buf, 1, len, f); buf[nread] = '\0'; fclose(f);
     return buf;
 }
 
@@ -3292,17 +3301,17 @@ int main(int argc, char **argv) {
     if (data_path) {
         printf("[NML v%d.%d] Loading data from %s\n", NML_VERSION_MAJOR, NML_VERSION_MINOR, data_path);
         int n = vm_load_data(vm, data_path);
-        if (n < 0) { fprintf(stderr, "ERROR: Failed to load data (code %d)\n", n); free(vm); return 1; }
+        if (n < 0) { fprintf(stderr, "ERROR: Failed to load data (code %d)\n", n); vm_cleanup(vm); free(vm); return 1; }
         printf("[NML] Loaded %d memory slots\n", n);
     }
 
     char *source = read_file(program_path);
-    if (!source) { free(vm); return 1; }
+    if (!source) { vm_cleanup(vm); free(vm); return 1; }
 
     printf("[NML] Assembling %s\n", program_path);
     int ninstr = vm_assemble(vm, source);
     free(source);
-    if (ninstr < 0) { fprintf(stderr, "ERROR: Assembly failed (code %d)\n", ninstr); free(vm); return 1; }
+    if (ninstr < 0) { fprintf(stderr, "ERROR: Assembly failed (code %d)\n", ninstr); vm_cleanup(vm); free(vm); return 1; }
     printf("[NML] %d instructions assembled\n", ninstr);
 
     printf("[NML] Extensions:");
