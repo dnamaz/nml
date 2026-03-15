@@ -35,7 +35,7 @@ for arg in "$@"; do
     esac
 done
 
-MODEL="${MODEL:-nml-equalized-merged}"
+MODEL="${MODEL:-nml-next-merged}"
 MODEL_PATH="$MODEL_DIR/$MODEL"
 
 cleanup() {

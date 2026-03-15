@@ -128,6 +128,16 @@ PROMPTS = [
     "Write NML for a decision tree using CMPF, JMPT, LEAF.",
     "Write NML to scatter values into a tensor using SCAT.",
     "Write NML with META headers describing the program name and version.",
+    # --- Uncovered opcodes ---
+    "Write NML to copy a value from one register to another using MOV.",
+    "Write NML to compare two registers using CMP and branch on the result.",
+    "Write NML using CMPI to flag values above a threshold of 0.5.",
+    "Write NML to allocate a zero tensor of size 10 using ALLC.",
+    "Write NML using SYNC as a pipeline barrier between two stages.",
+    "Write NML using TRAP to abort with error code 1 if input is negative.",
+    # --- Real-world end-to-end ---
+    "Write NML for fraud detection: train with TNET on transaction data, run inference, and flag fraud if score >= 0.5.",
+    "Write NML for a binary classifier: forward pass with sigmoid, then CMPI threshold decision at 0.5.",
 ]
 
 

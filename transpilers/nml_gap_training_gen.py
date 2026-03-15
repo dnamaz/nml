@@ -452,6 +452,204 @@ HALT"""
 
 
 # ═══════════════════════════════════════════════════════════════
+# 5. CMPI — immediate comparison with threshold branching
+# ═══════════════════════════════════════════════════════════════
+
+def gen_cmpi():
+    pairs = []
+    for _ in range(100):
+        thresh = round(random.choice([0.3, 0.4, 0.5, 0.5, 0.6, 0.7, 0.8]), 1)
+        inp = rand_name()
+        out = rand_name2()
+
+        code = f"""LD    R0 @{inp}
+CMPI  RE R0 #{thresh}
+JMPF  #2
+LEAF  RB #0.0
+JUMP  #1
+LEAF  RB #1.0
+ST    RB @{out}
+HALT"""
+        prompts = [
+            f"Write NML using CMPI to flag {inp} as 1.0 if value >= {thresh}, else 0.0.",
+            f"NML: if {inp} >= {thresh} then {out}=1 else {out}=0. Use CMPI and JMPF.",
+            f"Write NML for a threshold check at {thresh} using CMPI. Output 1.0 above, 0.0 below.",
+        ]
+        pairs.append(pair(random.choice(prompts), code))
+
+    for _ in range(50):
+        thresh = round(random.uniform(0.1, 0.9), 1)
+        code = f"""↓  ι  @input
+≺  φ  ι  #{thresh}
+↘  #2
+∎  β  #0.0
+→  #1
+∎  β  #1.0
+↑  β  @result
+◼"""
+        pairs.append(pair(f"Symbolic NML: flag input as 1.0 if >= {thresh} using ≺ (CMPI) and ↘ (JMPF).", code))
+
+    for _ in range(50):
+        thresh = round(random.uniform(0.1, 0.9), 1)
+        code = f"""LOAD  R0  @input
+COMPARE_VALUE  FLAG  R0  #{thresh}
+BRANCH_FALSE  #2
+SET_VALUE  GENERAL  #0.0
+JUMP  #1
+SET_VALUE  GENERAL  #1.0
+STORE  GENERAL  @result
+STOP"""
+        pairs.append(pair(f"Verbose NML: threshold check at {thresh}, output 1.0 if above.", code))
+
+    return pairs
+
+
+# ═══════════════════════════════════════════════════════════════
+# 6. CMP — register-to-register comparison
+# ═══════════════════════════════════════════════════════════════
+
+def gen_cmp():
+    pairs = []
+    for _ in range(60):
+        code = f"""LD    R0 @a
+LD    R1 @b
+CMP   R0 R1
+JMPF  #2
+MOV   RA R0
+JUMP  #1
+MOV   RA R1
+ST    RA @result
+HALT"""
+        prompts = [
+            "Write NML to compare two values with CMP and return the smaller one.",
+            "NML: load a and b, use CMP to compare, output the minimum.",
+            "Write NML using CMP and JMPF to select the smaller of two values.",
+        ]
+        pairs.append(pair(random.choice(prompts), code))
+
+    for _ in range(40):
+        code = f"""LD    R0 @a
+LD    R1 @b
+CMP   R0 R1
+JMPT  #2
+MOV   RA R1
+JUMP  #1
+MOV   RA R0
+ST    RA @result
+HALT"""
+        prompts = [
+            "Write NML to compare two values with CMP and return the larger one.",
+            "NML: use CMP to find the maximum of a and b.",
+        ]
+        pairs.append(pair(random.choice(prompts), code))
+
+    return pairs
+
+
+# ═══════════════════════════════════════════════════════════════
+# 7. SYNC — pipeline barrier
+# ═══════════════════════════════════════════════════════════════
+
+def gen_sync():
+    pairs = []
+    for _ in range(30):
+        code = f"""LD    R0 @stage1_input
+SCLR  R1 R0 #2.0
+ST    R1 @stage1_output
+SYNC
+LD    R2 @stage1_output
+SCLR  RA R2 #3.0
+ST    RA @result
+HALT"""
+        prompts = [
+            "Write NML with SYNC as a barrier between two pipeline stages.",
+            "NML: two-stage pipeline with SYNC barrier between stages.",
+            "Write NML using SYNC to ensure stage 1 completes before stage 2 reads its output.",
+        ]
+        pairs.append(pair(random.choice(prompts), code))
+
+    for _ in range(20):
+        code = f"""↓  ι  @input
+∗  κ  ι  #2.0
+↑  κ  @intermediate
+⏸
+↓  λ  @intermediate
+∗  α  λ  #3.0
+↑  α  @result
+◼"""
+        pairs.append(pair("Symbolic NML: two-stage pipeline with ⏸ (SYNC) barrier.", code))
+
+    return pairs
+
+
+# ═══════════════════════════════════════════════════════════════
+# 8. MOV — register copy
+# ═══════════════════════════════════════════════════════════════
+
+def gen_mov():
+    pairs = []
+    for _ in range(30):
+        val = rand_float()
+        code = f"""LEAF  R0 #{val}
+MOV   R1 R0
+SCLR  R1 R1 #2.0
+ST    R0 @original
+ST    R1 @doubled
+HALT"""
+        prompts = [
+            f"Write NML to copy R0 to R1 using MOV, then scale R1 while keeping R0 unchanged.",
+            "NML: use MOV to duplicate a register, then modify the copy.",
+            "Write NML using MOV to copy a value to another register.",
+        ]
+        pairs.append(pair(random.choice(prompts), code))
+
+    for _ in range(20):
+        code = f"""∎  ι  #{rand_float()}
+←  κ  ι
+∗  κ  κ  #2.0
+↑  ι  @original
+↑  κ  @doubled
+◼"""
+        pairs.append(pair("Symbolic NML: copy a register with ← (MOV) and scale the copy.", code))
+
+    return pairs
+
+
+# ═══════════════════════════════════════════════════════════════
+# 9. ALLC — allocate zero tensor
+# ═══════════════════════════════════════════════════════════════
+
+def gen_allc():
+    pairs = []
+    for _ in range(30):
+        size = random.randint(1, 20)
+        code = f"""ALLC  R0 #[{size}]
+ST    R0 @zeros
+HALT"""
+        prompts = [
+            f"Write NML to allocate a zero tensor of size {size} using ALLC.",
+            f"NML: create a {size}-element zero tensor with ALLC.",
+            f"Write NML using ALLC to initialize R0 as a {size}-element zero vector.",
+        ]
+        pairs.append(pair(random.choice(prompts), code))
+
+    for _ in range(20):
+        size = random.randint(1, 10)
+        code = f"""ALLC  R0 #[{size}]
+LEAF  R1 #1.0
+TACC  R0 R0 R1
+ST    R0 @ones
+HALT"""
+        prompts = [
+            f"Write NML to create a {size}-element tensor of ones: ALLC then TACC with 1.0.",
+            f"NML: allocate {size} zeros with ALLC, then add 1.0 to make an all-ones vector.",
+        ]
+        pairs.append(pair(random.choice(prompts), code))
+
+    return pairs
+
+
+# ═══════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════
 
@@ -468,6 +666,11 @@ def main():
         ("SCAT/SCTR", gen_scat),
         ("SIGN/VRFY", gen_sign_vrfy),
         ("TRAP", gen_trap),
+        ("CMPI", gen_cmpi),
+        ("CMP", gen_cmp),
+        ("SYNC", gen_sync),
+        ("MOV", gen_mov),
+        ("ALLC", gen_allc),
     ]
 
     for name, gen_fn in generators:
