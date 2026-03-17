@@ -155,10 +155,20 @@ Every NML program must contain a `HALT` instruction. Without it, execution conti
 ### Training
 | Opcode | Symbolic | Description | Example |
 |--------|----------|-------------|---------|
-| `BKWD` | `∇` | Backpropagation | `BKWD RG R3 R9` |
-| `WUPD` | `⟳` | Weight update | `WUPD R1 R1 RG` |
+| `BKWD` | `∇` | Backpropagation step | `BKWD RG R3 R9` |
+| `WUPD` | `⟳` | Weight update (gradient descent) | `WUPD R1 R1 RG` |
 | `LOSS` | `△` | Compute loss (MSE/CE/MAE) | `LOSS R5 R3 R9 #0` |
-| `TNET` | `⥁` | Self-training loop | `TNET #2000 #0.001 #0` |
+| `TNET` | `⥁` | Train 2-layer network in-place | `TNET #2000 #0.001 #0` |
+| `TNDEEP` | `⥁ˈ` | Train N-layer network (arch from RV) | `TNDEEP #2000 #0.005 #1` |
+| `RELUBK` | `⌐ˈ` | ReLU backward pass | `RELUBK R7 RG R2` |
+| `SIGMBK` | `σˈ` | Sigmoid backward pass | `SIGMBK R7 RG R2` |
+| `TANHBK` | `τˈ` | Tanh backward pass | `TANHBK R7 RG R2` |
+| `GELUBK` | `ℊˈ` | GELU backward pass | `GELUBK R7 RG R2` |
+| `SOFTBK` | `Σˈ` | Softmax backward pass | `SOFTBK R7 RG R2` |
+| `MMULBK` | `×ˈ` | MatMul backward (d_input + d_weight) | `MMULBK R7 R8 RG R0 R1` |
+| `POOLBK` | `⊓ˈ` | Max pool backward | `POOLBK R9 RG R2 #2 #2` |
+| `NORMBK` | `‖ˈ` | Layer norm backward | `NORMBK R7 RG R4` |
+| `ATTNBK` | `⊙ˈ` | Attention backward (writes dQ/dK/dV) | `ATTNBK R8 RG R4 R5 R6` |
 
 ## Data Files
 
@@ -245,7 +255,7 @@ The same neural network layer in symbolic NML:
 ◼
 ```
 
-### Self-Training (TNET)
+### Self-Training (TNET — 2-layer)
 
 ```
 LD    R1 @w1
@@ -259,7 +269,32 @@ ST    RA @result
 HALT
 ```
 
-TNET trains the network defined by R1–R4 (weight/bias pairs for up to 2 layers) using input R0 and target R9. After training, RA holds the final prediction.
+TNET trains the 2-layer network defined by R1–R4 using input R0 and target R9. After training, RA holds the final prediction.
+
+### Deep Training (TNDEEP — N-layer)
+
+For networks deeper than 2 layers. The architecture is declared in register RV as a flat descriptor tensor.
+
+```
+; Declare architecture: 3 layers — 12→16 (ReLU), 16→8 (ReLU), 8→1 (Sigmoid)
+; @arch shape=7 data=3,16,0,8,0,1,1  ← in your .nml.data file
+
+LD    RV @arch            ; REQUIRED before TNDEEP
+LD    R1 @w1              ; 12×16
+LD    R2 @b1              ; 1×16
+LD    R3 @w2              ; 16×8
+LD    R4 @b2              ; 1×8
+LD    R5 @w3              ; 8×1
+LD    R6 @b3              ; 1×1
+LD    R0 @training_data   ; N×12
+LD    R9 @training_labels ; N×1
+TNDEEP  #2000  #0.005  #1 ; #1 = Adam optimizer (#0 = SGD)
+ST    R8 @loss            ; R8 = final MSE loss
+HALT
+```
+
+Activation codes in arch descriptor: `0`=ReLU, `1`=Sigmoid, `2`=Tanh, `3`=GELU.
+After training, R1–R6 hold the trained weights. Use them for a manual forward pass.
 
 ## Fraud Detection Example (Train + Infer + Decide)
 

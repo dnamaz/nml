@@ -7,10 +7,11 @@
 This document provides working examples for every NML instruction, organized by category. Each example can be run directly with the NML runtime:
 
 ```bash
-make nml-v06                     # Build the v0.6 runtime
-./nml-v06 program.nml data.nml.data    # Run a program
-./nml-v06 program.nml --trace          # Run with instruction trace
-./nml-v06 program.nml --describe       # Print metadata without executing
+make nml                              # Build the standard runtime
+make nml-fast                         # Build with BLAS acceleration
+./nml program.nml data.nml.data       # Run a program
+./nml program.nml --trace             # Run with instruction trace
+./nml program.nml --describe          # Print metadata without executing
 ```
 
 All examples are shown in classic syntax. The same programs work in symbolic or verbose syntax — see the [Tri-Syntax Reference](#tri-syntax-reference) at the end.
@@ -163,6 +164,19 @@ MMUL  R5 R4 R3         ; logits for 10 classes
 SOFT  R5 R5            ; probabilities summing to 1.0
 ST    R5 @class_probs
 ```
+
+#### GELU — Gaussian Error Linear Unit
+
+`Rd = 0.5 * x * (1 + tanh(√(2/π) * (x + 0.044715 * x³)))`. Smoother than ReLU near zero. Standard in GPT, BERT, and most modern transformers.
+
+```
+; Transformer feed-forward block uses GELU between linear layers
+MMUL  R5 R4 R3         ; linear projection
+MADD  R5 R5 R2         ; add bias
+GELU  R5 R5            ; smooth nonlinearity (not ReLU)
+```
+
+**When to use over RELU:** GELU is preferred in transformer architectures. RELU is faster and sufficient for simple dense networks. Use GELU when replicating GPT/BERT-style models. The arch descriptor code for TNDEEP is `3`.
 
 ---
 
@@ -421,29 +435,88 @@ For convolutional neural networks and image processing.
 
 #### CONV — 2D Convolution
 
+`Rd = conv2d(input, kernel)`. Slides the kernel over the input, computing dot products at each position.
+
 ```
+CONV  Rdest  Rinput  Rkernel  [#kernel_size  [#stride]]
+```
+
+- `#kernel_size` — filter width/height (default 1)
+- `#stride` — step between filter positions (default 0 = no stride offset)
+
+```
+; Extract edges from a 28×28 image using a 3×3 Sobel filter
 LD    R0 @image          ; shape [28, 28]
-LD    R1 @kernel         ; shape [3, 3]
-CONV  R2 R0 R1           ; 2D convolution
+LD    R1 @sobel_kernel   ; shape [3, 3]
+CONV  R2 R0 R1 #3 #1     ; 3×3 kernel, stride 1 → shape [26, 26]
+ST    R2 @edge_map
+HALT
 ```
 
 #### POOL — Max Pooling
 
+`Rd = max_pool(input, size, stride)`. Keeps only the maximum value in each window. Reduces spatial dimensions while preserving dominant features.
+
 ```
-POOL  R3 R2 #2 #2        ; 2x2 max pooling, stride 2
+POOL  Rdest  Rinput  [#pool_size  [#stride]]
+```
+
+- Defaults: pool_size=2, stride=2
+
+```
+; Standard CNN pipeline: conv → pool → conv → pool
+LD    R0 @image          ; [28, 28]
+LD    R1 @kernel1        ; [3, 3]
+CONV  R2 R0 R1 #3 #1     ; [26, 26]
+POOL  R3 R2 #2 #2        ; [13, 13] — 2×2 max pool
+LD    R4 @kernel2        ; [3, 3]
+CONV  R5 R3 R4 #3 #1     ; [11, 11]
+POOL  R6 R5 #2 #2        ; [5, 5]
+ST    R6 @features
+HALT
 ```
 
 #### UPSC — Upscale
 
+`Rd = nearest_neighbor_upsample(input, scale)`. Each value is replicated to fill a scale×scale block. The inverse of POOL for decoder/generative networks.
+
 ```
-UPSC  R4 R3 #2           ; nearest-neighbor 2x upscale
+UPSC  Rdest  Rinput  [#scale_factor]
+```
+
+- Default scale: 2
+
+```
+; Decoder path: upsample then convolve (like U-Net decoder)
+LD    R0 @encoded        ; [5, 5] — bottleneck features
+UPSC  R1 R0 #2           ; [10, 10]
+LD    R2 @decode_kernel  ; [3, 3]
+CONV  R3 R1 R2 #3 #1     ; [8, 8]
+ST    R3 @decoded
+HALT
 ```
 
 #### PADZ — Zero Padding
 
+`Rd = zero_pad(input, padding)`. Adds a border of zeros around the input. Use before CONV to preserve spatial dimensions (same-padding).
+
 ```
-PADZ  R5 R0 #1           ; pad 1 pixel of zeros on all sides
+PADZ  Rdest  Rinput  [#padding]
 ```
+
+- Default padding: 1
+
+```
+; Same-padding convolution: output is same size as input
+LD    R0 @feature_map    ; [14, 14]
+PADZ  R1 R0 #1           ; [16, 16] — pad 1 pixel on all sides
+LD    R2 @kernel         ; [3, 3]
+CONV  R3 R1 R2 #3 #1     ; [14, 14] — same spatial size as input
+ST    R3 @output
+HALT
+```
+
+---
 
 ### NML-T: Transformer (4 instructions)
 
@@ -451,71 +524,210 @@ For transformer-based models (GPT, BERT, etc.).
 
 #### ATTN — Scaled Dot-Product Attention
 
+`Rd = softmax(Q @ K^T / sqrt(d_k)) @ V`. The core operation of every transformer. Computes how much each position should attend to every other position.
+
 ```
-LD    R0 @queries        ; shape [seq_len, d_model]
-LD    R1 @keys           ; shape [seq_len, d_model]
-LD    R2 @values         ; shape [seq_len, d_model]
-ATTN  R3 R0 R1 R2        ; R3 = softmax(Q @ K^T / sqrt(d)) @ V
+ATTN  Rdest  Rquery  Rkey  [Rvalue]
 ```
 
-This is the core of every transformer. One instruction replaces dozens of lines of Python.
+- If `Rvalue` is omitted, keys are used as values (self-attention with K=V)
+- Scaling by `sqrt(d_k)` is applied automatically
+
+```
+; Single self-attention head
+LD    R0 @Q              ; shape [seq_len, d_k]
+LD    R1 @K              ; shape [seq_len, d_k]
+LD    R2 @V              ; shape [seq_len, d_v]
+ATTN  R3 R0 R1 R2        ; R3 = attention output [seq_len, d_v]
+ST    R3 @attended
+HALT
+```
+
+```
+; Transformer block: attention + residual + norm
+LD    R0 @input          ; [seq_len, d_model]
+LD    R1 @Wq             ; [d_model, d_k]
+LD    R2 @Wk
+LD    R3 @Wv
+MMUL  R4 R0 R1           ; Q = input @ Wq
+MMUL  R5 R0 R2           ; K = input @ Wk
+MMUL  R6 R0 R3           ; V = input @ Wv
+ATTN  R7 R4 R5 R6        ; attention output
+MADD  R7 R7 R0           ; residual connection: output + input
+NORM  R7 R7              ; layer norm
+ST    R7 @block_output
+HALT
+```
 
 #### NORM — Layer Normalization
 
+`Rd = (x - mean(x)) / sqrt(var(x) + ε)` optionally scaled by gamma and shifted by beta. Applied after attention and feed-forward layers in transformers.
+
 ```
-LD    R4 @gamma          ; scale parameter
-LD    R5 @beta           ; shift parameter
-NORM  R3 R3 R4 R5        ; normalize activations
+NORM  Rdest  Rinput  [Rgamma  [Rbeta]]
+```
+
+- Without gamma/beta: pure normalization (gamma=1, beta=0)
+- With gamma/beta: learnable affine transform (standard layer norm)
+
+```
+; Pre-norm style (norm before sublayer)
+LD    R0 @x              ; activations
+NORM  R1 R0              ; normalize
+MMUL  R2 R1 R3           ; feed-forward projection
+GELU  R2 R2              ; activation
+MADD  R2 R2 R0           ; residual
+
+; Post-norm with learnable parameters
+LD    R4 @gamma
+LD    R5 @beta
+NORM  R3 R2 R4 R5        ; normalize with scale + shift
+HALT
 ```
 
 #### EMBD — Embedding Lookup
 
+`Rd = embed_matrix[indices]`. Selects rows from an embedding matrix by integer index. Converts token IDs to dense vectors.
+
 ```
-LD    R0 @vocab_table    ; shape [vocab_size, embed_dim]
-LD    R1 @token_ids      ; shape [seq_len]
-EMBD  R2 R0 R1           ; R2 = token embeddings
+EMBD  Rdest  Rinput_indices  Rembed_matrix
 ```
+
+- `Rinput_indices` — integer token IDs, shape `[seq_len]`
+- `Rembed_matrix` — full vocabulary embedding table, shape `[vocab_size, d_embed]`
+- Output shape: `[seq_len, d_embed]`
+
+```
+; Token embedding for a sequence
+LD    R0 @token_ids      ; shape [seq_len]         — e.g. [42, 17, 9, 3]
+LD    R1 @vocab_table    ; shape [vocab_size, 64]  — embedding matrix
+EMBD  R2 R0 R1           ; R2 = shape [seq_len, 64]
+ST    R2 @embeddings
+HALT
+```
+
+**Important:** `Rinput_indices` is `reg[1]` and `Rembed_matrix` is `reg[2]`. The index tensor comes first.
 
 #### GELU — Gaussian Error Linear Unit
 
+See [Activation Functions](#activation-functions-4-instructions) above for the full description. In transformers, GELU replaces RELU in the feed-forward sublayer.
+
 ```
-GELU  R3 R3              ; smoother alternative to ReLU, used in GPT
+; GPT-style feed-forward block
+LD    R0 @x              ; [seq_len, d_model]
+LD    R1 @W1             ; [d_model, 4*d_model]  — expand
+LD    R2 @b1
+MMUL  R3 R0 R1
+MADD  R3 R3 R2
+GELU  R3 R3              ; ← GELU, not RELU
+LD    R4 @W2             ; [4*d_model, d_model]  — contract
+LD    R5 @b2
+MMUL  R6 R3 R4
+MADD  R6 R6 R5
+ST    R6 @ff_output
+HALT
 ```
+
+---
 
 ### NML-R: Reduction (4 instructions)
 
-For aggregation and conditional operations.
+For aggregation, thresholding, and conditional operations.
 
 #### RDUC — Reduce
 
+Collapses a tensor along an axis (or entirely) using a reduction function.
+
 ```
-LD    R0 @data           ; shape [1, 10]
-RDUC  R1 R0 #0           ; R1 = sum of all elements
-RDUC  R2 R0 #1           ; R2 = mean
-RDUC  R3 R0 #2           ; R3 = max
-RDUC  R4 R0 #3           ; R4 = min
+RDUC  Rdest  Rinput  [#reduce_type  [#axis]]
+```
+
+| Code | Operation | Example result on `[1, 3, 2, 4]` |
+|------|-----------|----------------------------------|
+| `#0` | sum | 10 |
+| `#1` | mean | 2.5 |
+| `#2` | max | 4 |
+| `#3` | min | 1 |
+
+```
+; Compute mean and variance of predictions
+LD    R0 @predictions    ; shape [1, 8]
+RDUC  R1 R0 #1           ; R1 = mean
+MSUB  R2 R0 R1           ; R2 = predictions - mean
+EMUL  R3 R2 R2           ; R3 = squared deviations
+RDUC  R4 R3 #1           ; R4 = variance
+ST    R1 @mean
+ST    R4 @variance
+HALT
 ```
 
 #### WHER — Conditional Select
 
+`Rd[i] = cond[i] > 0 ? true[i] : false[i]`. Element-wise conditional, like NumPy's `np.where`.
+
 ```
-; R0 = condition (0/1 mask), R1 = value if true, R2 = value if false
-WHER  R3 R0 R1 R2        ; R3[i] = R0[i] ? R1[i] : R2[i]
+WHER  Rdest  Rcond  Rtrue  [Rfalse]
+```
+
+```
+; Replace negative predictions with zero (soft ReLU alternative)
+LD    R0 @predictions    ; some values may be negative
+ALLC  R1 #[8]            ; zero tensor
+CMPR  R2 R0 #0.0         ; R2[i] = 1 if predictions[i] > 0, else 0
+WHER  R3 R2 R0 R1        ; keep positive values, replace negatives with 0
+ST    R3 @clipped
+HALT
 ```
 
 #### CLMP — Clamp
 
+`Rd[i] = max(min_val, min(max_val, input[i]))`. Hard-clips every element to a range.
+
 ```
-CLMP  R1 R0 #0.0 #1.0   ; clamp all values to [0, 1]
+CLMP  Rdest  Rinput  [#min  [#max]]
 ```
 
-Useful for ensuring tax amounts are non-negative, probabilities stay in range.
+- Defaults: min=0.0, max=1.0
+
+```
+; Ensure probability predictions stay in valid range
+LD    R0 @raw_probs
+CLMP  R1 R0 #0.0 #1.0    ; clip to [0, 1] — predictions can't be negative or > 1
+ST    R1 @probs
+HALT
+
+; Clip reward signals in reinforcement learning
+LD    R2 @rewards
+CLMP  R3 R2 #-1.0 #1.0   ; clip to [-1, 1]
+ST    R3 @clipped_rewards
+HALT
+```
 
 #### CMPR — Element-wise Comparison Mask
 
+`Rd[i] = input[i] > threshold ? 1 : 0`. Produces a binary mask. Used to binarize soft predictions.
+
 ```
-CMPR  R1 R0 #0.5 #0     ; R1[i] = 1 if R0[i] > 0.5, else 0
+CMPR  Rdest  Rinput  [#threshold  [#op]]
 ```
+
+```
+; Convert sigmoid output to binary decisions
+LD    R0 @probabilities  ; values in [0, 1]
+CMPR  R1 R0 #0.5         ; R1[i] = 1 if prob[i] > 0.5, else 0
+ST    R1 @decisions
+HALT
+
+; Combined: predict, clamp, threshold
+LD    R0 @logits
+SIGM  R0 R0              ; → probabilities
+CLMP  R0 R0 #0.0 #1.0    ; ensure valid range
+CMPR  R1 R0 #0.5         ; binary decisions
+ST    R1 @labels
+HALT
+```
+
+---
 
 ### NML-S: Signal (2 instructions)
 
@@ -523,17 +735,46 @@ For signal processing and time-series analysis.
 
 #### FFT — Discrete Fourier Transform
 
+Converts a time-domain signal to frequency domain. Output has real and imaginary components.
+
 ```
-LD    R0 @time_signal
-FFT   R1 R2 R0           ; R1 = real part, R2 = imaginary part
+FFT  Rdest  Rinput  Rconfig
+```
+
+Both `Rdest` and `Rinput` are written after execution (real and imaginary parts respectively).
+
+```
+; Analyze frequency content of a sensor reading
+LD    R0 @time_series    ; shape [256] — 256 time-domain samples
+LD    R2 @fft_config     ; configuration tensor
+FFT   R1 R0 R2           ; R1 = real part, R0 = imaginary part (overwritten)
+ST    R1 @freq_real
+ST    R0 @freq_imag
+HALT
 ```
 
 #### FILT — FIR Filter
 
+`Rd = convolve(signal, filter_coeffs)`. Applies a finite impulse response filter to a signal. Equivalent to 1D convolution.
+
 ```
-LD    R0 @signal
-LD    R1 @filter_coeffs
-FILT  R2 R0 R1           ; 1D convolution (FIR filter)
+FILT  Rdest  Rinput  Rfilter
+```
+
+```
+; Low-pass filter to remove high-frequency noise
+LD    R0 @noisy_signal   ; shape [512]
+LD    R1 @lpf_coeffs     ; low-pass FIR coefficients, e.g. shape [31]
+FILT  R2 R0 R1           ; smooth signal
+ST    R2 @clean_signal
+HALT
+
+; Moving average (box filter)
+LD    R0 @temperature_readings
+LD    R1 @box_filter     ; e.g. [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+FILT  R2 R0 R1           ; 10-point moving average
+ST    R2 @smoothed
+HALT
 ```
 
 ---
@@ -566,7 +807,7 @@ HALT
 **Why it matters:** Without META, an NML program is opaque — you have to execute it or read the instructions to know what it does. With META, any agent can inspect the program's interface without running it. The `--describe` flag prints the descriptor:
 
 ```bash
-./nml-v06 program.nml --describe
+./nml program.nml --describe
 ```
 
 ### Typed Register Annotations
@@ -636,7 +877,7 @@ PTCH  @end
 
 Apply with:
 ```bash
-./nml-v06 --patch fit_2025.nml fit_2026_patch.nml
+./nml --patch fit_2025.nml fit_2026_patch.nml
 ```
 
 **Why it matters:** The full FIT program is 201 lines. A tax year update typically changes 10-20 threshold values. Sending a 10-line patch instead of a 201-line program is 20x more efficient — critical for swarm agent communication where thousands of jurisdictions update simultaneously.
@@ -790,7 +1031,7 @@ Run with:
 echo "@gross_pay shape=1 data=100000.0
 @is_exempt shape=1 data=0.0" > /tmp/fica.data
 
-./nml-v06 fica.nml /tmp/fica.data
+./nml fica.nml /tmp/fica.data
 # Output: tax_amount = 6200.00
 ```
 
@@ -1020,14 +1261,14 @@ Output: 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47
 ### Build Options
 
 ```bash
-# Full runtime with NML-G (default)
-make nml-gp
+# Standard build (all extensions enabled)
+make nml
 
-# Without NML-G
-gcc -DNML_NO_GENERAL -o nml nml.c -lm
+# BLAS-accelerated build
+make nml-fast
 
 # With expanded limits for larger programs
-gcc -O2 -o nml-gp nml.c -lm \
+gcc -O2 -o nml runtime/nml.c -lm \
     -DNML_MAX_INSTRUCTIONS=65536 \
     -DNML_MAX_MEMORY_SLOTS=256 \
     -DNML_MAX_CALL_DEPTH=128
@@ -1035,7 +1276,318 @@ gcc -O2 -o nml-gp nml.c -lm \
 
 ---
 
-## Part 6: Tri-Syntax Reference
+## Part 6: NML-TR Training Extensions (15)
+
+These instructions implement gradient-based training directly in the runtime. TNET and TNDEEP are high-level self-contained trainers. BKWD/WUPD/LOSS and the backward opcodes give you manual control over each step.
+
+---
+
+### High-Level Trainers
+
+#### TNET — Single Hidden Layer Trainer
+
+Trains a 2-layer network (one hidden layer) end-to-end. All state lives in registers.
+
+```
+TNET  #epochs  #lr  [#seed]
+```
+
+**Register convention:**
+- R0 = input features (N × input_size)
+- R1 = w1 weights, R2 = b1 bias  ← modified in-place
+- R3 = w2 weights, R4 = b2 bias  ← modified in-place
+- R9 = target labels (N × output_size)
+- RA = final prediction after training
+
+```
+; Train a 4→8→1 network on sensor anomaly data
+LD    R1 @w1             ; shape [4, 8] — He init
+LD    R2 @b1             ; shape [1, 8] — zeros
+LD    R3 @w2             ; shape [8, 1]
+LD    R4 @b2             ; shape [1, 1]
+LD    R0 @training_data  ; shape [N, 4]
+LD    R9 @labels         ; shape [N, 1]
+TNET  #1000  #0.01  #0   ; 1000 epochs, lr=0.01, seed=0
+ST    RA @prediction
+HALT
+```
+
+#### TNDEEP — N-Layer Dense Trainer
+
+Trains networks with 1–10 layers, configurable activations, and a choice of optimizer. The architecture is declared in register RV.
+
+```
+TNDEEP  #epochs  #lr  #optimizer
+```
+
+**`#optimizer`:** `#0` = SGD (faster, less memory), `#1` = Adam (β1=0.9, β2=0.999)
+
+**Register convention:**
+- RV = architecture descriptor (must be loaded first)
+- R0 = input features (N × input_size)
+- R1/R2 = w1/b1 for layer 1  ← modified in-place
+- R3/R4 = w2/b2 for layer 2  ← modified in-place
+- R5/R6 = w3/b3 for layer 3  ← modified in-place (and so on for deeper nets)
+- R9 = target labels
+- R8 = final MSE loss (written after training)
+
+**Architecture descriptor in RV:** A flat 1D tensor loaded with `LD RV @arch`.
+
+```
+[n_layers, h1, act1, h2, act2, ..., hn, actn]
+```
+
+Activation codes: `0`=ReLU, `1`=Sigmoid, `2`=Tanh, `3`=GELU
+
+```
+; Train 12→16→8→1 regression network
+; arch: 3 layers, 16 neurons/ReLU, 8 neurons/ReLU, 1 neuron/Sigmoid
+@arch shape=7 dtype=f32 data=3,16,0,8,0,1,1
+```
+
+Full train-then-infer program:
+
+```
+LD    RV @arch            ; REQUIRED: load before TNDEEP
+
+LD    R1 @w1              ; 12×16
+LD    R2 @b1              ; 1×16
+LD    R3 @w2              ; 16×8
+LD    R4 @b2              ; 1×8
+LD    R5 @w3              ; 8×1
+LD    R6 @b3              ; 1×1
+
+LD    R0 @training_data   ; N×12
+LD    R9 @training_labels ; N×1
+
+TNDEEP  #2000  #0.005  #1  ; Adam, 2000 epochs
+ST    R8 @training_loss    ; save loss BEFORE R8 is reused below
+
+; Manual forward pass for inference (R1–R6 now hold trained weights)
+LD    R0 @predict_input    ; 1×12
+
+MMUL  R7 R0 R1             ; layer 1
+MADD  R7 R7 R2
+RELU  R7 R7
+
+MMUL  R8 R7 R3             ; layer 2
+MADD  R8 R8 R4
+RELU  R8 R8
+
+MMUL  RA R8 R5             ; layer 3
+MADD  RA RA R6
+SIGM  RA RA                ; matches arch act[6]=1
+
+ST    RA @prediction
+HALT
+```
+
+**Critical rules:**
+- Always `LD RV @arch` before `TNDEEP` — missing it causes a runtime error
+- Save R8 immediately after `TNDEEP` — the inference forward pass overwrites it
+- The manual inference activations must match the arch descriptor activation codes
+- Using RELU on the output layer when labels are in (0,1) causes dead neurons → prediction = 0. Use SIGM.
+
+---
+
+### Step-Level Training (Manual Backprop)
+
+These four instructions let you write the training loop yourself, giving full control over loss functions, optimizers, and gradient flow.
+
+#### LOSS — Compute Loss
+
+```
+LOSS  Rdest  Rpredicted  Rtarget  #loss_type
+```
+
+| Code | Loss | Use when |
+|------|------|----------|
+| `#0` | MSE `mean((pred - target)²)` | Regression |
+| `#1` | Cross-entropy `-sum(target * log(pred))` | Classification |
+| `#2` | MAE `mean(|pred - target|)` | Robust regression |
+
+```
+; MSE loss for regression
+MMUL  R5 R4 R3            ; forward pass output
+MADD  R5 R5 R2
+RELU  R5 R5
+LOSS  R6 R5 R9 #0         ; R6 = MSE loss scalar
+ST    R6 @loss
+```
+
+#### BKWD — Backpropagation
+
+```
+BKWD  Rgrad  Routput  Rtarget
+```
+
+Computes the gradient of the loss with respect to the output layer. Stores the gradient in `Rgrad` for subsequent WUPD calls.
+
+```
+BKWD  RG R5 R9            ; RG = d_loss/d_output
+```
+
+#### WUPD — Weight Update
+
+```
+WUPD  Rweights  Rweights  Rgrad  [#lr]
+```
+
+Applies gradient descent: `weights -= lr * grad`. The learning rate defaults to the last value set.
+
+```
+WUPD  R3 R3 RG            ; update output weights
+WUPD  R1 R1 RH            ; update hidden weights
+```
+
+---
+
+### Backward Pass Opcodes
+
+These compute gradients through individual operations. Use them when building a custom training loop with BKWD/WUPD, or when TNDEEP's architecture doesn't fit your network.
+
+All backward ops follow the pattern: `*BK Rdest Rgrad Rforward_input`
+
+#### RELUBK — ReLU Gradient
+
+`Rd[i] = grad[i] * (input[i] > 0 ? 1 : 0)`
+
+Passes the gradient through where the forward-pass input was positive; zeros it where it was negative (those neurons were off).
+
+```
+; Forward
+RELU  R3 R3               ; R3 = relu(pre_activation)
+; Backward — need to save pre-activation before RELU
+RELUBK R7 RG R2           ; R7 = gradient through ReLU
+;                           RG = incoming gradient, R2 = pre-activation values
+```
+
+#### SIGMBK — Sigmoid Gradient
+
+`Rd[i] = grad[i] * σ(input[i]) * (1 - σ(input[i]))`
+
+The sigmoid derivative is `σ(x) * (1 - σ(x))`. It is recomputed from the pre-activation input.
+
+```
+SIGMBK  R8 RG R5          ; RG = incoming grad, R5 = pre-sigmoid input
+```
+
+#### TANHBK — Tanh Gradient
+
+`Rd[i] = grad[i] * (1 - tanh(input[i])²)`
+
+```
+TANHBK  R8 RG R5          ; RG = incoming grad, R5 = pre-tanh input
+```
+
+#### GELUBK — GELU Gradient
+
+Applies the chain rule through the GELU approximation `0.5x(1 + tanh(√(2/π)(x + 0.044715x³)))`.
+
+```
+GELUBK  R8 RG R5          ; R8 = gradient through GELU
+```
+
+#### SOFTBK — Softmax Gradient
+
+`Rd[i] = s[i] * (grad[i] - Σⱼ grad[j] * s[j])` where s = softmax(input).
+
+Uses the full Jacobian-vector product. Numerically stable (internally applies max normalization).
+
+```
+SOFTBK  R8 RG R5          ; R8 = gradient through softmax
+```
+
+#### MMULBK — Matrix Multiply Gradient
+
+Computes two gradients simultaneously: one for the input tensor and one for the weight matrix.
+
+```
+MMULBK  Rd_dinput  Rd_dweight  Rgrad  Rinput  Rweight
+```
+
+- `Rd_dinput = grad @ weight^T`
+- `Rd_dweight = input^T @ grad`
+
+```
+; Forward: R3 = R0 @ R1
+MMUL  R3 R0 R1
+; Backward
+MMULBK R7 R8 RG R0 R1    ; R7 = d_input, R8 = d_weights
+;                           RG = incoming gradient
+```
+
+#### CONVBK — Convolution Gradient
+
+Computes gradients for both the input and the kernel.
+
+```
+CONVBK  Rd_dinput  Rd_dkernel  Rgrad  Rinput  Rkernel
+```
+
+- `Rd_dinput` = full convolution of grad with flipped kernel
+- `Rd_dkernel` = correlation of input with grad
+
+```
+CONVBK R5 R6 RG R0 R1    ; R5 = d_input, R6 = d_kernel
+```
+
+#### POOLBK — Max Pool Gradient
+
+Routes gradients back only through the positions that were selected by max pooling (winner-take-all).
+
+```
+POOLBK  Rdest  Rgrad  Rfwd_input  [#pool_size  [#stride]]
+```
+
+`Rfwd_input` is the original pre-pool input — needed to find which positions were the maxima.
+
+```
+; Must save the pre-pool tensor before POOL for use in backward
+MOV   R2 R0              ; save original for POOLBK
+POOL  R3 R0 #2 #2        ; forward pool
+; ... rest of forward pass, then backward ...
+POOLBK R9 RG R2 #2 #2   ; R9 = gradient through pool
+```
+
+#### NORMBK — Layer Norm Gradient
+
+Computes the full layer normalization gradient (complex multivariate chain rule through mean and variance).
+
+```
+NORMBK  Rdest  Rgrad  Rinput
+```
+
+Assumes gamma=1, beta=0. For learnable parameters, scale the gradient separately.
+
+```
+NORMBK R7 RG R4          ; R7 = gradient through layer norm
+```
+
+#### ATTNBK — Attention Gradient
+
+Backpropagates through scaled dot-product attention. Writes three gradients at once into consecutive registers.
+
+```
+ATTNBK  Rd_dq  Rgrad  Rq  Rk  Rv
+```
+
+- `Rd_dq` (reg[0]) = gradient w.r.t. Query
+- `Rd_dq + 1` (next register) = gradient w.r.t. Key
+- `Rd_dq + 2` = gradient w.r.t. Value
+
+Recomputes attention weights from Q/K/V internally (no need to save them from the forward pass).
+
+```
+; Forward
+ATTN  R7 R4 R5 R6        ; R7 = attention output
+; Backward (R8, R9, RA receive dQ, dK, dV respectively)
+ATTNBK R8 RG R4 R5 R6   ; R8=dQ, R9=dK, RA=dV  (consecutive registers)
+```
+
+---
+
+## Part 7: Tri-Syntax Reference
 
 Every program above works in all three syntaxes. Here's the FICA calculation in each:
 
@@ -1160,6 +1712,21 @@ Use compact form for JSON payloads, agent messages, API fields, and any context 
 | 64 | ITOF | ⊶ | INT_TO_FLOAT | NML-G |
 | 65 | FTOI | ⊷ | FLOAT_TO_INT | NML-G |
 | 66 | BNOT | ¬ | BITWISE_NOT | NML-G |
+| 67 | BKWD | ∇ | BACKPROP | NML-TR |
+| 68 | WUPD | ⟳ | WEIGHT_UPDATE | NML-TR |
+| 69 | LOSS | △ | COMPUTE_LOSS | NML-TR |
+| 70 | TNET | ⥁ | TRAIN_NETWORK | NML-TR |
+| 71 | RELUBK | ⌐ˈ | RELU_BACKWARD | NML-TR |
+| 72 | SIGMBK | σˈ | SIGMOID_BACKWARD | NML-TR |
+| 73 | TANHBK | τˈ | TANH_BACKWARD | NML-TR |
+| 74 | GELUBK | ℊˈ | GELU_BACKWARD | NML-TR |
+| 75 | SOFTBK | Σˈ | SOFTMAX_BACKWARD | NML-TR |
+| 76 | MMULBK | ×ˈ | MATMUL_BACKWARD | NML-TR |
+| 77 | CONVBK | ⊛ˈ | CONV_BACKWARD | NML-TR |
+| 78 | POOLBK | ⊓ˈ | POOL_BACKWARD | NML-TR |
+| 79 | NORMBK | ‖ˈ | NORM_BACKWARD | NML-TR |
+| 80 | ATTNBK | ⊙ˈ | ATTN_BACKWARD | NML-TR |
+| 81 | TNDEEP | ⥁ˈ | TRAIN_DEEP | NML-TR |
 
 ### Register Cross-Reference
 
@@ -1181,3 +1748,9 @@ Use compact form for JSON payloads, agent messages, API fields, and any context 
 | 13 | RD | δ | COUNTER | Counter |
 | 14 | RE | φ | FLAG | Condition flag |
 | 15 | RF | ψ | STACK | Stack pointer |
+| 16 | RG | — | GRAD1 | Gradient buffer 1 (backprop) |
+| 17 | RH | — | GRAD2 | Gradient buffer 2 (backprop) |
+| 18 | RI | — | GRAD3 | Gradient buffer 3 (backprop) |
+| 19 | RJ | — | LR | Learning rate |
+| 20–30 | RK–RU | — | TRAINING | Training workspace / hive |
+| 31 | RV | — | ARCH | Architecture descriptor (TNDEEP reads this) |

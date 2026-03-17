@@ -1,0 +1,45 @@
+; ═══════════════════════════════════════════
+; Weather Temperature Forecast
+; ═══════════════════════════════════════════
+; Learns seasonal temperature patterns from a year of daily data.
+; Input: sliding windows of 7 days × 3 features (high, low, avg)
+; Output: next 7 days of average temperature
+;
+; Architecture: 21 → 32 → 16 → 7 (3-layer dense, ReLU)
+; Training: TNET on 358 sliding windows from 365 days
+; Features are normalized 0-1 (0=coldest month, 1=hottest)
+; ═══════════════════════════════════════════
+
+; Load weights
+LD    R1 @w1                  ; 21×32
+LD    R2 @b1                  ; 1×32
+LD    R3 @w2                  ; 32×16
+LD    R4 @b2                  ; 1×16
+
+; Train on historical sliding windows
+LD    R0 @training_windows    ; N×21 (7 days × 3 features)
+LD    R9 @training_targets    ; N×7  (next 7 days avg temp)
+TNET  #2000  #0.005  #0
+ST    R8 @training_loss
+
+; Predict from current week
+LD    R0 @current_week        ; 1×21
+
+; Hidden layer 1: 21 → 32
+MMUL  R5 R0 R1
+MADD  R5 R5 R2
+RELU  R5 R5
+
+; Hidden layer 2: 32 → 16
+MMUL  R6 R5 R3
+MADD  R6 R6 R4
+RELU  R6 R6
+
+; Output layer: 16 → 7
+LD    R7 @w3                  ; 16×7
+LD    R8 @b3                  ; 1×7
+MMUL  RA R6 R7
+MADD  RA RA R8
+
+ST    RA @forecast
+HALT

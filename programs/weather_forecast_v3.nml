@@ -1,0 +1,47 @@
+; ═══════════════════════════════════════════
+; Weather Temperature Forecast v3
+; ═══════════════════════════════════════════
+; TNDEEP: 3-layer dense with Adam optimizer
+; Features: high, low, avg, day_of_year (×7 days = 28 inputs)
+; Architecture: 28 → 64 → 32 → 7 (from RV descriptor)
+; Output: next 7 days average temperature
+; ═══════════════════════════════════════════
+
+; Load architecture descriptor into RV
+LD    RV @arch
+
+; Load weights (3 layers: w1/b1, w2/b2, w3/b3)
+LD    R1 @w1
+LD    R2 @b1
+LD    R3 @w2
+LD    R4 @b2
+LD    R5 @w3
+LD    R6 @b3
+
+; Load training data
+LD    R0 @training_windows
+LD    R9 @training_targets
+
+; Train: 3000 epochs, lr=0.005, Adam optimizer
+TNDEEP  #3000  #0.005  #1
+ST    R8 @training_loss
+
+; Inference on current week
+LD    R0 @current_week
+
+; Layer 1: 28 → 64
+MMUL  R7 R0 R1
+MADD  R7 R7 R2
+RELU  R7 R7
+
+; Layer 2: 64 → 32
+MMUL  R8 R7 R3
+MADD  R8 R8 R4
+RELU  R8 R8
+
+; Layer 3: 32 → 7
+MMUL  RA R8 R5
+MADD  RA RA R6
+
+ST    RA @forecast
+HALT

@@ -127,7 +127,10 @@
 #define NML_MAX_REGISTERS    32
 #define NML_MAX_DIMS         4
 #ifndef NML_MAX_TENSOR_SIZE
-  #define NML_MAX_TENSOR_SIZE  65536
+  /* 16M elements (~64 MB at f32) for general builds.
+     Override at compile time for constrained targets:
+       gcc ... -DNML_MAX_TENSOR_SIZE=65536  */
+  #define NML_MAX_TENSOR_SIZE  16777216
 #endif
 #ifndef NML_MAX_INSTRUCTIONS
   #define NML_MAX_INSTRUCTIONS 8192
@@ -3090,7 +3093,11 @@ static int vm_execute(VM *vm) {
              * N-layer dense training. Architecture from RV: [n_layers, h1, act1, h2, act2, ...]
              * Weights in R1, R2, ... (weight, bias pairs). R0=input, R9=target.
              * Activations: 0=ReLU, 1=sigmoid, 2=tanh, 3=GELU
-             * Result: trained weights in-place, R8 = final loss */
+             * Result: trained weights in-place, R8 = final loss
+             *
+             * Fast path (all f32 tensors): batch matrix operations, direct float* access,
+             * BLAS sgemm when NML_HAS_BLAS is defined (nml-fast / nml-metal builds).
+             * Scalar fallback for f64 or mixed-dtype weights. */
             int epochs = (int)ins->imm;
             float lr = (float)(ins->int_params[0] / 1e6);
             int use_adam = ins->int_params[1];
@@ -3106,170 +3113,671 @@ static int vm_execute(VM *vm) {
             Tensor *target = &REG(9);
             int N = input->shape[0];
 
-            /* Allocate per-layer forward/backward buffers on heap */
             typedef struct { int rows, cols; int act; int w_reg, b_reg; } Layer;
             Layer layers[10];
             int prev_size = input->ndim >= 2 ? input->shape[1] : input->shape[0];
             for (int l = 0; l < n_layers; l++) {
-                int h = (int)tensor_getd(arch, 1 + l * 2);
-                int act = (1 + l * 2 + 1 < arch->size) ? (int)tensor_getd(arch, 1 + l * 2 + 1) : 0;
-                layers[l].rows = prev_size;
-                layers[l].cols = h;
-                layers[l].act = act;
+                int h   = (int)tensor_getd(arch, 1 + l * 2);
+                int act = (1 + l * 2 + 1 < (int)arch->size) ? (int)tensor_getd(arch, 1 + l * 2 + 1) : 0;
+                layers[l].rows  = prev_size;
+                layers[l].cols  = h;
+                layers[l].act   = act;
                 layers[l].w_reg = 1 + l * 2;
                 layers[l].b_reg = 2 + l * 2;
                 prev_size = h;
             }
 
-            /* Forward + backward training loop */
-            size_t max_dim = 0;
+            int max_dim = 0;
             for (int l = 0; l < n_layers; l++)
-                if ((size_t)layers[l].cols > max_dim) max_dim = layers[l].cols;
-            if (max_dim > 1024)
-                VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: max layer width %zu exceeds 1024", max_dim);
-            size_t buf_per_sample = max_dim * (n_layers + 1);
-            double *fwd_buf = (double *)calloc((size_t)N * buf_per_sample, sizeof(double));
-            if (!fwd_buf) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: alloc failed");
+                if (layers[l].cols > max_dim) max_dim = layers[l].cols;
+            if (layers[0].rows > max_dim) max_dim = layers[0].rows;
+            if (max_dim > 4096)
+                VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: max dimension %d exceeds 4096", max_dim);
 
-            float loss = 0;
-            const float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
-            int adam_t = 0;
-            size_t total_params = 0;
-            for (int l = 0; l < n_layers; l++)
-                total_params += (size_t)layers[l].rows * layers[l].cols + layers[l].cols;
-            double *adam_m = NULL, *adam_v = NULL;
-            if (use_adam) {
-                adam_m = (double *)calloc(total_params, sizeof(double));
-                adam_v = (double *)calloc(total_params, sizeof(double));
-                if (!adam_m || !adam_v) {
-                    free(fwd_buf); free(adam_m); free(adam_v);
-                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: adam alloc failed");
-                }
-            }
-
-            int B = (N <= 64) ? N : 64;
+            int B      = (N <= 64) ? N : 64;
             int nbatch = (N + B - 1) / B;
 
-            for (int epoch = 0; epoch < epochs; epoch++) {
-                loss = 0;
-                for (int batch = 0; batch < nbatch; batch++) {
-                    int s0 = batch * B;
-                    int Bn = (s0 + B <= N) ? B : N - s0;
+            /* ── Determine vectorized path availability ── */
+            int all_f32 = (input->dtype == NML_F32 && target->dtype == NML_F32);
+            for (int l = 0; l < n_layers && all_f32; l++)
+                if (REG(layers[l].w_reg).dtype != NML_F32 ||
+                    REG(layers[l].b_reg).dtype != NML_F32)
+                    all_f32 = 0;
 
-                    for (int sample = s0; sample < s0 + Bn; sample++) {
-                    /* Forward: store activations for backward pass */
-                    double *prev_act = fwd_buf + (size_t)(sample - s0) * buf_per_sample;
-                    int prev_n = layers[0].rows;
-                    for (int j = 0; j < prev_n; j++)
-                        prev_act[j] = tensor_getd(input, sample * prev_n + j);
+            int all_f64 = (input->dtype == NML_F64 && target->dtype == NML_F64);
+            for (int l = 0; l < n_layers && all_f64; l++)
+                if (REG(layers[l].w_reg).dtype != NML_F64 ||
+                    REG(layers[l].b_reg).dtype != NML_F64)
+                    all_f64 = 0;
 
-                    double *layer_acts[11];
-                    layer_acts[0] = prev_act;
-                    for (int l = 0; l < n_layers; l++) {
-                        double *cur_act = prev_act + (l + 1) * (int)max_dim;
-                        layer_acts[l + 1] = cur_act;
-                        Tensor *w = &REG(layers[l].w_reg);
-                        Tensor *b = &REG(layers[l].b_reg);
-                        int in_sz = layers[l].rows, out_sz = layers[l].cols;
-                        for (int j = 0; j < out_sz; j++) {
-                            double sum = tensor_getd(b, j);
-                            for (int p = 0; p < in_sz; p++)
-                                sum += layer_acts[l][p] * tensor_getd(w, p * out_sz + j);
-                            switch (layers[l].act) {
-                                case 0: cur_act[j] = sum > 0 ? sum : 0; break;
-                                case 1: cur_act[j] = 1.0 / (1.0 + exp(-sum)); break;
-                                case 2: cur_act[j] = tanh(sum); break;
-                                default: cur_act[j] = sum > 0 ? sum : 0; break;
-                            }
-                        }
+            float loss = 0.0f;
+
+            if (all_f32) {
+                /* ════════════════════════════════════════════════════════
+                   FAST PATH — batch matrix operations, direct float* access
+                   Forward:  Z[l] = A[l-1] @ W[l] + b[l];  A[l] = act(Z[l])
+                   Backward: dW[l] = A[l-1]^T @ delta[l]
+                             delta[l-1] = (delta[l] @ W[l]^T) * act'(Z[l-1])
+                   All activation/gradient buffers use max_dim row stride so
+                   every BLAS/manual matmul sees a uniform leading dimension.
+                   ════════════════════════════════════════════════════════ */
+
+                /* Extract raw weight/bias float pointers */
+                float *W[10], *b_arr[10];
+                for (int l = 0; l < n_layers; l++) {
+                    W[l]     = REG(layers[l].w_reg).data.f32;
+                    b_arr[l] = REG(layers[l].b_reg).data.f32;
+                }
+
+                /* Allocate activation/gradient buffers (all Bn × max_dim) */
+                size_t slot = (size_t)B * max_dim;
+                float *A_buf     = (float *)malloc((size_t)(n_layers + 1) * slot * sizeof(float));
+                float *Z_buf     = (float *)malloc((size_t) n_layers      * slot * sizeof(float));
+                float *delta_buf = (float *)malloc((size_t) n_layers      * slot * sizeof(float));
+
+                /* Per-layer weight/bias gradient buffers (compact, no padding) */
+                size_t total_w = 0, total_b = 0;
+                for (int l = 0; l < n_layers; l++) {
+                    total_w += (size_t)layers[l].rows * layers[l].cols;
+                    total_b += (size_t)layers[l].cols;
+                }
+                float *dW_buf = (float *)calloc(total_w, sizeof(float));
+                float *db_buf = (float *)calloc(total_b, sizeof(float));
+
+                /* Adam moment buffers (float, one per parameter) */
+                float *mW_buf = NULL, *vW_buf = NULL, *mb_buf = NULL, *vb_buf = NULL;
+                if (use_adam) {
+                    mW_buf = (float *)calloc(total_w, sizeof(float));
+                    vW_buf = (float *)calloc(total_w, sizeof(float));
+                    mb_buf = (float *)calloc(total_b, sizeof(float));
+                    vb_buf = (float *)calloc(total_b, sizeof(float));
+                }
+
+                if (!A_buf || !Z_buf || !delta_buf || !dW_buf || !db_buf ||
+                    (use_adam && (!mW_buf || !vW_buf || !mb_buf || !vb_buf))) {
+                    free(A_buf); free(Z_buf); free(delta_buf);
+                    free(dW_buf); free(db_buf);
+                    free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
+                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: alloc failed");
+                }
+
+                /* Per-layer pointers into the flat buffers */
+                float *A[11], *Z[10], *delta[10];
+                float *dW[10], *db[10], *mW[10], *vW[10], *mb[10], *vb[10];
+                A[0] = A_buf;  /* will be overwritten with input copy each batch */
+                for (int l = 0; l < n_layers; l++) {
+                    A[l + 1]  = A_buf + (size_t)(l + 1) * slot;
+                    Z[l]      = Z_buf + (size_t)l * slot;
+                    delta[l]  = delta_buf + (size_t)l * slot;
+                }
+                size_t woff = 0, boff = 0;
+                for (int l = 0; l < n_layers; l++) {
+                    size_t wl = (size_t)layers[l].rows * layers[l].cols;
+                    size_t bl = (size_t)layers[l].cols;
+                    dW[l] = dW_buf + woff;
+                    db[l] = db_buf + boff;
+                    mW[l] = use_adam ? mW_buf + woff : NULL;
+                    vW[l] = use_adam ? vW_buf + woff : NULL;
+                    mb[l] = use_adam ? mb_buf + boff : NULL;
+                    vb[l] = use_adam ? vb_buf + boff : NULL;
+                    woff += wl; boff += bl;
+                }
+
+                const float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
+                int adam_step = 0;
+
+                /* Per-epoch shuffling: allocate and initialise permutation index */
+                int *perm_f32 = (int *)malloc((size_t)N * sizeof(int));
+                if (!perm_f32) {
+                    free(A_buf); free(Z_buf); free(delta_buf);
+                    free(dW_buf); free(db_buf);
+                    free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
+                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: perm alloc failed");
+                }
+                for (int i = 0; i < N; i++) perm_f32[i] = i;
+
+                for (int epoch = 0; epoch < epochs; epoch++) {
+                    /* Fisher-Yates shuffle */
+                    for (int i = N - 1; i > 0; i--) {
+                        int j = (int)((unsigned)rand() % (unsigned)(i + 1));
+                        int tmp = perm_f32[i]; perm_f32[i] = perm_f32[j]; perm_f32[j] = tmp;
                     }
+                    loss = 0.0f;
+                    for (int batch = 0; batch < nbatch; batch++) {
+                        int s0 = batch * B;
+                        int Bn = (s0 + B <= N) ? B : N - s0;
+                        int in0 = layers[0].rows;
 
-                    /* Loss */
-                    int out_sz = layers[n_layers - 1].cols;
-                    double *final_act = layer_acts[n_layers];
-                    for (int j = 0; j < out_sz; j++) {
-                        double diff = final_act[j] - tensor_getd(target, sample * out_sz + j);
-                        loss += diff * diff;
-                    }
-
-                    /* Backward */
-                    double d_buf[1024];
-                    double d_buf2[1024];
-                    double *d_cur = d_buf, *d_prev = d_buf2;
-                    for (int j = 0; j < out_sz; j++)
-                        d_cur[j] = 2.0 * (final_act[j] - tensor_getd(target, sample * out_sz + j)) / Bn;
-
-                    size_t adam_off = total_params;
-                    for (int l = n_layers - 1; l >= 0; l--) {
-                        Tensor *w = &REG(layers[l].w_reg);
-                        Tensor *b = &REG(layers[l].b_reg);
-                        int in_sz = layers[l].rows, o_sz = layers[l].cols;
-                        adam_off -= (size_t)in_sz * o_sz + o_sz;
-
-                        /* Activation derivative */
-                        double d_pre[1024];
-                        for (int j = 0; j < o_sz; j++) {
-                            double a = layer_acts[l + 1][j];
-                            double da;
-                            switch (layers[l].act) {
-                                case 0: da = a > 0 ? 1.0 : 0.0; break;
-                                case 1: da = a * (1.0 - a); break;
-                                case 2: da = 1.0 - a * a; break;
-                                default: da = a > 0 ? 1.0 : 0.0; break;
-                            }
-                            d_pre[j] = d_cur[j] * da;
+                        /* Copy input batch into A[0] via permuted indices */
+                        for (int s = 0; s < Bn; s++) {
+                            int idx = perm_f32[s0 + s];
+                            memcpy(A[0] + (size_t)s * max_dim,
+                                   input->data.f32 + (size_t)idx * in0,
+                                   in0 * sizeof(float));
                         }
 
-                        /* Weight and bias gradients + update */
-                        if (use_adam) {
-                            adam_t = epoch * N + sample + 1;
-                            float bc1 = 1.0f - powf(BETA1, (float)adam_t);
-                            float bc2 = 1.0f - powf(BETA2, (float)adam_t);
-                            for (int p = 0; p < in_sz; p++)
-                                for (int j = 0; j < o_sz; j++) {
-                                    double g = layer_acts[l][p] * d_pre[j];
-                                    size_t idx = adam_off + p * o_sz + j;
-                                    adam_m[idx] = BETA1 * adam_m[idx] + (1 - BETA1) * g;
-                                    adam_v[idx] = BETA2 * adam_v[idx] + (1 - BETA2) * g * g;
-                                    double mh = adam_m[idx] / bc1, vh = adam_v[idx] / bc2;
-                                    tensor_setd(w, p * o_sz + j,
-                                        tensor_getd(w, p * o_sz + j) - lr * mh / (sqrt(vh) + EPS));
+                        /* ── Forward pass ── */
+                        for (int l = 0; l < n_layers; l++) {
+                            int in_sz = layers[l].rows, out_sz = layers[l].cols;
+#ifdef NML_HAS_BLAS
+                            /* Z[l] = A[l-1] @ W[l]  (Bn×in_sz) @ (in_sz×out_sz) */
+                            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                                        Bn, out_sz, in_sz,
+                                        1.0f, A[l], max_dim,
+                                        W[l], out_sz,
+                                        0.0f, Z[l], max_dim);
+#else
+                            for (int s = 0; s < Bn; s++) {
+                                const float *a_row = A[l] + (size_t)s * max_dim;
+                                float       *z_row = Z[l] + (size_t)s * max_dim;
+                                for (int j = 0; j < out_sz; j++) {
+                                    float sum = 0.0f;
+                                    for (int p = 0; p < in_sz; p++)
+                                        sum += a_row[p] * W[l][p * out_sz + j];
+                                    z_row[j] = sum;
                                 }
-                            for (int j = 0; j < o_sz; j++) {
-                                size_t idx = adam_off + (size_t)in_sz * o_sz + j;
-                                adam_m[idx] = BETA1 * adam_m[idx] + (1 - BETA1) * d_pre[j];
-                                adam_v[idx] = BETA2 * adam_v[idx] + (1 - BETA2) * d_pre[j] * d_pre[j];
-                                double mh = adam_m[idx] / bc1, vh = adam_v[idx] / bc2;
-                                tensor_setd(b, j, tensor_getd(b, j) - lr * mh / (sqrt(vh) + EPS));
                             }
-                        } else {
-                            for (int p = 0; p < in_sz; p++)
-                                for (int j = 0; j < o_sz; j++)
-                                    tensor_setd(w, p * o_sz + j,
-                                        tensor_getd(w, p * o_sz + j) - lr * layer_acts[l][p] * d_pre[j]);
-                            for (int j = 0; j < o_sz; j++)
-                                tensor_setd(b, j, tensor_getd(b, j) - lr * d_pre[j]);
+#endif
+                            /* Add bias + apply activation, store both Z and A */
+                            for (int s = 0; s < Bn; s++) {
+                                float *z_row = Z[l] + (size_t)s * max_dim;
+                                float *a_row = A[l + 1] + (size_t)s * max_dim;
+                                for (int j = 0; j < out_sz; j++) {
+                                    float z = z_row[j] + b_arr[l][j];
+                                    z_row[j] = z;  /* keep pre-activation for backward */
+                                    switch (layers[l].act) {
+                                        case 1: a_row[j] = 1.0f / (1.0f + expf(-z)); break;
+                                        case 2: a_row[j] = tanhf(z); break;
+                                        default: a_row[j] = z > 0.0f ? z : 0.0f; break; /* ReLU */
+                                    }
+                                }
+                            }
                         }
 
-                        /* Propagate gradient to previous layer */
-                        if (l > 0) {
-                            for (int p = 0; p < in_sz; p++) {
-                                double sum = 0;
-                                for (int j = 0; j < o_sz; j++)
-                                    sum += d_pre[j] * tensor_getd(w, p * o_sz + j);
-                                d_prev[p] = sum;
+                        /* ── Loss (MSE) and initial delta for last layer ── */
+                        int out_final = layers[n_layers - 1].cols;
+                        for (int s = 0; s < Bn; s++) {
+                            int idx = perm_f32[s0 + s];
+                            float *a_row = A[n_layers] + (size_t)s * max_dim;
+                            float *d_row = delta[n_layers - 1] + (size_t)s * max_dim;
+                            const float *y_row = target->data.f32 + (size_t)idx * out_final;
+                            for (int j = 0; j < out_final; j++) {
+                                float a = a_row[j], y = y_row[j];
+                                float diff = a - y;
+                                loss += diff * diff;
+                                float z   = Z[n_layers - 1][(size_t)s * max_dim + j];
+                                float da;
+                                switch (layers[n_layers - 1].act) {
+                                    case 1: da = a * (1.0f - a); break;
+                                    case 2: da = 1.0f - a * a;  break;
+                                    default: da = z > 0.0f ? 1.0f : 0.0f; break;
+                                }
+                                d_row[j] = 2.0f * diff * da / Bn;
                             }
-                            double *tmp = d_cur; d_cur = d_prev; d_prev = tmp;
                         }
+
+                        /* ── Backward pass ── */
+                        if (use_adam) { adam_step++; }
+                        float bc1 = use_adam ? 1.0f - powf(BETA1, (float)adam_step) : 1.0f;
+                        float bc2 = use_adam ? 1.0f - powf(BETA2, (float)adam_step) : 1.0f;
+
+                        for (int l = n_layers - 1; l >= 0; l--) {
+                            int in_sz = layers[l].rows, out_sz = layers[l].cols;
+
+                            /* dW[l] = A[l]^T @ delta[l]  →  in_sz × out_sz */
+                            memset(dW[l], 0, (size_t)in_sz * out_sz * sizeof(float));
+#ifdef NML_HAS_BLAS
+                            cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                                        in_sz, out_sz, Bn,
+                                        1.0f, A[l], max_dim,
+                                        delta[l], max_dim,
+                                        0.0f, dW[l], out_sz);
+#else
+                            for (int s = 0; s < Bn; s++) {
+                                const float *a_row = A[l]      + (size_t)s * max_dim;
+                                const float *d_row = delta[l]  + (size_t)s * max_dim;
+                                for (int p = 0; p < in_sz; p++)
+                                    for (int j = 0; j < out_sz; j++)
+                                        dW[l][p * out_sz + j] += a_row[p] * d_row[j];
+                            }
+#endif
+                            /* db[l] = sum_samples(delta[l]) */
+                            memset(db[l], 0, (size_t)out_sz * sizeof(float));
+                            for (int s = 0; s < Bn; s++) {
+                                const float *d_row = delta[l] + (size_t)s * max_dim;
+                                for (int j = 0; j < out_sz; j++)
+                                    db[l][j] += d_row[j];
+                            }
+
+                            /* Propagate gradient to layer l-1 */
+                            if (l > 0) {
+                                int prev_sz = layers[l - 1].cols; /* = in_sz */
+#ifdef NML_HAS_BLAS
+                                /* delta[l-1] = delta[l] @ W[l]^T  →  Bn × in_sz */
+                                cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                                            Bn, in_sz, out_sz,
+                                            1.0f, delta[l], max_dim,
+                                            W[l], out_sz,
+                                            0.0f, delta[l - 1], max_dim);
+#else
+                                for (int s = 0; s < Bn; s++) {
+                                    const float *d_row  = delta[l]     + (size_t)s * max_dim;
+                                    float       *dp_row = delta[l - 1] + (size_t)s * max_dim;
+                                    for (int p = 0; p < in_sz; p++) {
+                                        float sum = 0.0f;
+                                        for (int j = 0; j < out_sz; j++)
+                                            sum += d_row[j] * W[l][p * out_sz + j];
+                                        dp_row[p] = sum;
+                                    }
+                                }
+#endif
+                                /* Multiply by activation derivative of layer l-1 */
+                                for (int s = 0; s < Bn; s++) {
+                                    float *dp_row = delta[l - 1] + (size_t)s * max_dim;
+                                    for (int p = 0; p < prev_sz; p++) {
+                                        float z  = Z[l - 1][(size_t)s * max_dim + p];
+                                        float a  = A[l]    [(size_t)s * max_dim + p];
+                                        float da;
+                                        switch (layers[l - 1].act) {
+                                            case 1: da = a * (1.0f - a); break;
+                                            case 2: da = 1.0f - a * a;  break;
+                                            default: da = z > 0.0f ? 1.0f : 0.0f; break;
+                                        }
+                                        dp_row[p] *= da;
+                                    }
+                                }
+                                (void)prev_sz;
+                            }
+
+                            /* ── Weight update ── */
+                            if (use_adam) {
+                                for (int i = 0; i < in_sz * out_sz; i++) {
+                                    float g = dW[l][i];
+                                    mW[l][i] = BETA1 * mW[l][i] + (1.0f - BETA1) * g;
+                                    vW[l][i] = BETA2 * vW[l][i] + (1.0f - BETA2) * g * g;
+                                    W[l][i] -= lr * (mW[l][i] / bc1) / (sqrtf(vW[l][i] / bc2) + EPS);
+                                }
+                                for (int j = 0; j < out_sz; j++) {
+                                    mb[l][j] = BETA1 * mb[l][j] + (1.0f - BETA1) * db[l][j];
+                                    vb[l][j] = BETA2 * vb[l][j] + (1.0f - BETA2) * db[l][j] * db[l][j];
+                                    b_arr[l][j] -= lr * (mb[l][j] / bc1) / (sqrtf(vb[l][j] / bc2) + EPS);
+                                }
+                            } else {
+                                for (int i = 0; i < in_sz * out_sz; i++)
+                                    W[l][i] -= lr * dW[l][i];
+                                for (int j = 0; j < out_sz; j++)
+                                    b_arr[l][j] -= lr * db[l][j];
+                            }
+                        } /* end layer backward */
+                    } /* end batch */
+                    loss /= (float)(N * layers[n_layers - 1].cols);
+                } /* end epoch */
+
+                free(perm_f32);
+                free(A_buf); free(Z_buf); free(delta_buf);
+                free(dW_buf); free(db_buf);
+                free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
+
+            } else if (all_f64) {
+                /* ════════════════════════════════════════════════════════
+                   FAST PATH f64 — structurally identical to f32 path above;
+                   double buffers, cblas_dgemm (when NML_HAS_BLAS).
+                   ════════════════════════════════════════════════════════ */
+                double *W[10], *b_arr[10];
+                for (int l = 0; l < n_layers; l++) {
+                    W[l]     = REG(layers[l].w_reg).data.f64;
+                    b_arr[l] = REG(layers[l].b_reg).data.f64;
+                }
+
+                size_t slot = (size_t)B * max_dim;
+                double *A_buf     = (double *)malloc((size_t)(n_layers + 1) * slot * sizeof(double));
+                double *Z_buf     = (double *)malloc((size_t) n_layers      * slot * sizeof(double));
+                double *delta_buf = (double *)malloc((size_t) n_layers      * slot * sizeof(double));
+
+                size_t total_w = 0, total_b = 0;
+                for (int l = 0; l < n_layers; l++) {
+                    total_w += (size_t)layers[l].rows * layers[l].cols;
+                    total_b += (size_t)layers[l].cols;
+                }
+                double *dW_buf = (double *)calloc(total_w, sizeof(double));
+                double *db_buf = (double *)calloc(total_b, sizeof(double));
+
+                double *mW_buf = NULL, *vW_buf = NULL, *mb_buf = NULL, *vb_buf = NULL;
+                if (use_adam) {
+                    mW_buf = (double *)calloc(total_w, sizeof(double));
+                    vW_buf = (double *)calloc(total_w, sizeof(double));
+                    mb_buf = (double *)calloc(total_b, sizeof(double));
+                    vb_buf = (double *)calloc(total_b, sizeof(double));
+                }
+
+                if (!A_buf || !Z_buf || !delta_buf || !dW_buf || !db_buf ||
+                    (use_adam && (!mW_buf || !vW_buf || !mb_buf || !vb_buf))) {
+                    free(A_buf); free(Z_buf); free(delta_buf);
+                    free(dW_buf); free(db_buf);
+                    free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
+                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: alloc failed");
+                }
+
+                double *A[11], *Z[10], *delta[10];
+                double *dW[10], *db[10], *mW[10], *vW[10], *mb[10], *vb[10];
+                A[0] = A_buf;
+                for (int l = 0; l < n_layers; l++) {
+                    A[l + 1]  = A_buf + (size_t)(l + 1) * slot;
+                    Z[l]      = Z_buf + (size_t)l * slot;
+                    delta[l]  = delta_buf + (size_t)l * slot;
+                }
+                size_t woff = 0, boff = 0;
+                for (int l = 0; l < n_layers; l++) {
+                    size_t wl = (size_t)layers[l].rows * layers[l].cols;
+                    size_t bl = (size_t)layers[l].cols;
+                    dW[l] = dW_buf + woff;  db[l] = db_buf + boff;
+                    mW[l] = use_adam ? mW_buf + woff : NULL;
+                    vW[l] = use_adam ? vW_buf + woff : NULL;
+                    mb[l] = use_adam ? mb_buf + boff : NULL;
+                    vb[l] = use_adam ? vb_buf + boff : NULL;
+                    woff += wl; boff += bl;
+                }
+
+                const double BETA1 = 0.9, BETA2 = 0.999, EPS = 1e-8;
+                int adam_step = 0;
+
+                /* Per-epoch shuffling */
+                int *perm_f64 = (int *)malloc((size_t)N * sizeof(int));
+                if (!perm_f64) {
+                    free(A_buf); free(Z_buf); free(delta_buf);
+                    free(dW_buf); free(db_buf);
+                    free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
+                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: perm alloc failed");
+                }
+                for (int i = 0; i < N; i++) perm_f64[i] = i;
+
+                for (int epoch = 0; epoch < epochs; epoch++) {
+                    for (int i = N - 1; i > 0; i--) {
+                        int j = (int)((unsigned)rand() % (unsigned)(i + 1));
+                        int tmp = perm_f64[i]; perm_f64[i] = perm_f64[j]; perm_f64[j] = tmp;
                     }
-                    } /* end sample in batch */
-                } /* end batch */
-                loss /= N;
-            }
+                    double epoch_loss = 0.0;
+                    for (int batch = 0; batch < nbatch; batch++) {
+                        int s0 = batch * B;
+                        int Bn = (s0 + B <= N) ? B : N - s0;
+                        int in0 = layers[0].rows;
 
-            free(fwd_buf);
-            free(adam_m);
-            free(adam_v);
+                        for (int s = 0; s < Bn; s++) {
+                            int idx = perm_f64[s0 + s];
+                            memcpy(A[0] + (size_t)s * max_dim,
+                                   input->data.f64 + (size_t)idx * in0,
+                                   in0 * sizeof(double));
+                        }
+
+                        /* Forward */
+                        for (int l = 0; l < n_layers; l++) {
+                            int in_sz = layers[l].rows, out_sz = layers[l].cols;
+#ifdef NML_HAS_BLAS
+                            cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                                        Bn, out_sz, in_sz,
+                                        1.0, A[l], max_dim,
+                                        W[l], out_sz,
+                                        0.0, Z[l], max_dim);
+#else
+                            for (int s = 0; s < Bn; s++) {
+                                const double *a_row = A[l] + (size_t)s * max_dim;
+                                double       *z_row = Z[l] + (size_t)s * max_dim;
+                                for (int j = 0; j < out_sz; j++) {
+                                    double sum = 0.0;
+                                    for (int p = 0; p < in_sz; p++)
+                                        sum += a_row[p] * W[l][p * out_sz + j];
+                                    z_row[j] = sum;
+                                }
+                            }
+#endif
+                            for (int s = 0; s < Bn; s++) {
+                                double *z_row = Z[l] + (size_t)s * max_dim;
+                                double *a_row = A[l + 1] + (size_t)s * max_dim;
+                                for (int j = 0; j < out_sz; j++) {
+                                    double z = z_row[j] + b_arr[l][j];
+                                    z_row[j] = z;
+                                    switch (layers[l].act) {
+                                        case 1: a_row[j] = 1.0 / (1.0 + exp(-z)); break;
+                                        case 2: a_row[j] = tanh(z); break;
+                                        default: a_row[j] = z > 0.0 ? z : 0.0; break;
+                                    }
+                                }
+                            }
+                        }
+
+                        /* Loss + last-layer delta */
+                        int out_final = layers[n_layers - 1].cols;
+                        for (int s = 0; s < Bn; s++) {
+                            int idx = perm_f64[s0 + s];
+                            double *a_row = A[n_layers] + (size_t)s * max_dim;
+                            double *d_row = delta[n_layers - 1] + (size_t)s * max_dim;
+                            const double *y_row = target->data.f64 + (size_t)idx * out_final;
+                            for (int j = 0; j < out_final; j++) {
+                                double a = a_row[j], y = y_row[j], diff = a - y;
+                                epoch_loss += diff * diff;
+                                double z = Z[n_layers - 1][(size_t)s * max_dim + j], da;
+                                switch (layers[n_layers - 1].act) {
+                                    case 1: da = a * (1.0 - a); break;
+                                    case 2: da = 1.0 - a * a;  break;
+                                    default: da = z > 0.0 ? 1.0 : 0.0; break;
+                                }
+                                d_row[j] = 2.0 * diff * da / Bn;
+                            }
+                        }
+
+                        /* Backward */
+                        if (use_adam) { adam_step++; }
+                        double bc1 = use_adam ? 1.0 - pow(BETA1, (double)adam_step) : 1.0;
+                        double bc2 = use_adam ? 1.0 - pow(BETA2, (double)adam_step) : 1.0;
+
+                        for (int l = n_layers - 1; l >= 0; l--) {
+                            int in_sz = layers[l].rows, out_sz = layers[l].cols;
+
+                            memset(dW[l], 0, (size_t)in_sz * out_sz * sizeof(double));
+#ifdef NML_HAS_BLAS
+                            cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                                        in_sz, out_sz, Bn,
+                                        1.0, A[l], max_dim, delta[l], max_dim,
+                                        0.0, dW[l], out_sz);
+#else
+                            for (int s = 0; s < Bn; s++) {
+                                const double *a_row = A[l]     + (size_t)s * max_dim;
+                                const double *d_row = delta[l] + (size_t)s * max_dim;
+                                for (int p = 0; p < in_sz; p++)
+                                    for (int j = 0; j < out_sz; j++)
+                                        dW[l][p * out_sz + j] += a_row[p] * d_row[j];
+                            }
+#endif
+                            memset(db[l], 0, (size_t)out_sz * sizeof(double));
+                            for (int s = 0; s < Bn; s++) {
+                                const double *d_row = delta[l] + (size_t)s * max_dim;
+                                for (int j = 0; j < out_sz; j++) db[l][j] += d_row[j];
+                            }
+
+                            if (l > 0) {
+                                int prev_sz = layers[l - 1].cols;
+#ifdef NML_HAS_BLAS
+                                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                                            Bn, in_sz, out_sz,
+                                            1.0, delta[l], max_dim, W[l], out_sz,
+                                            0.0, delta[l - 1], max_dim);
+#else
+                                for (int s = 0; s < Bn; s++) {
+                                    const double *d_row  = delta[l]     + (size_t)s * max_dim;
+                                    double       *dp_row = delta[l - 1] + (size_t)s * max_dim;
+                                    for (int p = 0; p < in_sz; p++) {
+                                        double sum = 0.0;
+                                        for (int j = 0; j < out_sz; j++)
+                                            sum += d_row[j] * W[l][p * out_sz + j];
+                                        dp_row[p] = sum;
+                                    }
+                                }
+#endif
+                                for (int s = 0; s < Bn; s++) {
+                                    double *dp_row = delta[l - 1] + (size_t)s * max_dim;
+                                    for (int p = 0; p < prev_sz; p++) {
+                                        double z = Z[l-1][(size_t)s*max_dim+p];
+                                        double a = A[l]  [(size_t)s*max_dim+p], da;
+                                        switch (layers[l - 1].act) {
+                                            case 1: da = a * (1.0 - a); break;
+                                            case 2: da = 1.0 - a * a;  break;
+                                            default: da = z > 0.0 ? 1.0 : 0.0; break;
+                                        }
+                                        dp_row[p] *= da;
+                                    }
+                                }
+                                (void)prev_sz;
+                            }
+
+                            if (use_adam) {
+                                for (int i = 0; i < in_sz * out_sz; i++) {
+                                    double g = dW[l][i];
+                                    mW[l][i] = BETA1*mW[l][i] + (1.0-BETA1)*g;
+                                    vW[l][i] = BETA2*vW[l][i] + (1.0-BETA2)*g*g;
+                                    W[l][i] -= lr * (mW[l][i]/bc1) / (sqrt(vW[l][i]/bc2) + EPS);
+                                }
+                                for (int j = 0; j < out_sz; j++) {
+                                    mb[l][j] = BETA1*mb[l][j] + (1.0-BETA1)*db[l][j];
+                                    vb[l][j] = BETA2*vb[l][j] + (1.0-BETA2)*db[l][j]*db[l][j];
+                                    b_arr[l][j] -= lr * (mb[l][j]/bc1) / (sqrt(vb[l][j]/bc2) + EPS);
+                                }
+                            } else {
+                                for (int i = 0; i < in_sz * out_sz; i++) W[l][i] -= lr * dW[l][i];
+                                for (int j = 0; j < out_sz; j++) b_arr[l][j] -= lr * db[l][j];
+                            }
+                        }
+                    } /* end batch */
+                    loss = (float)(epoch_loss / (N * layers[n_layers - 1].cols));
+                } /* end epoch */
+
+                free(perm_f64);
+                free(A_buf); free(Z_buf); free(delta_buf);
+                free(dW_buf); free(db_buf);
+                free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
+
+            } else {
+                /* ════════════════════════════════════════════════════════
+                   SCALAR FALLBACK — mixed-dtype weights (f32/f64/i32 mix)
+                   Uses tensor_getd/tensor_setd for dtype-transparent access.
+                   ════════════════════════════════════════════════════════ */
+                size_t buf_per_sample = (size_t)max_dim * (n_layers + 1);
+                double *fwd_buf = (double *)calloc((size_t)B * buf_per_sample, sizeof(double));
+                if (!fwd_buf) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: alloc failed");
+
+                size_t total_params = 0;
+                for (int l = 0; l < n_layers; l++)
+                    total_params += (size_t)layers[l].rows * layers[l].cols + layers[l].cols;
+                double *adam_m = NULL, *adam_v = NULL;
+                if (use_adam) {
+                    adam_m = (double *)calloc(total_params, sizeof(double));
+                    adam_v = (double *)calloc(total_params, sizeof(double));
+                    if (!adam_m || !adam_v) {
+                        free(fwd_buf); free(adam_m); free(adam_v);
+                        VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: adam alloc failed");
+                    }
+                }
+                const float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
+                int adam_t = 0;
+
+                for (int epoch = 0; epoch < epochs; epoch++) {
+                    loss = 0.0f;
+                    for (int batch = 0; batch < nbatch; batch++) {
+                        int s0 = batch * B;
+                        int Bn = (s0 + B <= N) ? B : N - s0;
+                        for (int sample = s0; sample < s0 + Bn; sample++) {
+                            double *prev_act = fwd_buf + (size_t)(sample - s0) * buf_per_sample;
+                            int prev_n = layers[0].rows;
+                            for (int j = 0; j < prev_n; j++)
+                                prev_act[j] = tensor_getd(input, sample * prev_n + j);
+                            double *layer_acts[11]; layer_acts[0] = prev_act;
+                            for (int l = 0; l < n_layers; l++) {
+                                double *cur_act = prev_act + (size_t)(l + 1) * max_dim;
+                                layer_acts[l + 1] = cur_act;
+                                Tensor *w = &REG(layers[l].w_reg);
+                                Tensor *b = &REG(layers[l].b_reg);
+                                int in_sz = layers[l].rows, out_sz = layers[l].cols;
+                                for (int j = 0; j < out_sz; j++) {
+                                    double sum = tensor_getd(b, j);
+                                    for (int p = 0; p < in_sz; p++)
+                                        sum += layer_acts[l][p] * tensor_getd(w, p * out_sz + j);
+                                    switch (layers[l].act) {
+                                        case 1: cur_act[j] = 1.0 / (1.0 + exp(-sum)); break;
+                                        case 2: cur_act[j] = tanh(sum); break;
+                                        default: cur_act[j] = sum > 0 ? sum : 0; break;
+                                    }
+                                }
+                            }
+                            int out_sz = layers[n_layers - 1].cols;
+                            double *final_act = layer_acts[n_layers];
+                            for (int j = 0; j < out_sz; j++) {
+                                double diff = final_act[j] - tensor_getd(target, sample * out_sz + j);
+                                loss += (float)(diff * diff);
+                            }
+                            double d_buf[4096], d_buf2[4096];
+                            double *d_cur = d_buf, *d_prev = d_buf2;
+                            for (int j = 0; j < out_sz; j++)
+                                d_cur[j] = 2.0 * (final_act[j] - tensor_getd(target, sample * out_sz + j)) / Bn;
+                            size_t adam_off = total_params;
+                            for (int l = n_layers - 1; l >= 0; l--) {
+                                Tensor *w = &REG(layers[l].w_reg);
+                                Tensor *b = &REG(layers[l].b_reg);
+                                int in_sz = layers[l].rows, o_sz = layers[l].cols;
+                                adam_off -= (size_t)in_sz * o_sz + o_sz;
+                                double d_pre[4096];
+                                for (int j = 0; j < o_sz; j++) {
+                                    double a = layer_acts[l + 1][j], da;
+                                    switch (layers[l].act) {
+                                        case 1: da = a * (1.0 - a); break;
+                                        case 2: da = 1.0 - a * a;  break;
+                                        default: da = a > 0 ? 1.0 : 0.0; break;
+                                    }
+                                    d_pre[j] = d_cur[j] * da;
+                                }
+                                if (use_adam) {
+                                    adam_t = epoch * N + sample + 1;
+                                    float bc1 = 1.0f - powf(BETA1, (float)adam_t);
+                                    float bc2 = 1.0f - powf(BETA2, (float)adam_t);
+                                    for (int p = 0; p < in_sz; p++)
+                                        for (int j = 0; j < o_sz; j++) {
+                                            double g = layer_acts[l][p] * d_pre[j];
+                                            size_t idx = adam_off + p * o_sz + j;
+                                            adam_m[idx] = BETA1 * adam_m[idx] + (1 - BETA1) * g;
+                                            adam_v[idx] = BETA2 * adam_v[idx] + (1 - BETA2) * g * g;
+                                            double mh = adam_m[idx] / bc1, vh = adam_v[idx] / bc2;
+                                            tensor_setd(w, p * o_sz + j,
+                                                tensor_getd(w, p * o_sz + j) - lr * mh / (sqrt(vh) + EPS));
+                                        }
+                                    for (int j = 0; j < o_sz; j++) {
+                                        size_t idx = adam_off + (size_t)in_sz * o_sz + j;
+                                        adam_m[idx] = BETA1 * adam_m[idx] + (1 - BETA1) * d_pre[j];
+                                        adam_v[idx] = BETA2 * adam_v[idx] + (1 - BETA2) * d_pre[j] * d_pre[j];
+                                        double mh = adam_m[idx] / bc1, vh = adam_v[idx] / bc2;
+                                        tensor_setd(b, j, tensor_getd(b, j) - lr * mh / (sqrt(vh) + EPS));
+                                    }
+                                } else {
+                                    for (int p = 0; p < in_sz; p++)
+                                        for (int j = 0; j < o_sz; j++)
+                                            tensor_setd(w, p * o_sz + j,
+                                                tensor_getd(w, p * o_sz + j) - lr * layer_acts[l][p] * d_pre[j]);
+                                    for (int j = 0; j < o_sz; j++)
+                                        tensor_setd(b, j, tensor_getd(b, j) - lr * d_pre[j]);
+                                }
+                                if (l > 0) {
+                                    for (int p = 0; p < in_sz; p++) {
+                                        double sum = 0;
+                                        for (int j = 0; j < o_sz; j++)
+                                            sum += d_pre[j] * tensor_getd(w, p * o_sz + j);
+                                        d_prev[p] = sum;
+                                    }
+                                    double *tmp = d_cur; d_cur = d_prev; d_prev = tmp;
+                                }
+                            }
+                        } /* end sample */
+                    } /* end batch */
+                    loss /= N;
+                } /* end epoch */
+                free(fwd_buf); free(adam_m); free(adam_v);
+            } /* end scalar fallback */
 
             int ls[] = {1};
             tensor_init_typed(&REG(8), 1, ls, NML_F64);
@@ -3305,14 +3813,15 @@ static char* read_file(const char *path) {
 static int vm_load_data(VM *vm, const char *path) {
     char *src = read_file(path);
     if (!src) return NML_ERR_FILE;
-    char line[4096]; const char *p = src; int count = 0;
+    char line[4096]; char *p = src; int count = 0;
     while (*p) {
+        char *line_start = p;  /* remember where this line begins in the heap buffer */
         int i = 0;
         while (*p && *p != '\n' && i < 4095) line[i++] = *p++;
         line[i] = '\0'; if (*p == '\n') p++;
         char *start = line;
         while (*start == ' ' || *start == '\t') start++;
-        if (*start == '\0' || *start == '#') continue;
+        if (*start == '\0' || *start == '#' || *start == ';') continue;
         if (*start == '@') {
             char label[NML_MAX_LABEL_LEN] = {0};
             int shape[NML_MAX_DIMS] = {0}; int ndim = 0;
@@ -3326,8 +3835,10 @@ static int vm_load_data(VM *vm, const char *path) {
             MemorySlot *slot = vm_memory(vm, label);
             if (!slot) { free(src); return NML_ERR_MEMORY; }
             tensor_init_typed(&slot->tensor, ndim, shape, file_dtype); slot->used = 1;
-            char *dp = strstr(lp, "data=");
-            if (dp) { dp += 5; int di = 0; while (*dp && di < slot->tensor.size) { tensor_setd(&slot->tensor, di++, strtod(dp, &dp)); if (*dp == ',') dp++; } }
+            /* Parse data= from the heap buffer (line_start), not the 4096-byte
+               stack copy, so arbitrarily large data lines are handled correctly. */
+            char *dp = strstr(line_start, "data=");
+            if (dp) { dp += 5; int di = 0; while (*dp && *dp != '\n' && di < (int)slot->tensor.size) { tensor_setd(&slot->tensor, di++, strtod(dp, &dp)); if (*dp == ',') dp++; } }
             count++;
         }
     }
@@ -3337,12 +3848,13 @@ static int vm_load_data(VM *vm, const char *path) {
 static int vm_load_data_from_string(VM *vm, const char *src) {
     char line[4096]; const char *p = src; int count = 0;
     while (*p) {
+        const char *line_start = p;  /* remember where this line begins */
         int i = 0;
         while (*p && *p != '\n' && i < 4095) line[i++] = *p++;
         line[i] = '\0'; if (*p == '\n') p++;
         char *start = line;
         while (*start == ' ' || *start == '\t') start++;
-        if (*start == '\0' || *start == '#') continue;
+        if (*start == '\0' || *start == '#' || *start == ';') continue;
         if (*start == '@') {
             char label[NML_MAX_LABEL_LEN] = {0};
             int shape[NML_MAX_DIMS] = {0}; int ndim = 0;
@@ -3356,8 +3868,9 @@ static int vm_load_data_from_string(VM *vm, const char *src) {
             MemorySlot *slot = vm_memory(vm, label);
             if (!slot) return NML_ERR_MEMORY;
             tensor_init_typed(&slot->tensor, ndim, shape, file_dtype); slot->used = 1;
-            char *dp = strstr(lp, "data=");
-            if (dp) { dp += 5; int di = 0; while (*dp && di < slot->tensor.size) { tensor_setd(&slot->tensor, di++, strtod(dp, &dp)); if (*dp == ',') dp++; } }
+            /* Parse data= from the original src pointer (not the truncated stack copy). */
+            char *dp = strstr((char *)line_start, "data=");
+            if (dp) { dp += 5; int di = 0; while (*dp && *dp != '\n' && di < (int)slot->tensor.size) { tensor_setd(&slot->tensor, di++, strtod(dp, &dp)); if (*dp == ',') dp++; } }
             count++;
         }
     }
