@@ -55,8 +55,22 @@ VERBOSE.update({
 })
 
 ACTIVATIONS = ["RELU", "SIGM", "TANH", "GELU"]
-ACT_BK = {"RELU": "RELUBK", "SIGM": "SIGMBK", "TANH": "TANHBK", "GELU": "GELUBK"}
+ACT_BK          = {"RELU": "RELUBK", "SIGM": "SIGMBK", "TANH": "TANHBK", "GELU": "GELUBK"}
+ACT_BK_ALIAS    = {"RELU": "RELU_BK", "SIGM": "SIGM_BK", "TANH": "TANH_BK", "GELU": "GELU_BK"}
 ACT_NAMES = {"RELU": "ReLU", "SIGM": "sigmoid", "TANH": "tanh", "GELU": "GELU"}
+
+# Pick canonical or _BK alias form (~30% alias) so training data covers both
+def _bk(act):
+    return ACT_BK_ALIAS[act] if random.random() < 0.3 else ACT_BK[act]
+
+_OTHER_BK = {
+    "SIGMBK": "SIGM_BK", "TANHBK": "TANH_BK", "GELUBK": "GELU_BK", "SOFTBK": "SOFT_BK",
+    "MMULBK": "MMUL_BK", "CONVBK": "CONV_BK", "POOLBK": "POOL_BK",
+    "NORMBK": "NORM_BK", "ATTNBK": "ATTN_BK",
+}
+
+def _obk(canonical):
+    return _OTHER_BK[canonical] if random.random() < 0.3 else canonical
 GRAD_REGS = ["RG", "RH", "RI", "RJ", "RK", "RL"]
 WEIGHT_NAMES = ["weights", "w1", "w2", "w3", "kernel", "params", "matrix", "projection"]
 BIAS_NAMES = ["bias", "b1", "b2", "b3", "offset", "shift"]
@@ -95,7 +109,7 @@ def gen_individual_activation_backward(count):
     for _ in range(count):
         syntax = pick_syntax()
         act = random.choice(ACTIVATIONS)
-        bk_op = ACT_BK[act]
+        bk_op = _bk(act)
         act_name = ACT_NAMES[act]
         inp = _inp(); grad_name = random.choice(["gradient", "upstream_grad", "d_loss", "grad"])
         out_name = random.choice(["d_input", "grad_out", "backward_result", "d_activation"])
@@ -281,7 +295,7 @@ def gen_dense_2layer_training(count):
         syntax = pick_syntax()
         act = random.choice(ACTIVATIONS)
         act_name = ACT_NAMES[act]
-        bk = ACT_BK[act]
+        bk = _bk(act)
         lr = _lr()
         epochs = _epochs()
         q = random.choice(prompts).format(act=act_name) + syntax_tag(syntax)
@@ -303,10 +317,10 @@ def gen_dense_2layer_training(count):
             f"  {_fmt('SIGM', 'R8', 'R7')}",
             f"  {_fmt('LOSS', 'RA', 'R8', 'R9', '#0')}",
             f"  ; Backward",
-            f"  {_fmt('SIGMBK', 'RG', 'RA', 'R7')}",
-            f"  {_fmt('MMULBK', 'RH', 'RI', 'RG', 'R6', 'R3')}",
+            f"  {_fmt(_obk('SIGMBK'), 'RG', 'RA', 'R7')}",
+            f"  {_fmt(_obk('MMULBK'), 'RH', 'RI', 'RG', 'R6', 'R3')}",
             f"  {_fmt(bk, 'RJ', 'RH', 'R5')}",
-            f"  {_fmt('MMULBK', 'RK', 'RL', 'RJ', 'R0', 'R1')}",
+            f"  {_fmt(_obk('MMULBK'), 'RK', 'RL', 'RJ', 'R0', 'R1')}",
             f"  ; Update",
             f"  {_fmt('WUPD', 'R3', 'RI', f'#{lr}')}",
             f"  {_fmt('WUPD', 'R4', 'RG', f'#{lr}')}",
@@ -352,12 +366,12 @@ def gen_dense_3layer_training(count):
             f"  {_fmt('MADD', 'RC', 'RC', 'R6')}",
             f"  {_fmt('SIGM', 'RD', 'RC')}",
             f"  {_fmt('LOSS', 'RE', 'RD', 'R9', '#0')}",
-            f"  {_fmt('SIGMBK', 'RG', 'RE', 'RC')}",
-            f"  {_fmt('MMULBK', 'RH', 'RI', 'RG', 'RB', 'R5')}",
-            f"  {_fmt(ACT_BK[a2], 'RJ', 'RH', 'RA')}",
-            f"  {_fmt('MMULBK', 'RK', 'RL', 'RJ', 'R8', 'R3')}",
-            f"  {_fmt(ACT_BK[a1], 'RM', 'RK', 'R7')}",
-            f"  {_fmt('MMULBK', 'RN', 'RO', 'RM', 'R0', 'R1')}",
+            f"  {_fmt(_obk('SIGMBK'), 'RG', 'RE', 'RC')}",
+            f"  {_fmt(_obk('MMULBK'), 'RH', 'RI', 'RG', 'RB', 'R5')}",
+            f"  {_fmt(_bk(a2), 'RJ', 'RH', 'RA')}",
+            f"  {_fmt(_obk('MMULBK'), 'RK', 'RL', 'RJ', 'R8', 'R3')}",
+            f"  {_fmt(_bk(a1), 'RM', 'RK', 'R7')}",
+            f"  {_fmt(_obk('MMULBK'), 'RN', 'RO', 'RM', 'R0', 'R1')}",
             f"  {_fmt('WUPD', 'R5', 'RI', f'#{lr}')}",
             f"  {_fmt('WUPD', 'R6', 'RG', f'#{lr}')}",
             f"  {_fmt('WUPD', 'R3', 'RL', f'#{lr}')}",
@@ -389,7 +403,7 @@ def gen_cnn_training(count):
         syntax = pick_syntax()
         act = random.choice(["RELU", "GELU"])
         act_name = ACT_NAMES[act]
-        bk = ACT_BK[act]
+        bk = _bk(act)
         lr = _lr()
         epochs = _epochs()
         q = random.choice(prompts).format(act=act_name, actbk=bk) + syntax_tag(syntax)
@@ -409,11 +423,11 @@ def gen_cnn_training(count):
             f"  {_fmt('SIGM', 'R8', 'R7')}",
             f"  {_fmt('LOSS', 'RA', 'R8', 'R9', '#0')}",
             f"  ; Backward",
-            f"  {_fmt('SIGMBK', 'RG', 'RA', 'R7')}",
-            f"  {_fmt('MMULBK', 'RH', 'RI', 'RG', 'R6', 'R2')}",
-            f"  {_fmt('POOLBK', 'RJ', 'RH', 'R5')}",
+            f"  {_fmt(_obk('SIGMBK'), 'RG', 'RA', 'R7')}",
+            f"  {_fmt(_obk('MMULBK'), 'RH', 'RI', 'RG', 'R6', 'R2')}",
+            f"  {_fmt(_obk('POOLBK'), 'RJ', 'RH', 'R5')}",
             f"  {_fmt(bk, 'RK', 'RJ', 'R4')}",
-            f"  {_fmt('CONVBK', 'RL', 'RM', 'RK', 'R0', 'R1')}",
+            f"  {_fmt(_obk('CONVBK'), 'RL', 'RM', 'RK', 'R0', 'R1')}",
             f"  ; Update",
             f"  {_fmt('WUPD', 'R1', 'RM', f'#{lr}')}",
             f"  {_fmt('WUPD', 'R2', 'RI', f'#{lr}')}",
@@ -457,9 +471,9 @@ def gen_attention_training(count):
             f"  {_fmt('MMUL', 'R6', 'R5', 'R3')}",
             f"  {_fmt('LOSS', 'R7', 'R6', 'R9', '#0')}",
             f"  ; Backward",
-            f"  {_fmt('MMULBK', 'R8', 'RA', 'R7', 'R5', 'R3')}",
-            f"  {_fmt('NORMBK', 'RB', 'R8', 'R4')}",
-            f"  {_fmt('ATTNBK', 'RC', 'RB', 'R0', 'R1', 'R2')}",
+            f"  {_fmt(_obk('MMULBK'), 'R8', 'RA', 'R7', 'R5', 'R3')}",
+            f"  {_fmt(_obk('NORMBK'), 'RB', 'R8', 'R4')}",
+            f"  {_fmt(_obk('ATTNBK'), 'RC', 'RB', 'R0', 'R1', 'R2')}",
             f"  ; Update",
             f"  {_fmt('WUPD', 'R3', 'RA', f'#{lr}')}",
             "ENDP",
@@ -475,7 +489,7 @@ def gen_attention_training(count):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def gen_tndeep(count):
-    """TNDEEP N-layer dense training with architecture descriptor."""
+    """TNDEEP N-layer dense training with architecture descriptor and @ref syntax."""
     pairs = []
     prompts = [
         "Write NML to train a {n}-layer dense network using TNDEEP",
@@ -483,11 +497,13 @@ def gen_tndeep(count):
         "Train a {n}-layer network with TNDEEP (epochs={ep}, lr={lr})",
         "NML fused deep training: TNDEEP with {n} layers",
         "Write NML using TNDEEP to train a {desc} network",
-        "Use TNDEEP with {opt} optimizer to train on input data for {ep} epochs",
+        "Use TNDEEP with {opt} optimizer to train on @training_data for {ep} epochs",
         "Write NML that loads weights into R1-R4, architecture into RV, and calls TNDEEP",
         "Train a neural network using the TNDEEP opcode with architecture descriptor in RV",
-        "Write NML for TNDEEP: load R0=input, R9=target, R1/R2=w1/b1, R3/R4=w2/b2, RV=arch, then TNDEEP",
+        "Write NML using TNDEEP with named data references @training_data and @training_labels",
         "Use the TNDEEP fused training opcode to train a {n}-layer {desc} network with {opt}",
+        "Write NML: load weights, load RV=arch, train with TNDEEP passing @training_data and @training_labels",
+        "Train a {desc} network with TNDEEP — pass data as @training_data @training_labels, save loss to R8",
     ]
     configs = [
         (2, [4, 0, 1, 0], "2-layer 4-hidden ReLU"),
@@ -499,6 +515,13 @@ def gen_tndeep(count):
         (2, [8, 1, 1, 0], "2-layer sigmoid+ReLU"),
         (2, [32, 0, 1, 0], "2-layer 32-hidden ReLU"),
     ]
+    data_names = [
+        ("training_data", "training_labels"),
+        ("features", "targets"),
+        ("input_data", "labels"),
+        ("train_x", "train_y"),
+        ("samples", "ground_truth"),
+    ]
     for _ in range(count):
         syntax = pick_syntax()
         n_layers, arch, desc = random.choice(configs)
@@ -506,22 +529,23 @@ def gen_tndeep(count):
         opt_val = "0" if opt == "SGD" else "1"
         lr = _lr()
         ep = _epochs()
+        data_ref, label_ref = random.choice(data_names)
         q = random.choice(prompts).format(n=n_layers, opt=opt, ep=ep, lr=lr, desc=desc) + syntax_tag(syntax)
 
         arch_data = [float(n_layers)] + [float(x) for x in arch]
 
+        # New pattern: @data_ref and @label_ref go directly on the TNDEEP line.
+        # R0 and R9 are NOT pre-loaded — they stay free for post-training use.
         lines = [
             f"; TNDEEP: {desc} with {opt}",
-            f"; Register convention: R0=input, R1=w1, R2=b1, R3=w2, R4=b2, R9=target, RV=arch",
-            _fmt("LD", "R0", "@training_input"),
-            _fmt("LD", "R9", "@training_target"),
+            f"; Data resolved via @refs — R0/R9 stay free after training",
         ]
         for i in range(n_layers):
             lines.append(_fmt("LD", f"R{1 + i*2}", f"@w{i+1}"))
             lines.append(_fmt("LD", f"R{2 + i*2}", f"@b{i+1}"))
         lines.append(f"; Architecture: {arch_data}")
         lines.append(_fmt("LD", "RV", "@architecture"))
-        lines.append(_fmt("TNDEEP", f"#{ep}", f"#{lr}", f"#{opt_val}"))
+        lines.append(_fmt("TNDEEP", f"#{ep}", f"#{lr}", f"#{opt_val}", f"@{data_ref}", f"@{label_ref}"))
         lines.append(_fmt("ST", "R8", "@final_loss"))
         lines.append("HALT")
         pairs.append(_pair(q, apply_syntax([l for l in lines], syntax)))
@@ -544,7 +568,7 @@ def gen_mixed_training(count):
     for _ in range(count):
         syntax = pick_syntax()
         act = random.choice(ACTIVATIONS)
-        bk = ACT_BK[act]
+        bk = _bk(act)
         inp = _inp()
         w = random.choice(WEIGHT_NAMES)
         lr = _lr()
@@ -581,16 +605,14 @@ def gen_inference_after_training(count):
         ep = _epochs()
         q = random.choice(prompts) + syntax_tag(syntax)
         lines = [
-            "; Train on local data",
-            _fmt("LD", "R0", "@training_input"),
-            _fmt("LD", "R9", "@training_target"),
+            "; Train on local data — data refs passed directly to TNDEEP",
             _fmt("LD", "R1", "@w1"), _fmt("LD", "R2", "@b1"),
             _fmt("LD", "R3", "@w2"), _fmt("LD", "R4", "@b2"),
             _fmt("LD", "RV", "@architecture"),
-            _fmt("TNDEEP", f"#{ep}", f"#{lr}", "#1"),
+            _fmt("TNDEEP", f"#{ep}", f"#{lr}", "#1", "@training_input", "@training_target"),
             _fmt("ST", "R8", "@training_loss"),
             "",
-            "; Inference on new data (weights updated in-place)",
+            "; Inference on new data (weights updated in-place, R0 is now free)",
             _fmt("LD", "R0", "@live_input"),
             _fmt("MMUL", "R5", "R0", "R1"),
             _fmt("MADD", "R5", "R5", "R2"),

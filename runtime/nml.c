@@ -1171,6 +1171,17 @@ static const OpcodeEntry OPCODE_TABLE[] = {
     {"NORM_BACKWARD",    OP_NORMBK, "NML-TR"},
     {"ATTN_BACKWARD",    OP_ATTNBK, "NML-TR"},
     {"TRAIN_DEEP",       OP_TNDEEP, "NML-TR"},
+    /* NML-TR Backward — Short underscore aliases (LLM-natural spelling) */
+    {"RELU_BK",  OP_RELUBK, "NML-TR"},
+    {"SIGM_BK",  OP_SIGMBK, "NML-TR"},
+    {"TANH_BK",  OP_TANHBK, "NML-TR"},
+    {"GELU_BK",  OP_GELUBK, "NML-TR"},
+    {"SOFT_BK",  OP_SOFTBK, "NML-TR"},
+    {"MMUL_BK",  OP_MMULBK, "NML-TR"},
+    {"CONV_BK",  OP_CONVBK, "NML-TR"},
+    {"POOL_BK",  OP_POOLBK, "NML-TR"},
+    {"NORM_BK",  OP_NORMBK, "NML-TR"},
+    {"ATTN_BK",  OP_ATTNBK, "NML-TR"},
 #endif
     {NULL, 0, NULL}
 };
