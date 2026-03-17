@@ -417,7 +417,10 @@ static void tensor_add(Tensor *out, const Tensor *a, const Tensor *b) {
     Tensor tmp = {0};
     Tensor *dest = (out == a || out == b) ? &tmp : out;
     tensor_init_typed(dest, a->ndim, a->shape, dt); dest->size = a->size;
-    for (int i = 0; i < a->size; i++) tensor_setd(dest, i, tensor_getd(a, i) + tensor_getd(b, i));
+    /* Row broadcasting: if b is smaller and evenly divides a (e.g. 1×N bias + M×N matrix) */
+    int bmod = (b->size > 0 && a->size % b->size == 0) ? b->size : a->size;
+    for (int i = 0; i < a->size; i++)
+        tensor_setd(dest, i, tensor_getd(a, i) + tensor_getd(b, i % bmod));
     if (dest == &tmp) { tensor_free(out); *out = tmp; }
 }
 
@@ -1197,6 +1200,8 @@ typedef struct {
     Opcode op;
     int    reg[3];
     char   addr[NML_MAX_LABEL_LEN];
+    char   data_label[NML_MAX_LABEL_LEN];    /* TNDEEP optional: @input data ref  */
+    char   target_label[NML_MAX_LABEL_LEN];  /* TNDEEP optional: @labels data ref */
     double imm;
     double imm2;
     int    feat_idx;
@@ -1871,7 +1876,9 @@ static int vm_assemble(VM *vm, const char *source) {
                 instr->int_params[0] = ntokens > 4 ? parse_register(tokens[4]) : instr->reg[2];
                 instr->int_params[1] = ntokens > 5 ? parse_register(tokens[5]) : -1;
                 break;
-            /* TNDEEP — same parsing as TNET */
+            /* TNDEEP #epochs #lr #optimizer [@input_data [@labels]]
+             * Optional @name tokens bind named memory slots directly so R0/R9
+             * are not clobbered. Falls back to R0/R9 if omitted. */
             case OP_TNDEEP:
                 {
                     int fi = 1;
@@ -1879,6 +1886,15 @@ static int vm_assemble(VM *vm, const char *source) {
                     instr->imm = (fi < ntokens) ? parse_imm(tokens[fi]) : 1000;
                     instr->int_params[0] = (fi+1 < ntokens) ? (int)(parse_imm(tokens[fi+1]) * 1e6) : 1000;
                     instr->int_params[1] = (fi+2 < ntokens) ? (int)parse_imm(tokens[fi+2]) : 0;
+                    /* Scan remaining tokens for optional @data and @labels refs */
+                    for (int ti = fi + 3; ti < ntokens; ti++) {
+                        if (tokens[ti][0] != '@') continue;
+                        const char *name = tokens[ti] + 1;
+                        if (instr->data_label[0] == '\0')
+                            strncpy(instr->data_label,   name, NML_MAX_LABEL_LEN - 1);
+                        else if (instr->target_label[0] == '\0')
+                            strncpy(instr->target_label, name, NML_MAX_LABEL_LEN - 1);
+                    }
                 }
                 break;
 #endif
@@ -3089,9 +3105,11 @@ static int vm_execute(VM *vm) {
         }
 
         case OP_TNDEEP: {
-            /* TNDEEP #epochs #lr #optimizer
+            /* TNDEEP #epochs #lr #optimizer [@input_data [@labels]]
              * N-layer dense training. Architecture from RV: [n_layers, h1, act1, h2, act2, ...]
-             * Weights in R1, R2, ... (weight, bias pairs). R0=input, R9=target.
+             * Weights in R1, R2, ... (weight, bias pairs).
+             * Input/target: named @refs if provided (no register clobbering),
+             *               else falls back to R0=input, R9=target.
              * Activations: 0=ReLU, 1=sigmoid, 2=tanh, 3=GELU
              * Result: trained weights in-place, R8 = final loss
              *
@@ -3109,8 +3127,25 @@ static int vm_execute(VM *vm) {
             if (n_layers < 1 || n_layers > 10)
                 VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: n_layers must be 1-10, got %d", n_layers);
 
-            Tensor *input  = &REG(0);
-            Tensor *target = &REG(9);
+            /* Resolve input/target: named @ref takes priority over R0/R9 */
+            Tensor *input  = NULL;
+            Tensor *target = NULL;
+            if (ins->data_label[0]) {
+                MemorySlot *sl = vm_memory(vm, ins->data_label);
+                if (!sl || !sl->used)
+                    VM_ERROR(vm, NML_ERR_MEMORY, "TNDEEP: @%s not found", ins->data_label);
+                input = &sl->tensor;
+            } else {
+                input = &REG(0);
+            }
+            if (ins->target_label[0]) {
+                MemorySlot *sl = vm_memory(vm, ins->target_label);
+                if (!sl || !sl->used)
+                    VM_ERROR(vm, NML_ERR_MEMORY, "TNDEEP: @%s not found", ins->target_label);
+                target = &sl->tensor;
+            } else {
+                target = &REG(9);
+            }
             int N = input->shape[0];
 
             typedef struct { int rows, cols; int act; int w_reg, b_reg; } Layer;
@@ -3900,6 +3935,7 @@ static int count_unique_ops(const char *ext_filter) {
 int main(int argc, char **argv) {
     const char *program_path = NULL;
     const char *data_path = NULL;
+    const char *output_path = NULL;
     int trace = 0;
     int max_cycles = NML_DEFAULT_MAX_CYCLES;
     int describe_only = 0;
@@ -3921,6 +3957,8 @@ int main(int argc, char **argv) {
             describe_only = 1;
         } else if (strcmp(argv[i], "--fragment") == 0 && i + 1 < argc) {
             fragment_name = argv[++i];
+        } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
+            output_path = argv[++i];
 #ifdef NML_CRYPTO
         } else if (strcmp(argv[i], "--keygen") == 0) {
             keygen_mode = 1;
@@ -3956,7 +3994,7 @@ int main(int argc, char **argv) {
 
     if (!program_path) {
         printf("NML — Neural Machine Language v%d.%d\n", NML_VERSION_MAJOR, NML_VERSION_MINOR);
-        printf("Usage: nml <program.nml> [data.nml.data] [--trace] [--max-cycles N] [--describe] [--fragment NAME]\n");
+        printf("Usage: nml <program.nml> [data.nml.data] [--trace] [--max-cycles N] [--describe] [--fragment NAME] [--output FILE]\n");
 #ifdef NML_CRYPTO
         printf("       nml --sign <program.nml> --key <hex> [--agent <name>]    Sign a program\n");
 #endif
@@ -4142,6 +4180,29 @@ int main(int argc, char **argv) {
     printf("\n=== MEMORY ===\n");
     for (int i = 0; i < vm->mem_count; i++)
         if (vm->memory[i].used) tensor_print(&vm->memory[i].tensor, vm->memory[i].label);
+
+    /* --output: write all named memory slots to a .nml.data file */
+    if (output_path) {
+        FILE *of = fopen(output_path, "w");
+        if (!of) {
+            fprintf(stderr, "[NML] WARNING: could not open output file %s\n", output_path);
+        } else {
+            fprintf(of, "; NML output data — named memory slots after execution\n");
+            for (int i = 0; i < vm->mem_count; i++) {
+                if (!vm->memory[i].used) continue;
+                Tensor *t = &vm->memory[i].tensor;
+                fprintf(of, "@%s shape=", vm->memory[i].label);
+                for (int d = 0; d < t->ndim; d++)
+                    fprintf(of, "%d%s", t->shape[d], d < t->ndim - 1 ? "," : "");
+                fprintf(of, " dtype=%s data=", dtype_name(t->dtype));
+                for (int j = 0; j < (int)t->size; j++)
+                    fprintf(of, "%.6f%s", tensor_getd(t, j), j < (int)t->size - 1 ? "," : "");
+                fprintf(of, "\n");
+            }
+            fclose(of);
+            printf("[NML] Output written to %s\n", output_path);
+        }
+    }
 
     printf("\n=== STATS ===\n");
     printf("  Version:       %d.%d\n", NML_VERSION_MAJOR, NML_VERSION_MINOR);

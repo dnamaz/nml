@@ -56,6 +56,9 @@ programs/f1_pitstop.nml.data
 programs/f1_pitstop_norm.json
 programs/f1_laptime.nml.data
 programs/f1_laptime_norm.json
+programs/f1_podium.nml.data
+programs/f1_podium_meta.json
+programs/f1_podium_nml_output.nml.data
 
 # Temp
 /tmp/

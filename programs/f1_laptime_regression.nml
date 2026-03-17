@@ -20,13 +20,10 @@ LD    R4 @b2         ; 1×8    layer 2 bias
 LD    R5 @w3         ; 8×1    layer 3 weights
 LD    R6 @b3         ; 1×1    layer 3 bias
 
-; --- Load training data ---
-LD    R0 @training_data      ; N×15  feature matrix
-LD    R9 @training_labels    ; N×1   normalised lap times
-
 ; --- Train: 5000 epochs, lr=0.005, Adam optimiser ---
+; @training_data and @training_labels resolved directly — R0/R9 stay free.
 ; After completion: R1–R6 hold trained weights, R8 = final MSE loss
-TNDEEP  #5000  #0.005  #1
+TNDEEP  #5000  #0.005  #1  @training_data  @training_labels
 
 ; --- Save loss for inspection ---
 ST    R8 @training_loss
