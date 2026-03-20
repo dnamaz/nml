@@ -1,0 +1,55 @@
+; ═══════════════════════════════════════════
+; Adaptive NML Program — Train Then Infer
+; ═══════════════════════════════════════════
+; Demonstrates the three-fragment adaptive pattern:
+;   1. SETUP: load initial weights
+;   2. TRAIN: self-train using TNET on local data
+;   3. INFER: run inference with trained weights
+;
+; The agent can LINK all three (full adaptive),
+; or skip TRAIN if pre-trained weights are available.
+;
+; Architecture: 1→4→1 ReLU
+; Training: TNET fused opcode (2000 epochs)
+; ═══════════════════════════════════════════
+
+META  @mode           "adaptive"
+META  @name           "adaptive_example"
+META  @train_epochs   "2000"
+META  @train_lr       "0.001"
+META  @requires       "training_data"
+
+; Fragment 1: Load initial weights
+FRAG  setup
+LD    R1 @w1
+LD    R2 @b1
+LD    R3 @w2
+LD    R4 @b2
+ENDF
+
+; Fragment 2: Train on local data
+FRAG  train
+LD    R0 @training_input
+LD    R9 @training_target
+TNET  #2000  #0.001  #0
+ST    R8 @training_loss
+ENDF
+
+; Fragment 3: Run inference
+FRAG  infer
+LD    R0 @test_input
+MMUL  R5 R0 R1
+MADD  R5 R5 R2
+RELU  R5 R5
+MMUL  R6 R5 R3
+MADD  RA R6 R4
+ST    RA @result
+ENDF
+
+; Main: compose fragments
+FRAG  main
+LINK  @setup
+LINK  @train
+LINK  @infer
+HALT
+ENDF

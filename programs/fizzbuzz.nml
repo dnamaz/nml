@@ -1,0 +1,52 @@
+; ═══════════════════════════════════════════
+; NML-G FizzBuzz (1 to 30)
+; ═══════════════════════════════════════════
+; Classic interview problem in NML
+; Demonstrates: SYS, MOD, CMPI, conditional jumps
+; Extension: NML-G (General Purpose)
+;
+; Output: -1=Fizz, -2=Buzz, -3=FizzBuzz, else number
+; ═══════════════════════════════════════════
+
+;  0: init
+LEAF  RD  #1.0           ; n = 1
+LEAF  R5  #31.0          ; limit
+LEAF  R3  #15.0
+LEAF  R4  #3.0
+LEAF  R6  #5.0
+
+;  5: check n%15
+MOD   R0 RD R3           ; R0 = n % 15
+CMPI  RE R0 #0.5         ; flag = (R0 < 0.5) → R0==0
+JMPF  #3                 ; not FizzBuzz → check n%3 (→11)
+LEAF  R7 #-3.0
+SYS   R7 #0              ; print FizzBuzz
+JUMP  #13                ; → increment (→24)
+
+; 11: check n%3
+MOD   R0 RD R4
+CMPI  RE R0 #0.5
+JMPF  #3                 ; not Fizz → check n%5 (→17)
+LEAF  R7 #-1.0
+SYS   R7 #0              ; print Fizz
+JUMP  #7                 ; → increment (→24)
+
+; 17: check n%5
+MOD   R0 RD R6
+CMPI  RE R0 #0.5
+JMPF  #3                 ; not Buzz → print number (→23)
+LEAF  R7 #-2.0
+SYS   R7 #0              ; print Buzz
+JUMP  #1                 ; → increment (→24)
+
+; 23: print number
+SYS   RD #0
+
+; 24: increment
+LEAF  RC #1.0
+TACC  RD RD RC
+CMP   RD R5              ; n < 31?
+JMPT  #-23               ; yes → loop (→5)
+
+; 28:
+HALT

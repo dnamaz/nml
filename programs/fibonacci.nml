@@ -1,0 +1,33 @@
+; ═══════════════════════════════════════════
+; NML-G Fibonacci Sequence
+; ═══════════════════════════════════════════
+; Prints first 20 Fibonacci numbers
+; Demonstrates: SYS, TACC, backward jumps
+; Extension: NML-G (General Purpose)
+; ═══════════════════════════════════════════
+
+; Initialize: fib(0) = 0, fib(1) = 1
+LEAF  R0 #0.0       ; a = 0 (current)
+LEAF  R1 #1.0       ; b = 1 (next)
+LEAF  RD #0.0       ; counter = 0
+LEAF  R5 #20.0      ; limit = 20
+
+; Print a (instruction 4)
+SYS   R0 #0         ; print current fib number
+
+; next = a + b
+TACC  R2 R0 R1      ; R2 = a + b
+
+; shift: a = b, b = next
+MOV   R0 R1         ; a = b
+MOV   R1 R2         ; b = next
+
+; counter++
+LEAF  RC #1.0
+TACC  RD RD RC       ; counter += 1
+
+; loop if counter < 20
+CMP   RD R5          ; flag = (counter < limit)
+JMPT  #-8           ; yes → back to instruction 4
+
+HALT

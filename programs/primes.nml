@@ -1,0 +1,46 @@
+; ═══════════════════════════════════════════
+; NML-G Prime Number Finder (2 to 50)
+; ═══════════════════════════════════════════
+; Trial division: for each n, test d=2..sqrt(n)
+; Demonstrates: nested loops via backward jumps, MOD
+; Extension: NML-G (General Purpose)
+; ═══════════════════════════════════════════
+
+;  0: init
+LEAF  RD  #2.0            ; n = 2
+LEAF  R9  #51.0           ; upper limit
+
+;  2: outer loop — reset divisor
+LEAF  R1  #2.0            ; d = 2
+LEAF  RA  #1.0            ; is_prime = 1
+
+;  4: inner loop — trial division
+EMUL  R3 R1 R1            ; R3 = d * d
+CMP   RD R3               ; n < d²?
+JMPT  #8                  ; yes → check is_prime (→15)
+
+MOD   R0 RD R1            ; R0 = n % d
+CMPI  RE R0 #0.5          ; R0 == 0?
+JMPF  #2                  ; no → next divisor (→12)
+
+LEAF  RA #0.0             ; composite
+JUMP  #3                  ; → check is_prime (→15)
+
+; 12: next divisor
+LEAF  RC #1.0
+TACC  R1 R1 RC            ; d++
+JUMP  #-11                ; → inner loop (→4)
+
+; 15: done checking — print if prime
+CMPI  RE RA #0.5          ; is_prime < 0.5?
+JMPT  #1                  ; not prime → skip print (→18)
+SYS   RD #0               ; print n
+
+; 18: next candidate
+LEAF  RC #1.0
+TACC  RD RD RC            ; n++
+CMP   RD R9               ; n < 51?
+JMPT  #-20                ; yes → outer loop (→2)
+
+; 22:
+HALT
