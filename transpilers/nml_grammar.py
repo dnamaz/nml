@@ -110,6 +110,7 @@ _CLASSIC_OPCODES = [
     "BKWD", "WUPD", "LOSS", "TNET",
     "RELUBK", "SIGMBK", "TANHBK", "GELUBK", "SOFTBK",
     "MMULBK", "CONVBK", "POOLBK", "NORMBK", "ATTNBK", "TNDEEP",
+    "TLOG", "TRAIN", "INFER", "WDECAY",
 ]
 for _op in _CLASSIC_OPCODES:
     _OPCODE_TO_CANONICAL[_op] = _op
@@ -151,6 +152,7 @@ _SYMBOLIC_TO_CANONICAL = {
     "⌐ˈ": "RELUBK", "σˈ": "SIGMBK", "τˈ": "TANHBK", "ℊˈ": "GELUBK", "Σˈ": "SOFTBK",
     "×ˈ": "MMULBK", "⊛ˈ": "CONVBK", "⊓ˈ": "POOLBK", "‖ˈ": "NORMBK", "⊙ˈ": "ATTNBK",
     "⥁ˈ": "TNDEEP",
+    "⧖": "TLOG", "⟴": "TRAIN", "⟶": "INFER", "ω": "WDECAY",
 }
 _OPCODE_TO_CANONICAL.update(_SYMBOLIC_TO_CANONICAL)
 
@@ -199,6 +201,8 @@ _VERBOSE_TO_CANONICAL = {
     "GELU_BK": "GELUBK", "SOFT_BK": "SOFTBK", "MMUL_BK": "MMULBK",
     "CONV_BK": "CONVBK", "POOL_BK": "POOLBK", "NORM_BK": "NORMBK",
     "ATTN_BK": "ATTNBK",
+    # v0.9 config-driven training
+    "TRAIN_LOG": "TLOG", "TRAIN_CONFIG": "TRAIN", "FORWARD_PASS": "INFER", "WEIGHT_DECAY": "WDECAY",
 }
 _OPCODE_TO_CANONICAL.update(_VERBOSE_TO_CANONICAL)
 

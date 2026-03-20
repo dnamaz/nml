@@ -885,7 +885,7 @@ typedef enum {
     OP_SYNC, OP_HALT,
     /* Core: Tree Models (6) */
     OP_CMPF, OP_LEAF, OP_TACC, OP_JMPT, OP_JMPF, OP_JUMP,
-    /* Core: v0.4 additions (9) */
+    /* Core: v0.4 additions (7) */
     OP_SDIV, OP_EDIV,
     OP_CMP,  OP_CMPI,
     OP_CALL, OP_RET,
@@ -899,7 +899,7 @@ typedef enum {
     /* Extension: NML-S Signal (2) */
     OP_FFT,  OP_FILT,
 #ifndef NML_NO_M2M
-    /* Extension: NML-M2M (11) */
+    /* Extension: NML-M2M (12) */
     OP_META, OP_FRAG, OP_ENDF, OP_LINK,
     OP_PTCH, OP_SIGN, OP_VRFY,
     OP_VOTE,
@@ -916,6 +916,11 @@ typedef enum {
     OP_RELUBK, OP_SIGMBK, OP_TANHBK, OP_GELUBK, OP_SOFTBK,
     OP_MMULBK, OP_CONVBK, OP_POOLBK, OP_NORMBK, OP_ATTNBK,
     OP_TNDEEP,
+    /* Extension: NML-TR v0.9 — config-driven training + forward-only inference */
+    OP_TLOG,   /* TLOG #n        — set print-every-N-epochs flag for next training call */
+    OP_TRAIN,  /* TRAIN RS       — config-driven training (reads 6-element tensor from RS) */
+    OP_INFER,  /* INFER Rd R0    — forward pass only (no weight update), output in Rd */
+    OP_WDECAY, /* WDECAY Rd #λ   — weight decay: Rd[i] *= (1 - λ); ω in symbolic syntax */
 #endif
     OP_COUNT
 } Opcode;
@@ -1182,6 +1187,21 @@ static const OpcodeEntry OPCODE_TABLE[] = {
     {"POOL_BK",  OP_POOLBK, "NML-TR"},
     {"NORM_BK",  OP_NORMBK, "NML-TR"},
     {"ATTN_BK",  OP_ATTNBK, "NML-TR"},
+    /* NML-TR v0.9 — Classic */
+    {"TLOG",        OP_TLOG,   "NML-TR"},
+    {"TRAIN",       OP_TRAIN,  "NML-TR"},
+    {"INFER",       OP_INFER,  "NML-TR"},
+    {"WDECAY",      OP_WDECAY, "NML-TR"},
+    /* NML-TR v0.9 — Symbolic  ⧖=hourglass(log) ⟴=train ⟶=infer ω=weight-decay */
+    {"\xe2\xa7\x96", OP_TLOG,   "NML-TR"},  /* ⧖ */
+    {"\xe2\x9f\xb4", OP_TRAIN,  "NML-TR"},  /* ⟴ */
+    {"\xe2\x9f\xb6", OP_INFER,  "NML-TR"},  /* ⟶ */
+    {"\xcf\x89",     OP_WDECAY, "NML-TR"},  /* ω  omega — decay/damping */
+    /* NML-TR v0.9 — Verbose */
+    {"TRAIN_LOG",      OP_TLOG,   "NML-TR"},
+    {"TRAIN_CONFIG",   OP_TRAIN,  "NML-TR"},
+    {"FORWARD_PASS",   OP_INFER,  "NML-TR"},
+    {"WEIGHT_DECAY",   OP_WDECAY, "NML-TR"},
 #endif
     {NULL, 0, NULL}
 };
@@ -1244,6 +1264,7 @@ typedef struct {
     int         call_depth;
     int         max_cycles;
     int         trace;
+    int         tlog_interval;  /* set by TLOG #n, consumed by next TRAIN/TNDEEP call */
     int         error_code;
     char        error_msg[256];
     unsigned    extensions;
@@ -1906,6 +1927,47 @@ static int vm_assemble(VM *vm, const char *source) {
                         else if (instr->target_label[0] == '\0')
                             strncpy(instr->target_label, name, NML_MAX_LABEL_LEN - 1);
                     }
+                }
+                break;
+            /* TLOG #n — set print-every-N-epochs (immediate, no registers) */
+            case OP_TLOG:
+                instr->imm = (ntokens > 1) ? parse_imm(tokens[1]) : 100;
+                break;
+            /* TRAIN RS [@input_data [@labels]]
+             * RS is a register holding a 1D config tensor:
+             *   [epochs, lr, optimizer, print_every, patience, min_delta]
+             * Unspecified trailing elements default to: 0,0,0 (no early stopping). */
+            case OP_TRAIN:
+                instr->reg[0] = (ntokens > 1) ? parse_register(tokens[1]) : 0;
+                for (int ti = 2; ti < ntokens; ti++) {
+                    if (tokens[ti][0] != '@') continue;
+                    const char *name = tokens[ti] + 1;
+                    if (instr->data_label[0] == '\0')
+                        strncpy(instr->data_label,   name, NML_MAX_LABEL_LEN - 1);
+                    else if (instr->target_label[0] == '\0')
+                        strncpy(instr->target_label, name, NML_MAX_LABEL_LEN - 1);
+                }
+                break;
+            /* INFER Rd [R_input]
+             * Rd       — destination register for output activations
+             * R_input  — optional override for input register (default R0) */
+            case OP_INFER:
+                instr->reg[0] = (ntokens > 1) ? parse_register(tokens[1]) : 10; /* RA */
+                instr->reg[1] = (ntokens > 2) ? parse_register(tokens[2]) :  0; /* R0 */
+                break;
+            /* WDECAY Rd #lambda  (ω in symbolic syntax)
+             * In-place multiplicative weight decay: Rd[i] *= (1 - lambda)
+             * Equivalent to the L2 regularisation gradient step W -= lr*lambda*W
+             * when called once per epoch with lambda = lr * l2_strength.
+             * lambda may be an immediate (#0.005) or a scalar register (Rlambda). */
+            case OP_WDECAY:
+                instr->reg[0] = (ntokens > 1) ? parse_register(tokens[1]) : 1;
+                if (ntokens > 2 && is_register_token(tokens[2])) {
+                    instr->reg[1]      = parse_register(tokens[2]);
+                    instr->int_params[0] = 1; /* lambda from register */
+                } else {
+                    instr->imm           = (ntokens > 2) ? parse_imm(tokens[2]) : 0.0;
+                    instr->int_params[0] = 0; /* lambda from immediate */
                 }
                 break;
 #endif
@@ -3829,6 +3891,570 @@ static int vm_execute(VM *vm) {
             tensor_init_typed(&REG(8), 1, ls, NML_F64);
             tensor_setd(&REG(8), 0, (double)loss);
             RVALID(8) = 1;
+            break;
+        }
+
+        /* ── TLOG #n ─────────────────────────────────────────────────────────
+         * Sets vm->tlog_interval to n (default 100).
+         * The next TNDEEP or TRAIN call reads and clears this flag, printing
+         * "epoch E/N  loss=L" every tlog_interval epochs to stderr.
+         * TLOG is a no-op at runtime beyond storing the flag — it executes in
+         * O(1) and never touches any register or memory slot. */
+        case OP_TLOG:
+            vm->tlog_interval = (ins->imm > 0) ? (int)ins->imm : 100;
+            break;
+
+        /* ── TRAIN RS [@input_data [@labels]] ────────────────────────────────
+         * Config-driven N-layer training.  RS must hold a 1D f32/f64 tensor
+         * with up to 6 elements:
+         *
+         *   [0]  epochs        (int)   default 1000
+         *   [1]  lr            (float) default 0.001
+         *   [2]  optimizer     (int)   0=SGD  1=Adam   default 1
+         *   [3]  print_every   (int)   0 = use vm->tlog_interval or silent
+         *   [4]  patience      (int)   early-stopping window (0 = disabled)
+         *   [5]  min_delta     (float) minimum improvement to reset patience counter
+         *
+         * Architecture: RV  (same as TNDEEP)
+         * Weights:      R1–R6 pairs  (same as TNDEEP)
+         * Input/target: @refs from instruction, else R0/R9
+         * Output:       R8 = final loss  (same as TNDEEP)
+         *
+         * TRAIN delegates to TNDEEP's existing internals once parameters are
+         * extracted, so fast-path (f32/BLAS) and scalar fallback both apply. */
+        case OP_TRAIN: {
+            Tensor *cfg = &REG(ins->reg[0]);
+            if (!RVALID(ins->reg[0]) || cfg->size < 1)
+                VM_ERROR(vm, NML_ERR_OPCODE, "TRAIN: config register R%d is empty", ins->reg[0]);
+
+            int   epochs    = (cfg->size > 0) ? (int)tensor_getd(cfg, 0)   : 1000;
+            float lr        = (cfg->size > 1) ? (float)tensor_getd(cfg, 1) : 0.001f;
+            int   use_adam  = (cfg->size > 2) ? (int)tensor_getd(cfg, 2)   : 1;
+            int   print_ev  = (cfg->size > 3) ? (int)tensor_getd(cfg, 3)   : 0;
+            int   patience  = (cfg->size > 4) ? (int)tensor_getd(cfg, 4)   : 0;
+            float min_delta = (cfg->size > 5) ? (float)tensor_getd(cfg, 5) : 1e-6f;
+
+            /* print_every: instruction field takes priority over TLOG flag */
+            if (print_ev == 0 && vm->tlog_interval > 0)
+                print_ev = vm->tlog_interval;
+            vm->tlog_interval = 0;  /* consume the TLOG flag */
+
+            /* Resolve architecture */
+            Tensor *arch = &REG(31); /* RV */
+            if (!RVALID(31) || arch->size < 1)
+                VM_ERROR(vm, NML_ERR_OPCODE, "TRAIN: RV must contain architecture descriptor");
+            int n_layers = (int)tensor_getd(arch, 0);
+            if (n_layers < 1 || n_layers > 10)
+                VM_ERROR(vm, NML_ERR_OVERFLOW, "TRAIN: n_layers must be 1-10, got %d", n_layers);
+
+            /* Resolve input/target (same priority as TNDEEP) */
+            Tensor *input = NULL, *target = NULL;
+            if (ins->data_label[0]) {
+                MemorySlot *sl = vm_memory(vm, ins->data_label);
+                if (!sl || !sl->used)
+                    VM_ERROR(vm, NML_ERR_MEMORY, "TRAIN: @%s not found", ins->data_label);
+                input = &sl->tensor;
+            } else { input = &REG(0); }
+            if (ins->target_label[0]) {
+                MemorySlot *sl = vm_memory(vm, ins->target_label);
+                if (!sl || !sl->used)
+                    VM_ERROR(vm, NML_ERR_MEMORY, "TRAIN: @%s not found", ins->target_label);
+                target = &sl->tensor;
+            } else { target = &REG(9); }
+            int N = input->shape[0];
+
+            typedef struct { int rows, cols, act, w_reg, b_reg; } TLayer;
+            TLayer layers[10];
+            int prev_size = input->ndim >= 2 ? input->shape[1] : input->shape[0];
+            for (int l = 0; l < n_layers; l++) {
+                int h   = (int)tensor_getd(arch, 1 + l * 2);
+                int act = (1 + l*2+1 < (int)arch->size) ? (int)tensor_getd(arch, 1+l*2+1) : 0;
+                layers[l] = (TLayer){prev_size, h, act, 1+l*2, 2+l*2};
+                prev_size = h;
+            }
+
+            int max_dim = 0;
+            for (int l = 0; l < n_layers; l++)
+                if (layers[l].cols > max_dim) max_dim = layers[l].cols;
+            if (layers[0].rows > max_dim) max_dim = layers[0].rows;
+            if (max_dim > 4096)
+                VM_ERROR(vm, NML_ERR_OVERFLOW, "TRAIN: max dimension %d exceeds 4096", max_dim);
+
+            int B = (N <= 64) ? N : 64;
+            int nbatch = (N + B - 1) / B;
+
+            /* ── f32 fast path ── */
+            float *W[10], *b_arr[10];
+            int all_f32 = (input->dtype == NML_F32 && target->dtype == NML_F32);
+            for (int l = 0; l < n_layers && all_f32; l++)
+                if (REG(layers[l].w_reg).dtype != NML_F32 || REG(layers[l].b_reg).dtype != NML_F32)
+                    all_f32 = 0;
+            if (all_f32)
+                for (int l = 0; l < n_layers; l++) {
+                    W[l]     = REG(layers[l].w_reg).data.f32;
+                    b_arr[l] = REG(layers[l].b_reg).data.f32;
+                }
+
+            size_t slot = (size_t)B * max_dim;
+            float *A_buf = NULL, *Z_buf = NULL, *delta_buf = NULL;
+            float *dW_buf = NULL, *db_buf = NULL;
+            float *mW_buf = NULL, *vW_buf = NULL, *mb_buf = NULL, *vb_buf = NULL;
+            int   *perm   = NULL;
+
+            size_t total_w = 0, total_b = 0;
+            for (int l = 0; l < n_layers; l++) {
+                total_w += (size_t)layers[l].rows * layers[l].cols;
+                total_b += (size_t)layers[l].cols;
+            }
+
+            float loss = 0.0f;
+            float best_loss = 1e30f;
+            int   no_improve = 0;
+            int   stopped_early = 0;
+
+            if (all_f32) {
+                A_buf     = (float *)malloc((size_t)(n_layers+1) * slot * sizeof(float));
+                Z_buf     = (float *)malloc((size_t) n_layers    * slot * sizeof(float));
+                delta_buf = (float *)malloc((size_t) n_layers    * slot * sizeof(float));
+                dW_buf    = (float *)calloc(total_w, sizeof(float));
+                db_buf    = (float *)calloc(total_b, sizeof(float));
+                if (use_adam) {
+                    mW_buf = (float *)calloc(total_w, sizeof(float));
+                    vW_buf = (float *)calloc(total_w, sizeof(float));
+                    mb_buf = (float *)calloc(total_b, sizeof(float));
+                    vb_buf = (float *)calloc(total_b, sizeof(float));
+                }
+                perm = (int *)malloc((size_t)N * sizeof(int));
+                if (!A_buf || !Z_buf || !delta_buf || !dW_buf || !db_buf || !perm ||
+                    (use_adam && (!mW_buf || !vW_buf || !mb_buf || !vb_buf))) {
+                    free(A_buf); free(Z_buf); free(delta_buf); free(dW_buf); free(db_buf);
+                    free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf); free(perm);
+                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TRAIN: alloc failed");
+                }
+
+                float *A[11], *Z[10], *delta[10], *dW[10], *db[10];
+                float *mW[10], *vW[10], *mb[10], *vb[10];
+                A[0] = A_buf;
+                for (int l = 0; l < n_layers; l++) {
+                    A[l+1]   = A_buf + (size_t)(l+1) * slot;
+                    Z[l]     = Z_buf + (size_t)l * slot;
+                    delta[l] = delta_buf + (size_t)l * slot;
+                }
+                size_t woff = 0, boff = 0;
+                for (int l = 0; l < n_layers; l++) {
+                    size_t wl = (size_t)layers[l].rows * layers[l].cols;
+                    size_t bl = (size_t)layers[l].cols;
+                    dW[l] = dW_buf + woff;  db[l] = db_buf + boff;
+                    mW[l] = use_adam ? mW_buf + woff : NULL;
+                    vW[l] = use_adam ? vW_buf + woff : NULL;
+                    mb[l] = use_adam ? mb_buf + boff : NULL;
+                    vb[l] = use_adam ? vb_buf + boff : NULL;
+                    woff += wl; boff += bl;
+                }
+                for (int i = 0; i < N; i++) perm[i] = i;
+                const float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
+                int adam_step = 0;
+
+                for (int epoch = 0; epoch < epochs && !stopped_early; epoch++) {
+                    /* Fisher-Yates shuffle */
+                    for (int i = N-1; i > 0; i--) {
+                        int j = (int)((unsigned)rand() % (unsigned)(i+1));
+                        int tmp = perm[i]; perm[i] = perm[j]; perm[j] = tmp;
+                    }
+                    loss = 0.0f;
+                    for (int batch = 0; batch < nbatch; batch++) {
+                        int s0 = batch * B, Bn = (s0+B<=N) ? B : N-s0;
+                        int in0 = layers[0].rows;
+                        for (int s = 0; s < Bn; s++) {
+                            int idx = perm[s0+s];
+                            memcpy(A[0] + (size_t)s * max_dim,
+                                   input->data.f32 + (size_t)idx * in0,
+                                   in0 * sizeof(float));
+                        }
+                        /* Forward */
+                        for (int l = 0; l < n_layers; l++) {
+                            int in_sz = layers[l].rows, out_sz = layers[l].cols;
+#ifdef NML_HAS_BLAS
+                            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                                        Bn, out_sz, in_sz, 1.0f, A[l], max_dim,
+                                        W[l], out_sz, 0.0f, Z[l], max_dim);
+#else
+                            for (int s = 0; s < Bn; s++) {
+                                const float *a_row = A[l] + (size_t)s * max_dim;
+                                float       *z_row = Z[l] + (size_t)s * max_dim;
+                                for (int j = 0; j < out_sz; j++) {
+                                    float sum = 0.0f;
+                                    for (int p = 0; p < in_sz; p++)
+                                        sum += a_row[p] * W[l][p * out_sz + j];
+                                    z_row[j] = sum;
+                                }
+                            }
+#endif
+                            for (int s = 0; s < Bn; s++) {
+                                float *z_row = Z[l] + (size_t)s * max_dim;
+                                float *a_row = A[l+1] + (size_t)s * max_dim;
+                                for (int j = 0; j < out_sz; j++) {
+                                    float z = z_row[j] + b_arr[l][j];
+                                    z_row[j] = z;
+                                    switch (layers[l].act) {
+                                        case 1: a_row[j] = 1.0f/(1.0f+expf(-z)); break;
+                                        case 2: a_row[j] = tanhf(z); break;
+                                        default: a_row[j] = z > 0.0f ? z : 0.0f; break;
+                                    }
+                                }
+                            }
+                        }
+                        /* Loss + output delta */
+                        int out_final = layers[n_layers-1].cols;
+                        for (int s = 0; s < Bn; s++) {
+                            int idx = perm[s0+s];
+                            float *a_row = A[n_layers] + (size_t)s * max_dim;
+                            float *d_row = delta[n_layers-1] + (size_t)s * max_dim;
+                            const float *y_row = target->data.f32 + (size_t)idx * out_final;
+                            for (int j = 0; j < out_final; j++) {
+                                float a = a_row[j], y = y_row[j], diff = a - y;
+                                loss += diff * diff;
+                                float z = Z[n_layers-1][(size_t)s*max_dim+j], da;
+                                switch (layers[n_layers-1].act) {
+                                    case 1: da = a*(1.0f-a); break;
+                                    case 2: da = 1.0f-a*a;  break;
+                                    default: da = z > 0.0f ? 1.0f : 0.0f; break;
+                                }
+                                d_row[j] = 2.0f * diff * da / Bn;
+                            }
+                        }
+                        /* Backward */
+                        if (use_adam) adam_step++;
+                        float bc1 = use_adam ? 1.0f - powf(BETA1,(float)adam_step) : 1.0f;
+                        float bc2 = use_adam ? 1.0f - powf(BETA2,(float)adam_step) : 1.0f;
+                        for (int l = n_layers-1; l >= 0; l--) {
+                            int in_sz = layers[l].rows, out_sz = layers[l].cols;
+                            memset(dW[l], 0, (size_t)in_sz*out_sz*sizeof(float));
+#ifdef NML_HAS_BLAS
+                            cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                                        in_sz, out_sz, Bn, 1.0f, A[l], max_dim,
+                                        delta[l], max_dim, 0.0f, dW[l], out_sz);
+#else
+                            for (int s = 0; s < Bn; s++) {
+                                const float *a_row = A[l]     + (size_t)s*max_dim;
+                                const float *d_row = delta[l] + (size_t)s*max_dim;
+                                for (int p = 0; p < in_sz; p++)
+                                    for (int j = 0; j < out_sz; j++)
+                                        dW[l][p*out_sz+j] += a_row[p]*d_row[j];
+                            }
+#endif
+                            memset(db[l], 0, (size_t)out_sz*sizeof(float));
+                            for (int s = 0; s < Bn; s++) {
+                                const float *d_row = delta[l] + (size_t)s*max_dim;
+                                for (int j = 0; j < out_sz; j++) db[l][j] += d_row[j];
+                            }
+                            if (l > 0) {
+                                int prev_sz = layers[l-1].cols;
+#ifdef NML_HAS_BLAS
+                                cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                                            Bn, in_sz, out_sz, 1.0f, delta[l], max_dim,
+                                            W[l], out_sz, 0.0f, delta[l-1], max_dim);
+#else
+                                for (int s = 0; s < Bn; s++) {
+                                    const float *d_row  = delta[l]   + (size_t)s*max_dim;
+                                    float       *dp_row = delta[l-1] + (size_t)s*max_dim;
+                                    for (int p = 0; p < in_sz; p++) {
+                                        float sum = 0.0f;
+                                        for (int j = 0; j < out_sz; j++)
+                                            sum += d_row[j] * W[l][p*out_sz+j];
+                                        dp_row[p] = sum;
+                                    }
+                                }
+#endif
+                                for (int s = 0; s < Bn; s++) {
+                                    float *dp_row = delta[l-1] + (size_t)s*max_dim;
+                                    for (int p = 0; p < prev_sz; p++) {
+                                        float z = Z[l-1][(size_t)s*max_dim+p];
+                                        float a = A[l]  [(size_t)s*max_dim+p], da;
+                                        switch (layers[l-1].act) {
+                                            case 1: da = a*(1.0f-a); break;
+                                            case 2: da = 1.0f-a*a;  break;
+                                            default: da = z > 0.0f ? 1.0f : 0.0f; break;
+                                        }
+                                        dp_row[p] *= da;
+                                    }
+                                }
+                                (void)prev_sz;
+                            }
+                            if (use_adam) {
+                                for (int i = 0; i < in_sz*out_sz; i++) {
+                                    float g = dW[l][i];
+                                    mW[l][i] = BETA1*mW[l][i] + (1.0f-BETA1)*g;
+                                    vW[l][i] = BETA2*vW[l][i] + (1.0f-BETA2)*g*g;
+                                    W[l][i] -= lr*(mW[l][i]/bc1)/(sqrtf(vW[l][i]/bc2)+EPS);
+                                }
+                                for (int j = 0; j < out_sz; j++) {
+                                    mb[l][j] = BETA1*mb[l][j] + (1.0f-BETA1)*db[l][j];
+                                    vb[l][j] = BETA2*vb[l][j] + (1.0f-BETA2)*db[l][j]*db[l][j];
+                                    b_arr[l][j] -= lr*(mb[l][j]/bc1)/(sqrtf(vb[l][j]/bc2)+EPS);
+                                }
+                            } else {
+                                for (int i = 0; i < in_sz*out_sz; i++) W[l][i] -= lr*dW[l][i];
+                                for (int j = 0; j < out_sz; j++) b_arr[l][j] -= lr*db[l][j];
+                            }
+                        }
+                    } /* end batch */
+                    loss /= (float)(N * layers[n_layers-1].cols);
+
+                    /* Logging */
+                    if (print_ev > 0 && (epoch+1) % print_ev == 0)
+                        fprintf(stderr, "  [TRAIN] epoch %d/%d  loss=%.6f\n",
+                                epoch+1, epochs, (double)loss);
+
+                    /* Early stopping */
+                    if (patience > 0) {
+                        if (best_loss - loss > min_delta) { best_loss = loss; no_improve = 0; }
+                        else if (++no_improve >= patience) {
+                            if (print_ev > 0)
+                                fprintf(stderr, "  [TRAIN] early stop at epoch %d  loss=%.6f\n",
+                                        epoch+1, (double)loss);
+                            stopped_early = 1;
+                        }
+                    }
+                } /* end epoch */
+
+                free(perm); free(A_buf); free(Z_buf); free(delta_buf);
+                free(dW_buf); free(db_buf);
+                free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
+            } else {
+                /* ── scalar fallback (mixed dtype) — same as TNDEEP scalar path ── */
+                size_t buf_per_sample = (size_t)max_dim * (n_layers + 1);
+                double *fwd_buf = (double *)calloc((size_t)B * buf_per_sample, sizeof(double));
+                size_t total_params = 0;
+                for (int l = 0; l < n_layers; l++)
+                    total_params += (size_t)layers[l].rows * layers[l].cols + layers[l].cols;
+                double *adam_m = NULL, *adam_v = NULL;
+                if (use_adam) {
+                    adam_m = (double *)calloc(total_params, sizeof(double));
+                    adam_v = (double *)calloc(total_params, sizeof(double));
+                }
+                if (!fwd_buf || (use_adam && (!adam_m || !adam_v))) {
+                    free(fwd_buf); free(adam_m); free(adam_v);
+                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TRAIN: alloc failed");
+                }
+                const float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
+                int adam_t = 0;
+                for (int epoch = 0; epoch < epochs && !stopped_early; epoch++) {
+                    float eloss = 0.0f;
+                    for (int batch = 0; batch < nbatch; batch++) {
+                        int s0 = batch * B, Bn = (s0+B<=N) ? B : N-s0;
+                        for (int sample = s0; sample < s0+Bn; sample++) {
+                            double *prev_act = fwd_buf + (size_t)(sample-s0) * buf_per_sample;
+                            int prev_n = layers[0].rows;
+                            for (int j = 0; j < prev_n; j++)
+                                prev_act[j] = tensor_getd(input, sample * prev_n + j);
+                            double *layer_acts[11]; layer_acts[0] = prev_act;
+                            for (int l = 0; l < n_layers; l++) {
+                                double *cur_act = prev_act + (size_t)(l+1) * max_dim;
+                                layer_acts[l+1] = cur_act;
+                                Tensor *w = &REG(layers[l].w_reg);
+                                Tensor *b = &REG(layers[l].b_reg);
+                                int in_sz = layers[l].rows, out_sz = layers[l].cols;
+                                for (int j = 0; j < out_sz; j++) {
+                                    double sum = tensor_getd(b, j);
+                                    for (int p = 0; p < in_sz; p++)
+                                        sum += layer_acts[l][p] * tensor_getd(w, p*out_sz+j);
+                                    switch (layers[l].act) {
+                                        case 1: cur_act[j] = 1.0/(1.0+exp(-sum)); break;
+                                        case 2: cur_act[j] = tanh(sum); break;
+                                        default: cur_act[j] = sum > 0 ? sum : 0; break;
+                                    }
+                                }
+                            }
+                            int out_sz = layers[n_layers-1].cols;
+                            double *final_act = layer_acts[n_layers];
+                            double d_buf[4096], d_buf2[4096];
+                            double *d_cur = d_buf, *d_prev = d_buf2;
+                            for (int j = 0; j < out_sz; j++) {
+                                double diff = final_act[j] - tensor_getd(target, sample*out_sz+j);
+                                eloss += (float)(diff * diff);
+                                d_cur[j] = 2.0 * diff / Bn;
+                            }
+                            size_t adam_off = total_params;
+                            for (int l = n_layers-1; l >= 0; l--) {
+                                Tensor *w = &REG(layers[l].w_reg);
+                                Tensor *b = &REG(layers[l].b_reg);
+                                int in_sz = layers[l].rows, o_sz = layers[l].cols;
+                                adam_off -= (size_t)in_sz * o_sz + o_sz;
+                                double d_pre[4096];
+                                for (int j = 0; j < o_sz; j++) {
+                                    double a = layer_acts[l+1][j], da;
+                                    switch (layers[l].act) {
+                                        case 1: da = a*(1.0-a); break;
+                                        case 2: da = 1.0-a*a;  break;
+                                        default: da = a > 0 ? 1.0 : 0.0; break;
+                                    }
+                                    d_pre[j] = d_cur[j] * da;
+                                }
+                                if (use_adam) {
+                                    adam_t = epoch * N + sample + 1;
+                                    float bc1 = 1.0f - powf(BETA1,(float)adam_t);
+                                    float bc2 = 1.0f - powf(BETA2,(float)adam_t);
+                                    for (int p = 0; p < in_sz; p++)
+                                        for (int j = 0; j < o_sz; j++) {
+                                            double g = layer_acts[l][p] * d_pre[j];
+                                            size_t idx = adam_off + p * o_sz + j;
+                                            adam_m[idx] = BETA1*adam_m[idx]+(1-BETA1)*g;
+                                            adam_v[idx] = BETA2*adam_v[idx]+(1-BETA2)*g*g;
+                                            double mh = adam_m[idx]/bc1, vh = adam_v[idx]/bc2;
+                                            tensor_setd(w, p*o_sz+j,
+                                                tensor_getd(w,p*o_sz+j) - lr*mh/(sqrt(vh)+EPS));
+                                        }
+                                    for (int j = 0; j < o_sz; j++) {
+                                        size_t idx = adam_off + (size_t)in_sz*o_sz + j;
+                                        adam_m[idx] = BETA1*adam_m[idx]+(1-BETA1)*d_pre[j];
+                                        adam_v[idx] = BETA2*adam_v[idx]+(1-BETA2)*d_pre[j]*d_pre[j];
+                                        double mh = adam_m[idx]/bc1, vh = adam_v[idx]/bc2;
+                                        tensor_setd(b, j, tensor_getd(b,j) - lr*mh/(sqrt(vh)+EPS));
+                                    }
+                                } else {
+                                    for (int p = 0; p < in_sz; p++)
+                                        for (int j = 0; j < o_sz; j++)
+                                            tensor_setd(w, p*o_sz+j,
+                                                tensor_getd(w,p*o_sz+j) - lr*layer_acts[l][p]*d_pre[j]);
+                                    for (int j = 0; j < o_sz; j++)
+                                        tensor_setd(b, j, tensor_getd(b,j) - lr*d_pre[j]);
+                                }
+                                if (l > 0) {
+                                    for (int p = 0; p < in_sz; p++) {
+                                        double sum = 0;
+                                        for (int j = 0; j < o_sz; j++)
+                                            sum += d_pre[j] * tensor_getd(w, p*o_sz+j);
+                                        d_prev[p] = sum;
+                                    }
+                                    double *tmp = d_cur; d_cur = d_prev; d_prev = tmp;
+                                }
+                            }
+                        }
+                    }
+                    loss = eloss / N;
+                    if (print_ev > 0 && (epoch+1) % print_ev == 0)
+                        fprintf(stderr, "  [TRAIN] epoch %d/%d  loss=%.6f\n",
+                                epoch+1, epochs, (double)loss);
+                    if (patience > 0) {
+                        if (best_loss - loss > min_delta) { best_loss = loss; no_improve = 0; }
+                        else if (++no_improve >= patience) {
+                            if (print_ev > 0)
+                                fprintf(stderr, "  [TRAIN] early stop at epoch %d  loss=%.6f\n",
+                                        epoch+1, (double)loss);
+                            stopped_early = 1;
+                        }
+                    }
+                }
+                free(fwd_buf); free(adam_m); free(adam_v);
+            }
+
+            {
+                int ls[] = {1};
+                tensor_init_typed(&REG(8), 1, ls, NML_F64);
+                tensor_setd(&REG(8), 0, (double)loss);
+                RVALID(8) = 1;
+            }
+            break;
+        }
+
+        /* ── INFER Rd [R_input] ───────────────────────────────────────────────
+         * Forward pass through the network defined by RV + R1-R6, writing the
+         * output activations into Rd.  R_input (default R0) provides the input.
+         * Weights are not modified.  Any number of rows in R_input is accepted
+         * (batch inference).
+         *
+         * This is exactly TNDEEP's forward pass extracted as a standalone opcode,
+         * so programs no longer need to duplicate MMUL/MADD/RELU/SIGM blocks. */
+        case OP_INFER: {
+            int dst_reg   = ins->reg[0];
+            int input_reg = ins->reg[1];
+
+            Tensor *arch = &REG(31); /* RV */
+            if (!RVALID(31) || arch->size < 1)
+                VM_ERROR(vm, NML_ERR_OPCODE, "INFER: RV must contain architecture descriptor");
+            int n_layers = (int)tensor_getd(arch, 0);
+            if (n_layers < 1 || n_layers > 10)
+                VM_ERROR(vm, NML_ERR_OVERFLOW, "INFER: n_layers must be 1-10, got %d", n_layers);
+
+            Tensor *input = &REG(input_reg);
+            if (!RVALID(input_reg))
+                VM_ERROR(vm, NML_ERR_OPCODE, "INFER: input register R%d is empty", input_reg);
+
+            typedef struct { int rows, cols, act, w_reg, b_reg; } ILayer;
+            ILayer layers[10];
+            int prev_size = input->ndim >= 2 ? input->shape[1] : input->shape[0];
+            for (int l = 0; l < n_layers; l++) {
+                int h   = (int)tensor_getd(arch, 1 + l*2);
+                int act = (1+l*2+1 < (int)arch->size) ? (int)tensor_getd(arch,1+l*2+1) : 0;
+                layers[l] = (ILayer){prev_size, h, act, 1+l*2, 2+l*2};
+                prev_size = h;
+            }
+
+            int N = (input->ndim >= 2) ? input->shape[0] : 1;
+            int in_features = layers[0].rows;
+            int out_features = layers[n_layers-1].cols;
+
+            /* Allocate output tensor: N × out_features */
+            int out_shape[2] = {N, out_features};
+            tensor_init_typed(&REG(dst_reg), 2, out_shape, NML_F32);
+            RVALID(dst_reg) = 1;
+
+            /* Run sample-by-sample forward pass (no batching needed for inference) */
+            int max_layer_cols = in_features;
+            for (int l = 0; l < n_layers; l++)
+                if (layers[l].cols > max_layer_cols) max_layer_cols = layers[l].cols;
+            /* Heap-allocate activation buffer: (n_layers+1) slots of max_layer_cols each */
+            double *act_buf = (double *)malloc((size_t)(n_layers + 1) * (max_layer_cols + 1) * sizeof(double));
+            if (!act_buf) VM_ERROR(vm, NML_ERR_OVERFLOW, "INFER: alloc failed");
+
+            for (int s = 0; s < N; s++) {
+                double *prev_act = act_buf;
+                for (int j = 0; j < in_features; j++)
+                    prev_act[j] = tensor_getd(input, (size_t)s * in_features + j);
+
+                double *layer_acts[11];
+                layer_acts[0] = prev_act;
+
+                for (int l = 0; l < n_layers; l++) {
+                    double *cur_act = act_buf + (size_t)(l+1) * (max_layer_cols + 1);
+                    layer_acts[l+1] = cur_act;
+                    Tensor *w = &REG(layers[l].w_reg);
+                    Tensor *b = &REG(layers[l].b_reg);
+                    int in_sz = layers[l].rows, out_sz = layers[l].cols;
+                    for (int j = 0; j < out_sz; j++) {
+                        double sum = tensor_getd(b, j);
+                        for (int p = 0; p < in_sz; p++)
+                            sum += layer_acts[l][p] * tensor_getd(w, p * out_sz + j);
+                        switch (layers[l].act) {
+                            case 1: cur_act[j] = 1.0 / (1.0 + exp(-sum)); break;
+                            case 2: cur_act[j] = tanh(sum); break;
+                            default: cur_act[j] = sum > 0.0 ? sum : 0.0; break;
+                        }
+                    }
+                }
+
+                /* Copy output activations into destination register */
+                double *final_act = layer_acts[n_layers];
+                for (int j = 0; j < out_features; j++)
+                    tensor_setd(&REG(dst_reg), (size_t)s * out_features + j, final_act[j]);
+            }
+            free(act_buf);
+            break;
+        }
+
+        case OP_WDECAY: {
+            /* WDECAY Rd #lambda  —  Rd[i] *= (1 - lambda)  (in-place)
+             * lambda from immediate field or scalar register (int_params[0] flag). */
+            Tensor *w = &REG(ins->reg[0]);
+            if (!RVALID(ins->reg[0]))
+                VM_ERROR(vm, NML_ERR_OPCODE, "WDECAY: register R%d is empty", ins->reg[0]);
+            double lambda = ins->int_params[0]
+                ? tensor_getd(&REG(ins->reg[1]), 0)
+                : ins->imm;
+            double factor = 1.0 - lambda;
+            for (size_t i = 0; i < w->size; i++)
+                tensor_setd(w, i, tensor_getd(w, i) * factor);
             break;
         }
 

@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What Is This
 
-NML (Neural Machine Language) is a minimal, deterministic machine language for AI workloads. It compiles to a single ~83 KB binary (zero dependencies beyond libc and libm) and provides 82 opcodes across 8 extensions covering inference, training, vision, transformers, signal processing, and M2M communication.
+NML (Neural Machine Language) is a minimal, deterministic machine language for AI workloads. It compiles to a single ~83 KB binary (zero dependencies beyond libc and libm) and provides 85 opcodes across 8 extensions covering inference, training, vision, transformers, signal processing, and M2M communication.
 
 Key properties: 32 tensor registers (not scalar), tri-syntax (classic / symbolic Unicode / verbose), zero-ambiguity grammar designed for LLM generation.
 
 ## Build Commands
 
 ```bash
-make nml                  # Standard build (82 instructions, portable)
+make nml                  # Standard build (85 instructions, portable)
 make nml-fast             # BLAS acceleration (Apple Accelerate on macOS, OpenBLAS on Linux)
 make nml-metal            # Metal GPU + BLAS (macOS only, requires clang)
 make nml-crypto           # Ed25519 + HMAC-SHA256 signing support
@@ -65,7 +65,7 @@ Run a single test program directly:
 
 ### Runtime (`runtime/`)
 
-- **`nml.c`** — Single-file C99 runtime (3,647 lines). All 82 opcodes, register file, memory model, instruction decoder, tri-syntax parser. Optional BLAS via `-DNML_USE_ACCELERATE` / `-DNML_USE_OPENBLAS`. Optional Metal via `-DNML_USE_METAL`.
+- **`nml.c`** — Single-file C99 runtime (3,647 lines). All 85 opcodes, register file, memory model, instruction decoder, tri-syntax parser. Optional BLAS via `-DNML_USE_ACCELERATE` / `-DNML_USE_OPENBLAS`. Optional Metal via `-DNML_USE_METAL`.
 - **`nml_crypto.h`** — Standalone HMAC-SHA256 + Ed25519 (no external deps).
 - **`tweetnacl.c/.h`** — Compact NaCl for Ed25519 ops.
 - **`nmld.c`** — Daemon wrapping the runtime with pre-fork workers and binary cache.
@@ -79,8 +79,8 @@ Run a single test program directly:
 | NML-T | 4 | Transformer: ATTN, NORM, EMBD, GELU |
 | NML-R | 4 | Reduction: RDUC, WHER, CLMP, CMPR |
 | NML-S | 2 | Signal: FFT, FILT |
-| NML-M2M | 13 | Machine-to-machine: META, FRAG, SIGN, VRFY, VOTE, PTCH, … |
-| NML-TR | 15 | Training: BKWD, WUPD, LOSS, TNET, TNDEEP, backward passes |
+| NML-M2M | 12 | Machine-to-machine: META, FRAG, SIGN, VRFY, VOTE, PTCH, … |
+| NML-TR | 19 | Training: BKWD, WUPD, LOSS, TNET, TNDEEP, backward passes, config-driven training |
 | NML-G | 5 | General-purpose: SYS, MOD, ITOF, FTOI, BNOT |
 
 ### Data Files (`.nml.data`)

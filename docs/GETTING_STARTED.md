@@ -348,5 +348,5 @@ With `nml-crypto` build:
 ## Next Steps
 
 - [NML Specification](NML_SPEC.md) — full instruction set reference with encoding details
-- [Usage Guide](NML_Usage_Guide.md) — all 82 instructions with detailed examples
+- [Usage Guide](NML_Usage_Guide.md) — all 85 instructions with detailed examples
 - [M2M Specification](NML_M2M_Spec.md) — machine-to-machine extensions (SIGN/VRFY, FRAG/LINK, PTCH)

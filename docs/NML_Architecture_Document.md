@@ -754,7 +754,7 @@ The next step is running the training experiment that proves — or disproves �
 ```mermaid
 flowchart TB
     subgraph core [NML Core — github.com/dnamaz/nml]
-        runtime["runtime/nml.c\n~3400 lines C99\n83 KB binary\n82 opcodes"]
+        runtime["runtime/nml.c\n~3400 lines C99\n83 KB binary\n85 opcodes"]
         crypto["runtime/nml_crypto.h\nEd25519 + HMAC-SHA256\nruntime/tweetnacl.c"]
         grammar["transpilers/nml_grammar.py\nGrammar validator"]
         training["transpilers/\n14+ training generators\n~440K pairs"]

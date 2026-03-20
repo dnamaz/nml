@@ -1,4 +1,0 @@
-# Progressive rate input data
-# Input: 100000, deduction: 8600 → net: 91400
-@input_value shape=1 data=100000.0
-@deduction shape=1 data=8600.0

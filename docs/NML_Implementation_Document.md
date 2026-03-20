@@ -34,7 +34,7 @@ flowchart TD
     end
 
     subgraph runtime [NML Runtime]
-        NMLFull["nml (full) — ~68 KB, 82 instructions"]
+        NMLFull["nml (full) — ~68 KB, 85 instructions"]
         NMLCore["nml-core — ~50 KB, 35 instructions"]
         NMLGP["nml-gp — ~68 KB, expanded limits"]
     end
@@ -139,7 +139,7 @@ graph LR
     end
 ```
 
-All 82 instructions support three syntax forms: classic (MMUL), symbolic (×), and verbose (MATRIX_MULTIPLY).
+All 85 instructions support three syntax forms: classic (MMUL), symbolic (×), and verbose (MATRIX_MULTIPLY).
 
 ### Register File
 
@@ -305,7 +305,7 @@ Net pay (annual): $86,906.36
 ```mermaid
 flowchart TD
     subgraph core [NML Core]
-        Runtime["C Runtime\nnml.c — ~2,600 lines\n82 instructions, 83 KB\nTri-syntax: classic | symbolic | verbose"]
+        Runtime["C Runtime\nnml.c — ~2,600 lines\n85 instructions, 83 KB\nTri-syntax: classic | symbolic | verbose"]
         Daemon["NML Daemon\nnmld.c — ~700 lines\nPre-fork workers, binary cache, Unix socket"]
         Spec["NML Spec v0.7.1\n35 core + 14 ext + 13 M2M + 5 GP + 4 TR + 11 BK"]
     end

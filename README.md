@@ -1,6 +1,6 @@
 # NML — Neural Machine Language
 
-A minimal, deterministic machine language designed for AI workloads. 82 instructions. ~3,300 lines of C. Zero ambiguity.
+A minimal, deterministic machine language designed for AI workloads. 85 instructions. ~3,300 lines of C. Zero ambiguity.
 
 NML supports neural network inference, decision tree execution, transformer attention, signal processing, and general-purpose computation within a single instruction set and runtime — compiled to an 83 KB binary.
 
@@ -8,7 +8,7 @@ NML supports neural network inference, decision tree execution, transformer atte
 
 | Property | NML | Python/PyTorch |
 |----------|-----|---------------|
-| Vocabulary | 82 opcodes | 50,000+ tokens |
+| Vocabulary | 85 opcodes | 50,000+ tokens |
 | Grammar rules | ~10 | 100+ |
 | Syntactic ambiguity | Zero | High |
 | Ways to express same op | 1 | 5-10+ |
@@ -56,7 +56,7 @@ Most ISAs separate inference from training — you train in Python, export weigh
 
 ### Designed for LLM Generation
 
-NML's zero-ambiguity grammar exists specifically so that language models can learn to generate correct programs. With 82 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7B parameter model achieves 100% grammar validity with constrained decoding (Outlines CFG) and 95% with temperature-varied retries after training on 228K pairs. With optional Outlines CFG constrained decoding, every generated token is guaranteed to be valid NML — 100% syntactic correctness by construction.
+NML's zero-ambiguity grammar exists specifically so that language models can learn to generate correct programs. With 85 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7B parameter model achieves 100% grammar validity with constrained decoding (Outlines CFG) and 95% with temperature-varied retries after training on 228K pairs. With optional Outlines CFG constrained decoding, every generated token is guaranteed to be valid NML — 100% syntactic correctness by construction.
 
 ## Use Cases
 
@@ -86,7 +86,7 @@ An NML program can train its own neural network, then immediately run inference 
 
 ### Training LLMs to Generate Structured Code
 
-NML's zero-ambiguity grammar makes it dramatically easier to train models to write correct code. With only 82 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7B parameter model achieves 100% grammar accuracy (with Outlines CFG constrained decoding) or 95% (with 2 retries and temperature escalation) after training on 228K pairs. The additive-alias design philosophy — when models generate semantically valid alternative forms, accept them rather than fighting them — drove grammar pass rates from 85% to 100% without retraining.
+NML's zero-ambiguity grammar makes it dramatically easier to train models to write correct code. With only 85 opcodes, ~10 grammar rules, and exactly one way to express each operation, a 7B parameter model achieves 100% grammar accuracy (with Outlines CFG constrained decoding) or 95% (with 2 retries and temperature escalation) after training on 228K pairs. The additive-alias design philosophy — when models generate semantically valid alternative forms, accept them rather than fighting them — drove grammar pass rates from 85% to 100% without retraining.
 
 ## Quick Start
 
@@ -147,7 +147,7 @@ STORE       ACCUMULATOR @result
 STOP
 ```
 
-## Instruction Set (82 Total)
+## Instruction Set (85 Total)
 
 ### Core (35 Instructions)
 
@@ -175,12 +175,13 @@ STOP
 ### NML-S: Signal (2)
 `FFT` `FILT`
 
-### NML-M2M: Machine-to-Machine (13)
+### NML-M2M: Machine-to-Machine (12)
 `META` `FRAG` `ENDF` `LINK` `PTCH` `SIGN` `VRFY` `VOTE` `PROJ` `DIST` `GATH` `SCAT`
 
-### NML-TR: Training (15)
-`BKWD` `WUPD` `LOSS` `TNET`
-`RELUBK` `SIGMBK` `TANHBK` `GELUBK` `SOFTBK` `MMULBK` `CONVBK` `POOLBK` `NORMBK` `ATTNBK` `TNDEEP`
+### NML-TR: Training (19)
+**Core Training (4):** `BKWD` `WUPD` `LOSS` `TNET`
+**Backward Ops (11):** `RELUBK` `SIGMBK` `TANHBK` `GELUBK` `SOFTBK` `MMULBK` `CONVBK` `POOLBK` `NORMBK` `ATTNBK` `TNDEEP`
+**v0.9 Config (4):** `TLOG` `TRAIN` `INFER` `WDECAY`
 
 ### NML-G: General Purpose (5)
 `SYS` `MOD` `ITOF` `FTOI` `BNOT`
@@ -522,7 +523,7 @@ docs/                Full specification, architecture documents, usage guide
 ## Building
 
 ```bash
-# Full build (82 instructions, all extensions)
+# Full build (85 instructions, all extensions)
 make
 
 # With BLAS acceleration (10x faster training)
@@ -577,7 +578,7 @@ Memory contents are loaded from simple text files:
 
 ### Go Deeper
 
-3. **[Usage Guide](docs/NML_Usage_Guide.md)** — all 82 instructions with detailed examples and edge cases
+3. **[Usage Guide](docs/NML_Usage_Guide.md)** — all 85 instructions with detailed examples and edge cases
 4. **[NML-G Specification](docs/NML_G_Spec.md)** — general-purpose extensions (SYS, MOD, ITOF, FTOI, BNOT)
 5. **[NML-M2M Specification](docs/NML_M2M_Spec.md)** — machine-to-machine extensions (META, FRAG, SIGN, VOTE, PROJ, DIST)
 
@@ -671,3 +672,4 @@ NML is intentionally constrained — these limits are design choices for determi
 | v0.7.1 | 71 | NML daemon (nmld) with pre-fork workers and binary cache, constrained decoding (Outlines CFG), additive alias tolerance |
 | v0.8.0 | 82 | Backward opcodes (RELUBK, SIGMBK, TANHBK, GELUBK, SOFTBK, MMULBK, CONVBK, POOLBK, NORMBK, ATTNBK), TNDEEP N-layer training |
 | v0.8.1 | 82 | FRAG/LINK assembly-time resolution, SIGN/VRFY with HMAC-SHA256 (`-DNML_CRYPTO`), PTCH differential patching, M2M agent distribution protocol, fraud detection example |
+| v0.9.0 | 85 | Config-driven training (TRAIN, INFER, WDECAY, TLOG) — separates training config from network architecture, enables forward-only inference |

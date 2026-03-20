@@ -1,4 +1,4 @@
-# NML — Neural Machine Language Specification v0.7.0
+# NML — Neural Machine Language Specification v0.9.0
 
 ## Overview
 
@@ -30,7 +30,9 @@ NML is a minimal machine language designed for AI workloads. It supports neural 
 | RJ | LearningRate | Learning rate scalar |
 | RK–RV | Training/Hive | Training workspace and hive collective registers (12) |
 
-## Instruction Set (35 Core + 14 Extensions + 13 M2M + 5 General + 4 Training + 11 Backward = 82 Total)
+## Instruction Set (35 Core + 14 Extensions + 12 M2M + 5 General + 19 Training = 85 Total)
+
+Training breakdown: 4 core training ops (BKWD, WUPD, LOSS, TNET) + 11 backward passes (RELUBK through TNDEEP) + 4 config-driven (TLOG, TRAIN, INFER, WDECAY)
 
 ### Arithmetic (8 instructions)
 ```

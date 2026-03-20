@@ -323,6 +323,74 @@ _reg(OpcodeInfo("TNET", "Training", "Train network (single-instruction training 
     "TNET ${1:Rweights} ${2:Rdata} ${3:Rlabels}", 2, 9,
     symbolic="⥁", verbose="TRAIN_NETWORK"))
 
+# ── NML-TR Backward (11) ───────────────────────────────────────────────────
+
+_reg(OpcodeInfo("RELUBK", "Training", "ReLU backward: gradient through ReLU",
+    "Rd Rgrad Rinput", "RELUBK ${1:Rd} ${2:Rgrad} ${3:Rinput}", 3, 3,
+    symbolic="⌐ˈ", verbose="RELU_BACKWARD", aliases=("RELU_BK",)))
+
+_reg(OpcodeInfo("SIGMBK", "Training", "Sigmoid backward: gradient through sigmoid",
+    "Rd Rgrad Rinput", "SIGMBK ${1:Rd} ${2:Rgrad} ${3:Rinput}", 3, 3,
+    symbolic="σˈ", verbose="SIGMOID_BACKWARD", aliases=("SIGM_BK",)))
+
+_reg(OpcodeInfo("TANHBK", "Training", "Tanh backward: gradient through tanh",
+    "Rd Rgrad Rinput", "TANHBK ${1:Rd} ${2:Rgrad} ${3:Rinput}", 3, 3,
+    symbolic="τˈ", verbose="TANH_BACKWARD", aliases=("TANH_BK",)))
+
+_reg(OpcodeInfo("GELUBK", "Training", "GELU backward: gradient through GELU",
+    "Rd Rgrad Rinput", "GELUBK ${1:Rd} ${2:Rgrad} ${3:Rinput}", 3, 3,
+    symbolic="ℊˈ", verbose="GELU_BACKWARD", aliases=("GELU_BK",)))
+
+_reg(OpcodeInfo("SOFTBK", "Training", "Softmax backward: gradient through softmax",
+    "Rd Rgrad Rinput", "SOFTBK ${1:Rd} ${2:Rgrad} ${3:Rinput}", 3, 3,
+    symbolic="Σˈ", verbose="SOFTMAX_BACKWARD", aliases=("SOFT_BK",)))
+
+_reg(OpcodeInfo("MMULBK", "Training", "Matrix multiply backward: computes input and weight gradients",
+    "Rd_dinput Rd_dweight Rgrad Rinput Rweight",
+    "MMULBK ${1:Rd_dinput} ${2:Rd_dweight} ${3:Rgrad} ${4:Rinput} ${5:Rweight}", 5, 5,
+    symbolic="×ˈ", verbose="MATMUL_BACKWARD", aliases=("MMUL_BK",)))
+
+_reg(OpcodeInfo("CONVBK", "Training", "Convolution backward: computes input and kernel gradients",
+    "Rd_dinput Rd_dkernel Rgrad Rinput Rkernel",
+    "CONVBK ${1:Rd_dinput} ${2:Rd_dkernel} ${3:Rgrad} ${4:Rinput} ${5:Rkernel}", 5, 5,
+    symbolic="⊛ˈ", verbose="CONV_BACKWARD", aliases=("CONV_BK",)))
+
+_reg(OpcodeInfo("POOLBK", "Training", "Max pooling backward: routes gradient through argmax positions",
+    "Rd Rgrad Rfwd_input [#pool_size] [#stride]",
+    "POOLBK ${1:Rd} ${2:Rgrad} ${3:Rfwd_input}", 3, 5,
+    symbolic="⊓ˈ", verbose="POOL_BACKWARD", aliases=("POOL_BK",)))
+
+_reg(OpcodeInfo("NORMBK", "Training", "Layer norm backward: gradient through layer normalization",
+    "Rd Rgrad Rinput", "NORMBK ${1:Rd} ${2:Rgrad} ${3:Rinput}", 3, 3,
+    symbolic="‖ˈ", verbose="NORM_BACKWARD", aliases=("NORM_BK",)))
+
+_reg(OpcodeInfo("ATTNBK", "Training", "Attention backward: computes Q, K, V gradients",
+    "Rd_dq Rgrad Rq Rk Rv", "ATTNBK ${1:Rd_dq} ${2:Rgrad} ${3:Rq} ${4:Rk} ${5:Rv}", 5, 5,
+    symbolic="⊙ˈ", verbose="ATTN_BACKWARD", aliases=("ATTN_BK",)))
+
+_reg(OpcodeInfo("TNDEEP", "Training", "N-layer dense network training with Adam/SGD",
+    "#epochs #lr #optimizer [@input_data] [@labels]",
+    "TNDEEP ${1:#epochs} ${2:#lr} ${3:#optimizer}", 3, 5,
+    symbolic="⥁ˈ", verbose="TRAIN_DEEP"))
+
+# ── NML-TR v0.9 (4) ────────────────────────────────────────────────────────
+
+_reg(OpcodeInfo("TLOG", "Training", "Set training log interval (print every N epochs)",
+    "#n", "TLOG ${1:#n}", 0, 1,
+    symbolic="⧖", verbose="TRAIN_LOG"))
+
+_reg(OpcodeInfo("TRAIN", "Training", "Config-driven training: reads 6-element tensor [epochs, lr, optimizer, print_every, patience, min_delta]",
+    "Rs [@input_data] [@labels]", "TRAIN ${1:Rs}", 1, 3,
+    symbolic="⟴", verbose="TRAIN_CONFIG"))
+
+_reg(OpcodeInfo("INFER", "Training", "Forward pass only (no weight update)",
+    "Rd R_input", "INFER ${1:Rd} ${2:R_input}", 0, 2,
+    symbolic="⟶", verbose="FORWARD_PASS"))
+
+_reg(OpcodeInfo("WDECAY", "Training", "Weight decay: Rd[i] *= (1 - lambda)",
+    "Rd #lambda", "WDECAY ${1:Rd} ${2:#lambda}", 2, 2,
+    symbolic="ω", verbose="WEIGHT_DECAY"))
+
 # ── NML-G General (5) ──────────────────────────────────────────────────────
 
 _reg(OpcodeInfo("SYS", "General", "System call with code",

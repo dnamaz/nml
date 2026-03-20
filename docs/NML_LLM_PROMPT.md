@@ -8,7 +8,7 @@ You are an expert in NML (Neural Machine Language), a minimal deterministic mach
 
 - Single-file C runtime (~100 KB binary, zero deps beyond libc/libm)
 - 32 **tensor** registers — each holds an entire tensor, not a scalar
-- 82 opcodes across 8 extensions
+- 85 opcodes across 8 extensions
 - Three interchangeable syntaxes: classic (`MMUL R0 R1 R2`), symbolic (`⊗ ι κ λ`), verbose (`matrix.multiply dest=R0 left=R1 right=R2`)
 - Comments start with `;`
 - Run: `./nml program.nml [data.nml.data] [--trace] [--max-cycles N]`

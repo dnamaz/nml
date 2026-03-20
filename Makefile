@@ -41,6 +41,10 @@ else
 	@exit 1
 endif
 
+nml-fmt: runtime/nml_fmt.c runtime/nml_fmt.h
+	$(CC) $(CFLAGS) -o $@ runtime/nml_fmt.c
+	@echo "  Built: nml-fmt (syntax converter: classic ↔ symbolic ↔ verbose)"
+
 nml-crypto: runtime/nml.c runtime/nml_crypto.h runtime/tweetnacl.c runtime/tweetnacl.h
 	$(CC) $(CFLAGS) -DNML_CRYPTO -o $@ runtime/nml.c runtime/tweetnacl.c $(LDFLAGS)
 	@echo "  Built: nml-crypto (v0.7.0, Ed25519 + HMAC-SHA256 signing)"
