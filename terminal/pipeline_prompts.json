@@ -1,0 +1,69 @@
+{
+  "categories": [
+    {
+      "name": "Training Pipelines",
+      "prompts": [
+        "Train a 2-layer neural network: forward pass with ReLU, compute cross-entropy loss, backpropagate, update weights",
+        "Train a CNN: convolution, pooling, ReLU activation, loss, backward pass through all layers, weight update",
+        "Config-driven training loop with weight decay and logging every 10 epochs",
+        "Train a transformer block: multi-head attention, layer norm, forward pass, backward pass",
+        "Train a network using TNET with 500 epochs and learning rate 0.001"
+      ]
+    },
+    {
+      "name": "Inference",
+      "prompts": [
+        "Run inference on input data through a trained model, apply softmax to get probabilities",
+        "Forward pass only: embedding lookup, attention, layer norm, output projection",
+        "Run INFER on input, apply softmax, return top prediction",
+        "Normalize input, run inference, return predictions without updating weights"
+      ]
+    },
+    {
+      "name": "Backward Passes",
+      "prompts": [
+        "Backpropagate through a softmax layer",
+        "Backpropagate through a convolution layer, get input gradient and kernel gradient",
+        "Full backward pass through a 3-layer network: ReLU, sigmoid, softmax",
+        "Compute input and weight gradients for a linear layer using MMULBK",
+        "Attention backward pass: compute Q, K, V gradients"
+      ]
+    },
+    {
+      "name": "Vision",
+      "prompts": [
+        "CNN forward pass: zero-pad input, apply convolution, max pool, ReLU",
+        "Image classification: convolution, pooling, flatten, linear layer, softmax",
+        "Apply convolution with stride, then upscale output back to original size",
+        "Grouped convolution forward pass with bias addition"
+      ]
+    },
+    {
+      "name": "Transformers",
+      "prompts": [
+        "Transformer encoder block: multi-head attention, residual connection, layer norm, feed-forward",
+        "Embedding lookup for token IDs, add positional encoding, apply attention",
+        "Self-attention forward pass with Q, K, V projections",
+        "Layer norm followed by GELU activation and linear projection"
+      ]
+    },
+    {
+      "name": "Arithmetic & Control",
+      "prompts": [
+        "Matrix multiply A and B, add bias, apply ReLU, store result",
+        "Loop 100 times: accumulate gradients, update weights every 10 steps",
+        "Compare loss to threshold, jump to early stopping if converged",
+        "Compute dot product, scale by learning rate, subtract from weights"
+      ]
+    },
+    {
+      "name": "v0.9 Opcodes",
+      "prompts": [
+        "Set training log interval to every 10 epochs, then run config-driven training",
+        "Apply weight decay to all weight matrices before each training step",
+        "Run model inference on test input without updating weights, return softmax probabilities",
+        "Full v0.9 training pipeline: TRAIN opcode with config tensor, TLOG, WDECAY, INFER"
+      ]
+    }
+  ]
+}

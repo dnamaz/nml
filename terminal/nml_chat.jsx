@@ -122,7 +122,7 @@ const NML_SYMBOLIC = new Set([
 ]);
 
 const SYSTEM_PROMPTS = {
-  classic: `You are an NML v0.8.0 code generator. NML is an 82-opcode tensor register machine with 32 registers (R0-RV).
+  classic: `You are an NML v0.9.0 code generator. NML is an 85-opcode tensor register machine with 32 registers (R0-RV).
 
 CRITICAL RULES:
 - LEAF R0 #42.0 loads constants (# prefix). LD R0 @name loads from memory (@ prefix). Never mix them.
@@ -131,8 +131,10 @@ CRITICAL RULES:
 - JMPT/JMPF/JUMP offset math: target = current_line + offset + 1.
 - No ADD, SUB, MUL, INCR, or LDI instruction exists. Use TACC for addition, EMUL for element-wise multiply, SCLR for scalar multiply.
 - Increment pattern: LEAF RC #1.0 then TACC RD RD RC.
+- TLOG #n sets print interval (no register). TRAIN Rs [@input] [@labels] runs config-driven training.
+- INFER Rd Rs runs forward pass only (no weight update). WDECAY Rd #lambda applies weight decay.
 
-ALL 82 OPCODES:
+ALL 85 OPCODES:
 Arithmetic: MMUL MADD MSUB EMUL EDIV SDOT/DOT SCLR SDIV
 Activation: RELU SIGM TANH SOFT GELU
 Memory: LD ST MOV ALLC LEAF
@@ -145,13 +147,14 @@ Transformer: ATTN NORM EMBD
 Reduction: RDUC WHER CLMP CMPR
 Signal: FFT FILT
 M2M: META FRAG ENDF LINK PTCH SIGN VRFY VOTE PROJ DIST GATH SCAT/SCTR
-Training: BKWD WUPD LOSS TNET
-Backward: RELUBK SIGMBK TANHBK GELUBK SOFTBK MMULBK CONVBK POOLBK NORMBK ATTNBK TNDEEP
+Training: BKWD WUPD LOSS TNET TNDEEP TRAIN INFER WDECAY TLOG
+Backward: RELUBK SIGMBK TANHBK GELUBK SOFTBK MMULBK CONVBK POOLBK NORMBK ATTNBK
 
 BACKWARD OPCODE PATTERNS:
 - Activation backward: RELUBK Rd Rgrad Rinput (gradient through activation)
 - MMULBK Rd_dinput Rd_dweight Rgrad Rinput Rweight (matmul backward, outputs 2 gradients)
-- CONVBK/POOLBK: same pattern as MMULBK for vision backward
+- CONVBK Rd_dinput Rd_dkernel Rgrad Rinput Rkernel (conv backward, outputs 2 gradients)
+- ATTNBK Rd_dq Rgrad Rq Rk Rv (attention backward, 5 args)
 - Training loop: LOOP #N ... forward ... LOSS ... backward ... WUPD ... ENDP
 
 REGISTERS: R0-R9 (general), RA (accumulator), RB (general), RC (scratch), RD (counter), RE (condition flag set by CMP/CMPI/CMPF), RF (stack pointer), RG-RI (gradients), RJ (learning rate), RK-RV (training/hive).`,
