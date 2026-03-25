@@ -1,0 +1,9 @@
+LD    R0 @mat_a 
+LD    R1 @mat_b 
+ALLC  R9 #[1] 
+LEAF  R9 #100 
+LOOP  #100 
+MMUL  R2 R0 R1 
+ENDP 
+ST    R2 @result 
+HALT 

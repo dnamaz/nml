@@ -21,6 +21,8 @@ Usage:
 """
 
 import json
+import os
+import platform
 import random
 import argparse
 import subprocess
@@ -29,6 +31,12 @@ import sys
 from pathlib import Path
 
 random.seed(42)
+
+# Resolve runtime binary: NML_RUNTIME env var overrides auto-detection.
+_NML_EXE = "nml.exe" if platform.system() == "Windows" else "nml"
+_DEFAULT_RUNTIME = os.environ.get(
+    "NML_RUNTIME", str(Path(__file__).parent.parent / _NML_EXE)
+)
 
 sys.path.insert(0, str(Path(__file__).parent))
 from nml_verify_gen import validate_nml_grammar, execute_nml, generate_data_file
@@ -120,7 +128,9 @@ def main():
     parser = argparse.ArgumentParser(description="Generate NML DPO preference pairs")
     parser.add_argument("--model", required=True, help="Path to fine-tuned model")
     parser.add_argument("--adapter", default=None, help="Path to LoRA adapter")
-    parser.add_argument("--runtime", default=str(Path(__file__).parent.parent / "nml"))
+    parser.add_argument("--runtime", default=_DEFAULT_RUNTIME,
+                        help="Path to NML runtime binary (default: auto-detected; "
+                             "override with NML_RUNTIME env var)")
     parser.add_argument("--output", default=str(
         Path(__file__).parent.parent / "domain" / "output" / "training" / "nml_dpo_pairs.jsonl"))
     parser.add_argument("--count", type=int, default=2000, help="Number of prompts to use")

@@ -1,0 +1,9 @@
+; Phase 2: GPU CONV dispatch test (CPU path validation)
+; Same shape as 10b_vision_4d but with tensors that can hit GPU threshold
+LD    R0 @input_4d
+LD    R1 @kernel_4d
+CONV  R2 R0 R1 #1
+ST    R2 @conv_result
+RELU  R2 R2
+ST    R2 @relu_result
+HALT

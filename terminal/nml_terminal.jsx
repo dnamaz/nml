@@ -110,7 +110,7 @@ class NMLEmulator {
 
   assemble(source) {
     const SYMBOLIC = {
-      "×":"MMUL","⊕":"MADD","⊖":"MSUB","⊗":"EMUL","⊘":"EDIV","·":"SDOT","∗":"SCLR","÷":"SDIV",
+      "×":"MMUL","⊕":"MADD","⊖":"MSUB","⊗":"EMUL","⊘":"EDIV","·":"SDOT","∗":"SCLR","÷":"SDIV","∔":"SADD","∸":"SSUB",
       "⌐":"RELU","σ":"SIGM","τ":"TANH","Σ":"SOFT","ℊ":"GELU",
       "↓":"LD","↑":"ST","←":"MOV","□":"ALLC","∎":"LEAF",
       "⊞":"RSHP","⊤":"TRNS","⊢":"SPLT","⊣":"MERG",
@@ -211,6 +211,24 @@ class NMLEmulator {
           for (let i = 0; i < a.size; i++) out.data[i] = a.data[i] * val;
           this.registers[this._reg(ops[0])] = out;
           this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${ops[1]} * ${val}` });
+          break;
+        }
+        case "SADD": case "SCALAR_ADD": {
+          const a = this._getTensor(ops[1]);
+          const val = ops[2].startsWith("#") ? parseFloat(ops[2].replace("#", "")) : this._getTensor(ops[2]).data[0];
+          const out = new NMLTensor(a.shape);
+          for (let i = 0; i < a.size; i++) out.data[i] = a.data[i] + val;
+          this.registers[this._reg(ops[0])] = out;
+          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${ops[1]} + ${val}` });
+          break;
+        }
+        case "SSUB": case "SCALAR_SUB": {
+          const a = this._getTensor(ops[1]);
+          const val = ops[2].startsWith("#") ? parseFloat(ops[2].replace("#", "")) : this._getTensor(ops[2]).data[0];
+          const out = new NMLTensor(a.shape);
+          for (let i = 0; i < a.size; i++) out.data[i] = a.data[i] - val;
+          this.registers[this._reg(ops[0])] = out;
+          this.log.push({ type: "exec", op: opcode, msg: `${ops[0]} = ${ops[1]} - ${val}` });
           break;
         }
         case "RELU": {
@@ -678,7 +696,7 @@ function syntaxHighlight(line) {
   const parts = code.split(/(\s+)/);
   const highlighted = parts.map((p, i) => {
     const upper = p.toUpperCase().trim();
-    if (["MMUL","MADD","MSUB","EMUL","SDOT","DOT","SCLR","SDIV","EDIV","RELU","SIGM","TANH","SOFT","GELU",
+    if (["MMUL","MADD","MSUB","EMUL","SDOT","DOT","SCLR","SDIV","SADD","SSUB","EDIV","RELU","SIGM","TANH","SOFT","GELU",
          "LD","ST","MOV","ALLC","RSHP","TRNS","SPLT","MERG",
          "CMPF","CMP","CMPI","JMPT","JMPF","JUMP","JMP","LOOP","ENDP",
          "CALL","RET","LEAF","TACC","SYNC","HALT","TRAP",

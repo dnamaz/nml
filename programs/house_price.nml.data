@@ -1,0 +1,4 @@
+@house_sizes  shape=7,1 dtype=f32 data=600.0,800.0,1000.0,1200.0,1500.0,1800.0,2000.0
+@prices       shape=7,1 dtype=f32 data=150000.0,200000.0,250000.0,300000.0,375000.0,450000.0,500000.0
+@query        shape=1,1 dtype=f32 data=1400.0
+@init_weight  shape=1,1 dtype=f32 data=0.1

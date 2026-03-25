@@ -1,0 +1,12 @@
+; Opcode Coverage: NML-V Vision 4D NCHW tensors
+LD    R0 @input_nchw
+LD    R1 @kernel_nchw
+CONV  R2 R0 R1 #1
+ST    R2 @conv4d_result
+POOL  R3 R2 #2
+ST    R3 @pool4d_result
+UPSC  R4 R3 #2
+ST    R4 @upsc4d_result
+PADZ  R5 R2 #1
+ST    R5 @padz4d_result
+HALT

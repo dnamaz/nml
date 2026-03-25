@@ -1,0 +1,10 @@
+; Phase 3: Batch Normalization
+LD    R0 @input_bn      ; [4, 3] — 4 samples, 3 features
+BN    R1 R0
+ST    R1 @bn_result
+; With gamma/beta
+LD    R2 @gamma
+LD    R3 @beta
+BN    R4 R0 R2 R3
+ST    R4 @bn_scaled
+HALT

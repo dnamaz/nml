@@ -1,0 +1,8 @@
+; Phase 3: Weight decay (AdamW)
+LD    R0 @weights
+; Set learning rate in RJ
+ALLC  RJ #[1]
+LEAF  RJ #0.01
+WDECAY R0 #0.001
+ST    R0 @decayed
+HALT

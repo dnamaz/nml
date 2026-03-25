@@ -1,4 +1,4 @@
-# NML — Neural Machine Language Specification v0.9.0
+# NML — Neural Machine Language Specification v0.10.0
 
 ## Overview
 
@@ -30,9 +30,9 @@ NML is a minimal machine language designed for AI workloads. It supports neural 
 | RJ | LearningRate | Learning rate scalar |
 | RK–RV | Training/Hive | Training workspace and hive collective registers (12) |
 
-## Instruction Set (35 Core + 14 Extensions + 12 M2M + 5 General + 19 Training = 85 Total)
+## Instruction Set (37 Core + 14 Extensions + 12 M2M + 5 General + 23 Training = 91 Total)
 
-Training breakdown: 4 core training ops (BKWD, WUPD, LOSS, TNET) + 11 backward passes (RELUBK through TNDEEP) + 4 config-driven (TLOG, TRAIN, INFER, WDECAY)
+Training breakdown: 4 core ops (BKWD, WUPD, LOSS, TNET) + 1 deep trainer (TNDEEP) + 11 backward passes (RELU_BK through ATTN_BK) + 1 loss backward (LOSS_BK) + 4 config-driven (TLOG, TRAIN, INFER, WDECAY) + 2 normalization/regularization (BN, DROP)
 
 ### Arithmetic (8 instructions)
 ```
@@ -44,6 +44,8 @@ EDIV  Rd Rs1 Rs2     — Element-wise divide: Rd = Rs1 / Rs2
 SDOT  Rd Rs1 Rs2     — Scalar dot product: Rd = dot(Rs1, Rs2)
 SCLR  Rd Rs1 #imm    — Scalar multiply: Rd = Rs1 * imm
 SDIV  Rd Rs1 #imm    — Scalar divide: Rd = Rs1 / imm
+SADD  Rd Rs1 #imm    — Scalar add: Rd[i] = Rs1[i] + imm
+SSUB  Rd Rs1 #imm    — Scalar subtract: Rd[i] = Rs1[i] - imm
 ```
 
 ### Activation (4 instructions)
@@ -115,11 +117,13 @@ TRAP  #code           — Trigger program fault with error code
 
 ### Extension: NML-V — Vision (4 instructions)
 ```
-CONV  Rd Rs1 Rs2 [#stride] [#pad]  — 2D convolution
-POOL  Rd Rs [#size] [#stride]      — Max pooling
+CONV  Rd Rs1 Rs2 [#stride] [#pad]  — 2D/4D convolution; accepts [N,C,H,W] input + [Cout,Cin,KH,KW] kernel (NCHW)
+POOL  Rd Rs [#size] [#stride]      — Max pooling (2D and 4D NCHW)
 UPSC  Rd Rs [#scale]               — Nearest-neighbor upscale
 PADZ  Rd Rs [#pad]                 — Zero-padding
 ```
+
+4D NCHW tensors accepted from v0.10.0. Prior 2D behaviour is preserved.
 
 ### Extension: NML-T — Transformer (4 instructions)
 ```
@@ -143,23 +147,42 @@ FFT   Rd_real Rd_imag Rs           — Discrete Fourier Transform
 FILT  Rd Rs Rs_coeffs              — FIR filter (1D convolution)
 ```
 
-### Extension: NML-TR — Training (4 instructions + 11 backward)
+### Extension: NML-TR — Training (23 instructions)
 ```
-BKWD  Rd Rs Rtarget               — Backpropagation: compute gradient of loss w.r.t. Rs into Rd
-WUPD  Rd Rs Rgrad [Rlr]           — Weight update: Rd = Rs - lr * Rgrad (default lr from RJ)
-LOSS  Rd Rs Rtarget [#mode]       — Loss computation: mode 0=MSE (default), 1=cross-entropy, 2=MAE
-TNET  #epochs #lr [#seed]         — Self-training loop: train network in R1-R8 for N epochs at learning rate lr
-RELUBK SIGMBK TANHBK GELUBK SOFTBK — Backward pass for RELU, SIGM, TANH, GELU, SOFT
-MMULBK CONVBK POOLBK NORMBK ATTNBK — Backward pass for MMUL, CONV, POOL, NORM, ATTN
-TNDEEP                            — Deep backward through transformer block
+BKWD   Rd Rs Rtarget              — Backpropagation: compute gradient of loss w.r.t. Rs into Rd
+WUPD   Rd Rs Rgrad [Rlr]          — Weight update: Rd = Rs - lr * Rgrad (default lr from RJ)
+LOSS   Rd Rs Rtarget [#mode]      — Loss: mode 0=MSE (default), 1=MAE, 2=cross-entropy
+TNET   R_config #epochs           — N-layer MLP training; config tensor shape [L,3] rows=[in,hidden,out]
+TNDEEP R_config #epochs           — Deep N-layer training with momentum and gradient clipping
+BN     Rd Rs Rgamma Rbeta         — Batch normalization with learnable scale (γ) and shift (β)
+DROP   Rd Rs #rate                — Inverted dropout at rate; pass #0.0 at inference to disable
+WDECAY Rd Rs #lambda              — L2 weight decay (AdamW): Rd = Rs * (1 - lambda)
+
+; Backward passes (use underscore-form; MMULBK aliases are accepted)
+RELU_BK  Rd Rs Rgrad              — ReLU backward
+SIGM_BK  Rd Rs Rgrad              — Sigmoid backward
+TANH_BK  Rd Rs Rgrad              — Tanh backward
+GELU_BK  Rd Rs Rgrad              — GELU backward
+SOFT_BK  Rd Rs Rtarget            — Softmax backward
+MMUL_BK  Rd_dA Rd_dB Rgrad Ra Rb  — MMUL backward (two output gradients)
+CONV_BK  Rd Rs Rgrad              — CONV backward
+POOL_BK  Rd Rs Rgrad              — POOL backward
+NORM_BK  Rd Rs Rgrad              — NORM backward
+ATTN_BK  Rd Rs Rgrad              — Attention backward
+LOSS_BK  Rd Rs Rtarget [#mode]    — Loss backward (same modes as LOSS)
+
+; Config-driven training
+TLOG   Rs [#interval]             — Log scalar value from Rs every N steps
+TRAIN  R_config                   — Execute config-driven training run (arch + hyperparams in tensor)
+INFER  Rd R_config Rs             — Forward-only inference using trained config
 ```
 
-TNET performs end-to-end training using the current register state as the network:
-- R1–R4: weight/bias pairs for up to 2 layers (w1, b1, w2, b2)
-- R0: input data
-- R9: target labels
-- RJ: set to the provided learning rate
-- RA: final prediction after training completes
+TNET / TNDEEP config tensor shape `[L,3]` where each row is `[input_size, hidden_size, output_size]`.
+Supports 1–8 layers. R0 = input, R9 = targets at call time.
+
+BN / DROP are Phase 3 additions (v0.10.0):
+- BN: symbolic `⊞`, verbose `BATCH_NORM`
+- DROP: symbolic `≋`, verbose `DROPOUT`
 
 ## Encoding Format
 
@@ -193,7 +216,7 @@ Example:
 | Resource | Default | Configurable | Compile Flag |
 |----------|---------|-------------|--------------|
 | Registers | 32 | No | — |
-| Max tensor elements | 65,536 | Yes (v0.6.2+) | `-DNML_MAX_TENSOR_SIZE=N` |
+| Max tensor elements | 16,777,216 (16M) | Yes (v0.6.2+) | `-DNML_MAX_TENSOR_SIZE=N` — embedded/RPi targets use 65,536 |
 | Max instructions | 8,192 | Yes (v0.6.2+) | `-DNML_MAX_INSTRUCTIONS=N` |
 | Max memory slots | 64 | Yes (v0.6.2+) | `-DNML_MAX_MEMORY_SLOTS=N` |
 | Max loop depth | 8 | Yes (v0.6.2+) | `-DNML_MAX_LOOP_DEPTH=N` |
@@ -341,6 +364,8 @@ NML supports a dual-syntax system: every opcode and register has both a classic 
 | `SDOT` | `·` | U+00B7 | Arithmetic |
 | `SCLR` | `∗` | U+2217 | Arithmetic |
 | `SDIV` | `÷` | U+00F7 | Arithmetic |
+| `SADD` | `∔` | U+2214 | Arithmetic |
+| `SSUB` | `∸` | U+2238 | Arithmetic |
 | `RELU` | `⌐` | U+2310 | Activation |
 | `SIGM` | `σ` | U+03C3 | Activation |
 | `TANH` | `τ` | U+03C4 | Activation |
@@ -457,6 +482,8 @@ A third syntax tier uses full English words, optimized for auditability and self
 | `SDOT` | `DOT_PRODUCT` | Arithmetic |
 | `SCLR` | `SCALE` | Arithmetic |
 | `SDIV` | `DIVIDE` | Arithmetic |
+| `SADD` | `SCALAR_ADD` | Arithmetic |
+| `SSUB` | `SCALAR_SUB` | Arithmetic |
 | `SIGM` | `SIGMOID` | Activation |
 | `SOFT` | `SOFTMAX` | Activation |
 | `LD` | `LOAD` | Memory |

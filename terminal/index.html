@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NML Terminal v0.10.0</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0f; color: #c8c8d4; font-family: 'IBM Plex Mono', monospace; }
+    #root { height: 100vh; }
+    #error { color: #ff4444; padding: 20px; font-size: 13px; white-space: pre-wrap; display: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <div id="error"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script>
+    window.onerror = function(msg, src, line, col, err) {
+      var el = document.getElementById('error');
+      el.style.display = 'block';
+      el.textContent = 'Error: ' + msg + '\nLine: ' + line + '\n' + (err ? err.stack : '');
+    };
+
+    // Make React hooks available as globals so the JSX doesn't need imports
+    window.useState    = React.useState;
+    window.useEffect   = React.useEffect;
+    window.useRef      = React.useRef;
+    window.useCallback = React.useCallback;
+
+    fetch("nml_terminal.jsx")
+      .then(r => r.text())
+      .then(src => {
+        // Strip ES module import/export statements line by line
+        var patched = src
+          .split("\n")
+          .map(function(line) {
+            if (/^\s*import\s/.test(line)) return "";
+            if (/^\s*export\s+default\s/.test(line)) return line.replace(/export\s+default\s/, "");
+            if (/^\s*export\s/.test(line)) return line.replace(/export\s/, "");
+            return line;
+          })
+          .join("\n");
+
+        // Append mount call
+        patched += "\nconst __root = ReactDOM.createRoot(document.getElementById('root'));\n";
+        patched += "__root.render(React.createElement(NMLTerminal));\n";
+
+        var script = document.createElement("script");
+        script.type = "text/babel";
+        script.setAttribute("data-presets", "react");
+        script.textContent = patched;
+        document.body.appendChild(script);
+        Babel.transformScriptTags();
+      })
+      .catch(function(e) {
+        var el = document.getElementById('error');
+        el.style.display = 'block';
+        el.textContent = 'Failed to load nml_terminal.jsx:\n' + e;
+      });
+  </script>
+</body>
+</html>

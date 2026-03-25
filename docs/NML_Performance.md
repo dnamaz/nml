@@ -91,20 +91,83 @@ All programs compute the same progressive rate for input=100,000:
 |-------|------|-------------|
 | Portable (make) | 67 KB | libc, libm |
 | BLAS (make nml-fast) | 83 KB | + Accelerate/OpenBLAS |
+| Metal GPU (make nml-metal) | ~90 KB | + Metal framework |
+| SYCL GPU (make nml-sycl) | ~200 KB | + SYCL/DPC++ runtime |
+| Hailo embedded (make nml-rpi-hailo-embed) | 67 KB + HEF size | + HEF baked in |
 | Python + NumPy | ~50 MB | Full Python runtime |
 
 NML's portable binary is 750x smaller than Python's runtime for equivalent or better training performance.
 
 ## Platform Support
 
-| Platform | Build Command | Notes |
-|----------|--------------|-------|
-| macOS (ARM64) | make nml-fast | Uses Apple Accelerate |
-| macOS (portable) | make | Naive C, no dependencies |
-| Linux (x86_64) | make nml-fast | Uses OpenBLAS |
-| Linux (portable) | make | Naive C |
-| Raspberry Pi | arm-gcc runtime/nml.c -lm | Cross-compile, portable |
-| ESP32 / MCU | xtensa-gcc runtime/nml.c -lm | 67 KB fits in 4 MB flash |
+| Platform | Build Command | Backend | Notes |
+|----------|--------------|---------|-------|
+| macOS (ARM64) | `make nml-fast` | Apple Accelerate | AMX-accelerated BLAS, best macOS perf |
+| macOS (GPU) | `make nml-metal` | Apple Metal + Accelerate | GPU GEMM, CPU fallback |
+| macOS (portable) | `make` | Scalar C | No dependencies |
+| Linux x86 (Intel) | `make nml-mkl-cpu` | Intel oneMKL CPU | AVX-512, best Intel CPU perf |
+| Linux x86 (Intel GPU) | `make nml-sycl` | Intel SYCL + GPU | Arc / Iris Xe; requires `icpx` |
+| Linux x86 (Intel GPU+MKL) | `make nml-sycl NML_SYCL_MKL=ON` | SYCL + oneMKL | Peak Intel GPU perf |
+| Linux x86 (AMD) | `make nml-aocl` | AMD AOCL (BLIS) | Zen-tuned cblas; best AMD CPU perf |
+| Linux x86 (portable) | `make nml-fast` | OpenBLAS | Generic BLAS, works anywhere |
+| Linux portable | `make` | Scalar C | No dependencies |
+| Raspberry Pi | `make nml-rpi` | OpenBLAS (Cortex-A76) | `-mcpu=cortex-a76` + OpenBLAS |
+| Raspberry Pi + Hailo NPU | `make nml-rpi-hailo` | Hailo NPU (sidecar HEF) | Whole-model NPU dispatch |
+| Raspberry Pi + Hailo (embed) | `make nml-rpi-hailo-embed` | Hailo NPU (embedded HEF) | Self-contained, no sidecar files |
+| ESP32 / MCU | `xtensa-gcc runtime/nml.c -lm` | Scalar C | 67 KB fits in 4 MB flash |
+
+## Backend Performance Characteristics
+
+### GEMM Throughput (approximate, single-precision)
+
+| Backend | Hardware | Approx. Peak GEMM | Notes |
+|---------|----------|-------------------|-------|
+| Scalar C | Any CPU | ~1–5 GFLOP/s | Baseline, no dependencies |
+| OpenBLAS | x86-64 | ~50–150 GFLOP/s | AVX2 kernels |
+| Apple Accelerate | Apple Silicon | ~100–400 GFLOP/s | AMX engine |
+| Intel oneMKL CPU | Intel (AVX-512) | ~200–500 GFLOP/s | Best for Intel Xeon/Core Ultra |
+| AMD AOCL | AMD Zen 3/4 | ~150–400 GFLOP/s | Zen-native BLIS kernels |
+| Apple Metal | Apple Silicon GPU | ~1–4 TFLOP/s | Dispatches at ≥4096 elements |
+| Intel SYCL | Arc A770 | ~8 TFLOP/s (FP32) | Dispatches at ≥4096 elements |
+| Intel SYCL | Iris Xe (integrated) | ~0.5–1 TFLOP/s | PCIe overhead limits small ops |
+| Hailo NPU | Hailo-8L (AI HAT+) | ~13 TOPS | Whole-model dispatch only |
+| Hailo NPU | Hailo-10H (AI HAT+ 2) | ~40 TOPS | Whole-model dispatch only |
+
+### GPU Dispatch Thresholds
+
+GPU backends carry a PCIe / launch overhead of ~10–50 µs. The runtime only dispatches to GPU when the tensor size exceeds the configured threshold:
+
+| Macro | Default | Controls |
+|-------|---------|---------|
+| `NML_SYCL_EW_THRESHOLD` | 4096 elements | Element-wise ops (RELU, SIGMOID, TANH) |
+| `NML_METAL_THRESHOLD` | 4096 elements | Metal GPU dispatch |
+
+For GEMM, the break-even vs CPU BLAS is roughly:
+
+| GPU | Break-even batch size |
+|-----|-----------------------|
+| Intel Iris Xe (integrated) | ~16 concurrent programs |
+| Intel Arc (discrete) | ~54 concurrent programs |
+| Apple M-series GPU | ~8 concurrent programs |
+
+### GEMV vs GEMM (Intel SYCL)
+
+GEMV (matrix-vector, M=1) was historically underserved on GPU because `range<2>(1, N)` launches only N work-items — far below GPU saturation. The SYCL backend uses a work-group parallel reduction for M=1:
+
+- Each output element `j` gets a work-group of WG_K=32 threads
+- Threads reduce over K in parallel using local memory
+- Effective GPU utilisation: N × WG_K work-items instead of N
+
+This closes the GEMV performance gap at large K (K ≥ 512 benefits measurably).
+
+## Hailo NPU Deployment Modes
+
+| Mode | HEF Location | File I/O at Runtime | Use Case |
+|------|-------------|---------------------|---------|
+| Sidecar | `program.<arch>.hef` beside `.nml` | Yes (mmap'd once, cached) | Development, easy HEF swaps |
+| Embedded | Compiled into binary | None | Production Pi deployments |
+
+The Hailo backend bypasses the NML interpreter entirely — the NML program never executes instruction-by-instruction. The HEF encodes the full forward pass with weights baked in at HEF compile time.
 
 ## Methodology
 

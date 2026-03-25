@@ -30,6 +30,8 @@ Usage:
 """
 
 import json
+import os
+import platform
 import random
 import argparse
 import subprocess
@@ -38,6 +40,12 @@ import sys
 from pathlib import Path
 
 random.seed(42)
+
+# Resolve runtime binary: NML_RUNTIME env var overrides auto-detection.
+_NML_EXE = "nml.exe" if platform.system() == "Windows" else "nml"
+_DEFAULT_RUNTIME = os.environ.get(
+    "NML_RUNTIME", str(Path(__file__).parent.parent / _NML_EXE)
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Prompt templates for NML generation
@@ -298,8 +306,9 @@ def main():
                         help="Path to fine-tuned model (or base model if using --adapter)")
     parser.add_argument("--adapter", default=None,
                         help="Path to LoRA adapter directory (optional)")
-    parser.add_argument("--runtime", default=str(Path(__file__).parent.parent / "nml"),
-                        help="Path to NML C runtime binary")
+    parser.add_argument("--runtime", default=_DEFAULT_RUNTIME,
+                        help="Path to NML C runtime binary (default: auto-detected; "
+                             "override with NML_RUNTIME env var)")
     parser.add_argument("--output", default=str(
                         Path(__file__).parent.parent / "domain" / "output" / "training" / "verified_pairs.jsonl"),
                         help="Output JSONL for verified pairs")

@@ -98,7 +98,7 @@ _OPCODE_TO_CANONICAL: dict[str, str] = {}
 
 _CLASSIC_OPCODES = [
     "LD", "ST", "MOV", "ALLC", "MMUL", "MADD", "MSUB", "EMUL", "SDOT",
-    "SCLR", "SDIV", "EDIV", "RELU", "SIGM", "TANH", "SOFT", "RSHP",
+    "SCLR", "SDIV", "SADD", "SSUB", "EDIV", "RELU", "SIGM", "TANH", "SOFT", "RSHP",
     "TRNS", "SPLT", "MERG", "CMPF", "CMP", "CMPI", "JMPT", "JMPF",
     "JUMP", "LOOP", "ENDP", "LEAF", "TACC", "CALL", "RET", "SYNC",
     "HALT", "TRAP",
@@ -111,6 +111,7 @@ _CLASSIC_OPCODES = [
     "RELUBK", "SIGMBK", "TANHBK", "GELUBK", "SOFTBK",
     "MMULBK", "CONVBK", "POOLBK", "NORMBK", "ATTNBK", "TNDEEP",
     "TLOG", "TRAIN", "INFER", "WDECAY",
+    "BN", "DROP",
 ]
 for _op in _CLASSIC_OPCODES:
     _OPCODE_TO_CANONICAL[_op] = _op
@@ -125,11 +126,13 @@ _SYMBOLIC_TO_CANONICAL = {
     "·": "SDOT",
     "∗": "SCLR",
     "÷": "SDIV",
+    "∔": "SADD",
+    "∸": "SSUB",
     "∎": "LEAF",
     "∑": "TACC",
     "⨁": "TACC",
     "⌐": "RELU", "σ": "SIGM", "τ": "TANH", "Σ": "SOFT",
-    "⊞": "RSHP", "⊤": "TRNS",
+    "⊞": "BN", "⊤": "TRNS",
     "⊢": "SPLT", "⊣": "MERG",
     "⊂": "SPLT", "⊃": "MERG",
     "⋈": "CMPF", "≶": "CMP", "≺": "CMPI",
@@ -153,6 +156,7 @@ _SYMBOLIC_TO_CANONICAL = {
     "×ˈ": "MMULBK", "⊛ˈ": "CONVBK", "⊓ˈ": "POOLBK", "‖ˈ": "NORMBK", "⊙ˈ": "ATTNBK",
     "⥁ˈ": "TNDEEP",
     "⧖": "TLOG", "⟴": "TRAIN", "⟶": "INFER", "ω": "WDECAY",
+    "≋": "DROP",
 }
 _OPCODE_TO_CANONICAL.update(_SYMBOLIC_TO_CANONICAL)
 
@@ -198,11 +202,13 @@ _VERBOSE_TO_CANONICAL = {
     "ATTN_BACKWARD": "ATTNBK", "TRAIN_DEEP": "TNDEEP",
     # Short underscore aliases (LLM-natural spelling)
     "RELU_BK": "RELUBK", "SIGM_BK": "SIGMBK", "TANH_BK": "TANHBK",
-    "GELU_BK": "GELUBK", "SOFT_BK": "SOFTBK", "MMUL_BK": "MMULBK",
+    "GELU_BK": "GELUBK", "SOFT_BK": "SOFTBK", "LOSS_BK": "SOFTBK", "MMUL_BK": "MMULBK",
     "CONV_BK": "CONVBK", "POOL_BK": "POOLBK", "NORM_BK": "NORMBK",
     "ATTN_BK": "ATTNBK",
     # v0.9 config-driven training
     "TRAIN_LOG": "TLOG", "TRAIN_CONFIG": "TRAIN", "FORWARD_PASS": "INFER", "WEIGHT_DECAY": "WDECAY",
+    # Phase 3
+    "BATCH_NORM": "BN", "DROPOUT": "DROP",
 }
 _OPCODE_TO_CANONICAL.update(_VERBOSE_TO_CANONICAL)
 
@@ -211,7 +217,9 @@ _ALIAS_TO_CANONICAL = {
     "ϛ": "RDUC",       # Greek stigma — alternative symbolic for RDUC
     "DOT": "SDOT",     # Classic alias for SDOT
     "SCTR": "SCAT",    # Rd-first alias for SCAT
-    "JMP": "JUMP",     # x86-style alias for JUMP
+    "JMP":   "JUMP",   # x86-style alias for JUMP
+    "JMPNZ": "JMPT",  # jump-if-not-zero: alias for JMPT
+    "JMPZ":  "JMPF",  # jump-if-zero:     alias for JMPF
 }
 _OPCODE_TO_CANONICAL.update(_ALIAS_TO_CANONICAL)
 
@@ -232,6 +240,8 @@ _OPERAND_COUNTS: dict[str, tuple[int, int]] = {
     "SDOT": (3, 3),
     "SCLR": (2, 3),
     "SDIV": (3, 3),
+    "SADD": (3, 3),
+    "SSUB": (3, 3),
     "EDIV": (3, 3),
     "LEAF": (2, 2),
     "TACC": (2, 3),
@@ -299,6 +309,8 @@ _OPERAND_COUNTS: dict[str, tuple[int, int]] = {
     "NORMBK": (3, 3),
     "ATTNBK": (4, 5),
     "TNDEEP": (2, 9),
+    "BN":   (2, 4),
+    "DROP": (2, 3),
 }
 
 _STRUCTURAL_OPCODES = {"META", "PTCH", "SIGN"}
@@ -395,7 +407,7 @@ def _validate_operands(canonical: str, opcode_raw: str, operands: list[str], lin
                     f"Operand {i+1} of {opcode_raw} must be a register or #immediate, got '{op}'"))
 
     elif canonical in ("MMUL", "MADD", "MSUB", "EMUL", "SDOT", "SCLR",
-                        "SDIV", "EDIV", "TACC"):
+                        "SDIV", "SADD", "SSUB", "EDIV", "TACC"):
         if not _is_register(operands[0]):
             errs.append(GrammarError(line_no, "invalid_register",
                 f"Destination of {opcode_raw} must be a register, got '{operands[0]}'"))

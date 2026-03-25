@@ -1,0 +1,8 @@
+; Phase 3: Dropout
+LD    R0 @input_data
+DROP  R1 R0 #0.5
+ST    R1 @dropped
+; With p=0.0 should pass through unchanged (scaled by 1/(1-0))
+DROP  R2 R0 #0.0
+ST    R2 @no_drop
+HALT

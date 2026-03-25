@@ -1,0 +1,8 @@
+; Phase 3: N-layer TNET with config tensor
+; 3-layer MLP: 4 -> 8 -> 4 -> 1
+LD    R0 @train_x       ; [20, 4] input
+LD    R9 @train_y       ; [20, 1] labels
+LD    R1 @arch_config   ; [3, 3] layer config
+TNET  R1 #200           ; 200 epochs, config-driven
+ST    R8 @predictions
+HALT

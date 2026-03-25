@@ -1,0 +1,9 @@
+; Opcode Coverage: Cross-Entropy Loss (mode 2)
+LD    R0 @logits_good
+LD    R1 @logits_bad
+LD    R9 @targets
+LOSS  R5 R0 R9 #2
+ST    R5 @ce_good
+LOSS  R6 R1 R9 #2
+ST    R6 @ce_bad
+HALT

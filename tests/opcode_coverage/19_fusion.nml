@@ -1,0 +1,9 @@
+; Phase 2: Kernel fusion test
+; CONV then RELU on same register — exercises the lookahead fusion path
+; Result should match running them separately (CPU-verifiable)
+LD    R0 @input_nchw
+LD    R1 @kernel_nchw
+CONV  R2 R0 R1 #1
+RELU  R2 R2
+ST    R2 @fused_result
+HALT

@@ -34,6 +34,8 @@ static const OpcodeRow OPCODE_TABLE[] = {
     { "SDOT",   "·",   "DOT_PRODUCT"       },
     { "SCLR",   "∗",   "SCALE"             },
     { "SDIV",   "÷",   "DIVIDE"            },
+    { "SADD",   "∔",   "SCALAR_ADD"        },
+    { "SSUB",   "∸",   "SCALAR_SUB"        },
     /* ── Core: Activations ── */
     { "RELU",   "⌐",   "RELU"              },
     { "SIGM",   "σ",   "SIGMOID"           },

@@ -4,12 +4,34 @@ domain/
 # Generated output (audit logs, provenance, build artifacts)
 output/
 
+# Build output (object files in build/, binaries in bin/)
+build/
+bin/
+build-sycl/
+
 # Compiled binaries (built from runtime/ via make)
 /nml
 /nmld
-/nml-fast
-/nml-metal
-/nml-crypto
+/nml-*
+/nml_phase*
+/libnml.*
+
+# Stray build artifacts
+*.o
+*.obj
+*.a
+*.dll
+*.so
+*.dylib
+
+# External dependencies
+llama.cpp/
+vcpkg/
+
+# Installer files
+*.deb
+*.run
+*.sh.1
 
 # Model weights (prevent accidental commits)
 *.safetensors
@@ -71,3 +93,5 @@ plans/
 tests/*.json
 tests/retry_*.json
 tests/compare_*.json
+
+*.exe

@@ -1,0 +1,62 @@
+; ═══════════════════════════════════════════════════════
+; House Price Predictor — Linear Regression with Training
+; NML v0.10.0
+;
+; Python equivalent:
+;   model = LinearRegression()
+;   model.fit(X, y)           ← implemented below with gradient descent
+;   model.predict([[1400]])   ← inference at bottom
+;
+; Data normalized to [0,1] for stable gradient descent:
+;   sqft  / 2000  →  [0.3, 1.0]
+;   price / 500000 → [0.3, 1.0]
+; ═══════════════════════════════════════════════════════
+
+; ── Load training data ────────────────────────────────
+LD   R0 @house_sizes      ; raw sqft [600..2000]  shape=[7,1]
+LD   R1 @prices           ; raw price [150k..500k] shape=[7,1]
+
+; ── Normalize (equivalent to sklearn's StandardScaler) ─
+SCLR R0 R0 #0.0005        ; sqft  / 2000
+SCLR R1 R1 #0.000002      ; price / 500000
+
+; ── Initialize weights ── (equivalent to model = LinearRegression()) ─
+LD   R2 @init_weight      ; weight shape=[1,1] — required for MMUL
+LEAF R3 #0.0              ; bias (intercept) — scalar ok for SADD
+
+; ── model.fit(X, y) — gradient descent loop ──────────
+; MSE gradient: d_loss/d_pred = (pred - y) * 2/n
+; n=7, scale = 2/7 ≈ 0.2857
+LOOP #2000
+  ; Forward pass
+  MMUL R4 R0 R2           ; pred = X_norm @ weight   shape=[7,1]
+  SADD R4 R4 R3           ; pred = pred + bias
+
+  ; Gradient of MSE loss w.r.t. predictions
+  MSUB R6 R4 R1           ; residuals = pred - y     shape=[7,1]
+  SCLR R6 R6 #0.2857      ; scale by 2/7
+
+  ; grad_weight = X^T @ residuals
+  TRNS R7 R0              ; X_norm^T                 shape=[1,7]
+  MMUL R8 R7 R6           ; grad_weight              shape=[1,1]
+
+  ; grad_bias = sum(residuals)
+  RDUC R9 R6 #0           ; scalar sum
+
+  ; Weight update: w = w - lr * grad
+  WUPD R2 R8 #0.01
+  WUPD R3 R9 #0.01
+ENDP
+
+; Save learned parameters
+ST   R2 @learned_weight
+ST   R3 @learned_bias
+
+; ── model.predict([[1400]]) ───────────────────────────
+LD   RA @query            ; [[1400.0]] shape=[1,1]
+SCLR RB RA #0.0005        ; normalize: 1400 / 2000 = 0.7
+MMUL RC RB R2             ; RC = 0.7 * weight
+SADD RD RC R3             ; RD = RC + bias
+SCLR RE RD #500000.0      ; scale back to dollars
+ST   RE @predicted_price
+HALT

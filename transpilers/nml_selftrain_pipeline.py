@@ -20,6 +20,8 @@ Usage:
 """
 
 import json
+import os
+import platform
 import random
 import argparse
 import subprocess
@@ -28,6 +30,12 @@ import time
 from pathlib import Path
 
 random.seed(42)
+
+# Resolve runtime binary: NML_RUNTIME env var overrides auto-detection.
+_NML_EXE = "nml.exe" if platform.system() == "Windows" else "nml"
+_DEFAULT_RUNTIME = os.environ.get(
+    "NML_RUNTIME", str(Path(__file__).parent.parent / _NML_EXE)
+)
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -199,7 +207,9 @@ def main():
     parser.add_argument("--adapter", default=None, help="Current adapter (if not merged)")
     parser.add_argument("--initial-adapter", default=None,
                         help="Adapter .safetensors to resume from on round 1")
-    parser.add_argument("--runtime", default=str(Path(__file__).parent.parent / "nml"))
+    parser.add_argument("--runtime", default=_DEFAULT_RUNTIME,
+                        help="Path to NML runtime binary (default: auto-detected; "
+                             "override with NML_RUNTIME env var)")
     parser.add_argument("--output-dir", default=str(
         Path(__file__).parent.parent / "domain" / "output" / "training" / "selftrain"))
     parser.add_argument("--rounds", type=int, default=5, help="Max self-training rounds")

@@ -1,0 +1,5 @@
+LD R0 @scalar
+LD R1 #2.0
+SADD R2 R0 R1
+ST R2 @result
+HALT
