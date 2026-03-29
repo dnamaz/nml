@@ -1,5 +1,5 @@
 """
-Static opcode metadata for all 82 NML opcodes.
+Static opcode metadata for all 89 NML opcodes.
 
 Each entry provides: category, description, operand schema, snippet template,
 and all known aliases (classic, symbolic, verbose, extra).
@@ -29,7 +29,7 @@ def _reg(info: OpcodeInfo) -> None:
     OPCODES[info.canonical] = info
 
 
-# ── Arithmetic (8) ──────────────────────────────────────────────────────────
+# ── Arithmetic (10) ─────────────────────────────────────────────────────────
 
 _reg(OpcodeInfo("MMUL", "Arithmetic", "Matrix multiply: Rd = Rs1 @ Rs2",
     "Rd Rs1 Rs2", "MMUL ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
@@ -62,6 +62,14 @@ _reg(OpcodeInfo("SCLR", "Arithmetic", "Scalar multiply: Rd = Rs * #imm (or Rd = 
 _reg(OpcodeInfo("SDIV", "Arithmetic", "Scalar divide: Rd = Rs1 / Rs2|#imm",
     "Rd Rs1 Rs2|#imm", "SDIV ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
     symbolic="÷", verbose="DIVIDE", aliases=("SCALAR_DIVIDE",)))
+
+_reg(OpcodeInfo("SADD", "Arithmetic", "Scalar add: Rd = Rs + Rs2|#imm",
+    "Rd Rs Rs2|#imm", "SADD ${1:Rd} ${2:Rs} ${3:Rs2}", 3, 3,
+    symbolic="∔", verbose="SCALAR_ADD"))
+
+_reg(OpcodeInfo("SSUB", "Arithmetic", "Scalar subtract: Rd = Rs - Rs2|#imm",
+    "Rd Rs Rs2|#imm", "SSUB ${1:Rd} ${2:Rs} ${3:Rs2}", 3, 3,
+    symbolic="∸", verbose="SCALAR_SUB"))
 
 # ── Activation (4+1) ───────────────────────────────────────────────────────
 
@@ -103,7 +111,7 @@ _reg(OpcodeInfo("ALLC", "Memory", "Allocate zero tensor with given shape",
 
 _reg(OpcodeInfo("RSHP", "Data Flow", "Reshape tensor to new dimensions",
     "Rd Rs [#shape]", "RSHP ${1:Rd} ${2:Rs} ${3:#[shape]}", 2, 3,
-    symbolic="⊞", verbose="RESHAPE"))
+    symbolic="⊟", verbose="RESHAPE"))
 
 _reg(OpcodeInfo("TRNS", "Data Flow", "Transpose tensor",
     "Rd [Rs]", "TRNS ${1:Rd} ${2:Rs}", 1, 2,
@@ -267,7 +275,7 @@ _reg(OpcodeInfo("ENDF", "M2M", "End fragment block",
 
 _reg(OpcodeInfo("LINK", "M2M", "Import external fragment by name",
     "@name", "LINK ${1:@name}", 1, 1,
-    verbose="IMPORT"))
+    symbolic="⊕", verbose="IMPORT"))
 
 _reg(OpcodeInfo("PTCH", "M2M", "Apply differential patch",
     "", "PTCH", 0, 0,
@@ -391,6 +399,16 @@ _reg(OpcodeInfo("WDECAY", "Training", "Weight decay: Rd[i] *= (1 - lambda)",
     "Rd #lambda", "WDECAY ${1:Rd} ${2:#lambda}", 2, 2,
     symbolic="ω", verbose="WEIGHT_DECAY"))
 
+# ── NML-TR Phase 3 (2) ────────────────────────────────────────────────────
+
+_reg(OpcodeInfo("BN", "Training", "Batch normalization: Rd = norm(Rs, [Rgamma, [Rbeta]])",
+    "Rd Rs [Rgamma] [Rbeta]", "BN ${1:Rd} ${2:Rs}", 2, 4,
+    symbolic="⊞", verbose="BATCH_NORM"))
+
+_reg(OpcodeInfo("DROP", "Training", "Inverted dropout: Rd = dropout(Rs, #rate)",
+    "Rd Rs [#rate]", "DROP ${1:Rd} ${2:Rs} ${3:#rate}", 2, 3,
+    symbolic="≋", verbose="DROPOUT"))
+
 # ── NML-G General (5) ──────────────────────────────────────────────────────
 
 _reg(OpcodeInfo("SYS", "General", "System call with code",
@@ -399,7 +417,7 @@ _reg(OpcodeInfo("SYS", "General", "System call with code",
 
 _reg(OpcodeInfo("MOD", "General", "Modulo: Rd = Rs1 % Rs2",
     "Rd Rs1 Rs2", "MOD ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
-    verbose="MODULO"))
+    symbolic="%", verbose="MODULO"))
 
 _reg(OpcodeInfo("ITOF", "General", "Integer to float conversion: Rd = float(Rs)",
     "Rd Rs", "ITOF ${1:Rd} ${2:Rs}", 2, 2,
