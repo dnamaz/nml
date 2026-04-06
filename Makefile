@@ -17,6 +17,14 @@ endif
 # Intermediate object files go into build/; final binaries into bin/
 OBJDIR  ?= build
 BINDIR  ?= bin
+
+# ── OpenBLAS paths (Windows/MSYS2 auto-detection) ───────────────────────────
+# Override: make nml-fast OPENBLAS_PREFIX=C:/msys64/mingw64
+ifeq ($(OS),Windows_NT)
+  OPENBLAS_PREFIX ?= $(firstword $(patsubst %/include/openblas,%,$(wildcard C:/msys64/mingw64/include/openblas C:/msys64/ucrt64/include/openblas C:/msys64/clang64/include/openblas)))
+  OPENBLAS_INC    = $(OPENBLAS_PREFIX)/include/openblas
+  OPENBLAS_LIB    = $(OPENBLAS_PREFIX)/lib
+endif
 NML_TEST_TMP = $(OBJDIR)/nml_test.data
 
 # ── Convenience alias — use as $(NML_BIN) in test targets ───────────────────
@@ -71,15 +79,26 @@ nmld: runtime/nmld.c runtime/nml.c runtime/nml_tensor.h
 	$(CC) $(CFLAGS) -o $(BINDIR)/nmld$(EXEEXT) runtime/nmld.c $(LDFLAGS)
 	@echo "  Built: $(BINDIR)/nmld (NML daemon — generic execution server)"
 
+ifeq ($(shell uname),Darwin)
+  NML_FAST_CC    = $(CC) -O3 -march=native -std=c99 -DNML_USE_ACCELERATE -DACCELERATE_NEW_LAPACK
+  NML_FAST_LIBS  = -lm -framework Accelerate
+  NML_FAST_LABEL = BLAS via Apple Accelerate
+else
+  ifeq ($(OS),Windows_NT)
+    NML_FAST_CC    = $(CC) -O3 -march=native -std=c99 -DNML_USE_OPENBLAS -I$(OPENBLAS_INC) -L$(OPENBLAS_LIB)
+    NML_FAST_LIBS  = -lm -lopenblas
+    NML_FAST_LABEL = BLAS via OpenBLAS + MSYS2 ($(OPENBLAS_PREFIX))
+  else
+    NML_FAST_CC    = $(CC) -O3 -march=native -std=c99 -DNML_USE_OPENBLAS
+    NML_FAST_LIBS  = -lm -lopenblas
+    NML_FAST_LABEL = BLAS via OpenBLAS
+  endif
+endif
+
 nml-fast: runtime/nml.c runtime/nml_tensor.h
 	@mkdir -p $(BINDIR)
-ifeq ($(shell uname),Darwin)
-	$(CC) -O3 -march=native -std=c99 -DNML_USE_ACCELERATE -DACCELERATE_NEW_LAPACK -o $(BINDIR)/nml-fast$(EXEEXT) runtime/nml.c -lm -framework Accelerate
-	@echo "  Built: $(BINDIR)/nml-fast (v0.10.0, BLAS via Apple Accelerate)"
-else
-	$(CC) -O3 -march=native -std=c99 -DNML_USE_OPENBLAS -o $(BINDIR)/nml-fast$(EXEEXT) runtime/nml.c -lm -lopenblas
-	@echo "  Built: $(BINDIR)/nml-fast (v0.10.0, BLAS via OpenBLAS)"
-endif
+	$(NML_FAST_CC) -o $(BINDIR)/nml-fast$(EXEEXT) runtime/nml.c $(NML_FAST_LIBS)
+	@echo "  Built: $(BINDIR)/nml-fast (v0.10.0, $(NML_FAST_LABEL))"
 
 # ─── Raspberry Pi targets ───────────────────────────────────────────────────
 #

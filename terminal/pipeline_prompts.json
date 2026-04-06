@@ -1,0 +1,114 @@
+{
+  "categories": [
+    {
+      "name": "Training Pipelines",
+      "prompts": [
+        "Train a 2-layer neural network: forward pass with ReLU, compute cross-entropy loss, backpropagate, update weights",
+        "Train a CNN: convolution, pooling, ReLU activation, loss, backward pass through all layers, weight update",
+        "Config-driven training loop with weight decay and logging every 10 epochs",
+        "Train a transformer block: multi-head attention, layer norm, forward pass, backward pass",
+        "Train a network using TNET with 500 epochs and learning rate 0.001",
+        "Train a 3-layer MLP with batch normalization after each hidden layer and dropout rate 0.2",
+        "Train with BN and DROP: forward pass, batch normalize hidden activations, apply dropout, compute loss, backprop"
+      ]
+    },
+    {
+      "name": "Inference",
+      "prompts": [
+        "Run inference on input data through a trained model, apply softmax to get probabilities",
+        "Forward pass only: embedding lookup, attention, layer norm, output projection",
+        "Run INFER on input, apply softmax, return top prediction",
+        "Normalize input, run inference, return predictions without updating weights",
+        "Inference with batch normalization: load input, BN normalize, linear layer, softmax (DROP rate 0.0 to disable)"
+      ]
+    },
+    {
+      "name": "Backward Passes",
+      "prompts": [
+        "Backpropagate through a softmax layer",
+        "Backpropagate through a convolution layer, get input gradient and kernel gradient",
+        "Full backward pass through a 3-layer network: ReLU, sigmoid, softmax",
+        "Compute input and weight gradients for a linear layer using MMULBK",
+        "Attention backward pass: compute Q, K, V gradients"
+      ]
+    },
+    {
+      "name": "Vision",
+      "prompts": [
+        "CNN forward pass: zero-pad input, apply convolution, max pool, ReLU",
+        "Image classification: convolution, pooling, flatten, linear layer, softmax",
+        "Apply convolution with stride, then upscale output back to original size",
+        "Grouped convolution forward pass with bias addition",
+        "4D NCHW vision pipeline: load batch of images, CONV with 4D kernel, POOL, BN, ReLU, flatten, classify"
+      ]
+    },
+    {
+      "name": "Transformers",
+      "prompts": [
+        "Transformer encoder block: multi-head attention, residual connection, layer norm, feed-forward",
+        "Embedding lookup for token IDs, add positional encoding, apply attention",
+        "Self-attention forward pass with Q, K, V projections",
+        "Layer norm followed by GELU activation and linear projection"
+      ]
+    },
+    {
+      "name": "Arithmetic & Control",
+      "prompts": [
+        "Matrix multiply A and B, add bias, apply ReLU, store result",
+        "Loop 100 times: accumulate gradients, update weights every 10 steps",
+        "Compare loss to threshold, jump to early stopping if converged",
+        "Compute dot product, scale by learning rate, subtract from weights",
+        "Add two vectors element-wise using MADD, store the result",
+        "Scalar add a bias to every element using SADD, then scalar subtract a mean using SSUB"
+      ]
+    },
+    {
+      "name": "Reduction & Signal",
+      "prompts": [
+        "Reduce a tensor: sum all elements with RDUC mode 0, compute mean with mode 1",
+        "Clamp activations between -1 and 1 using CLMP",
+        "Conditional select: use WHER to pick values above threshold",
+        "Create a comparison mask with CMPR, then use WHER to zero out low-confidence predictions",
+        "Apply FFT to a signal, filter in frequency domain with FILT, then reconstruct"
+      ]
+    },
+    {
+      "name": "M2M & Fragments",
+      "prompts": [
+        "Create a reusable FRAG for a linear layer (MMUL + MADD + RELU), call it with LINK",
+        "Sign a program with SIGN, verify with VRFY before execution",
+        "Gather embeddings from a lookup table using GATH, scatter results back with SCAT",
+        "Compute cosine distance between two vectors using PROJ and DIST",
+        "Add META annotations for model name, version, and author"
+      ]
+    },
+    {
+      "name": "v0.9 Opcodes",
+      "prompts": [
+        "Set training log interval to every 10 epochs, then run config-driven training",
+        "Apply weight decay to all weight matrices before each training step",
+        "Run model inference on test input without updating weights, return softmax probabilities",
+        "Full v0.9 training pipeline: TRAIN opcode with config tensor, TLOG, WDECAY, INFER"
+      ]
+    },
+    {
+      "name": "v0.10 Opcodes",
+      "prompts": [
+        "Apply batch normalization (BN) to hidden layer activations with learned gamma and beta",
+        "Add dropout (DROP) with rate 0.3 after each hidden layer during training",
+        "Training pipeline with BN + DROP: forward pass, BN after MMUL+MADD, DROP before output, loss, backprop",
+        "Inference with BN but dropout disabled: BN R5 R5 R6 R7, DROP R5 R5 #0.0",
+        "N-layer TNET: train a 4-layer MLP using config tensor with shape [4,3]"
+      ]
+    },
+    {
+      "name": "General Purpose",
+      "prompts": [
+        "Convert integer tensor to float with ITOF, perform computation, convert back with FTOI",
+        "Compute modulo with MOD for cyclic indexing",
+        "Bitwise NOT with BNOT for mask inversion",
+        "System call with SYS to print intermediate values during debugging"
+      ]
+    }
+  ]
+}

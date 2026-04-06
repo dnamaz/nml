@@ -34,7 +34,7 @@ import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
-NML_BINARY = PROJECT_ROOT / "nml"
+NML_BINARY = PROJECT_ROOT / ("nml.exe" if sys.platform == "win32" else "nml")
 SPEC_PATH = PROJECT_ROOT / "docs" / "NML_SPEC.md"
 GETTING_STARTED = PROJECT_ROOT / "docs" / "GETTING_STARTED.md"
 
@@ -368,28 +368,37 @@ def create_http_app(model_path: str = None):
     tokenizer = None
     outlines_model = None
     nml_cfg = None
+    llm_backend_url = None  # URL for external LLM server (e.g. llama-server)
+
     if model_path:
-        try:
-            from mlx_lm import load
-            print(f"Loading model: {model_path}")
-            model, tokenizer = load(model_path)
-            print(f"Model loaded: {model_path}")
+        # Check if model_path is a URL (external LLM server like llama-server)
+        if model_path.startswith("http://") or model_path.startswith("https://"):
+            llm_backend_url = model_path.rstrip("/")
+            print(f"LLM backend (proxy): {llm_backend_url}")
+        else:
             try:
-                import outlines
-                from outlines.types import CFG
-                grammar_path = PROJECT_ROOT / "transpilers" / "nml_lark_grammar.py"
-                if grammar_path.exists():
-                    sys.path.insert(0, str(grammar_path.parent))
-                    from nml_lark_grammar import NML_GRAMMAR
-                    outlines_model = outlines.from_mlxlm(model, tokenizer)
-                    nml_cfg = CFG(NML_GRAMMAR)
-                    print(f"Constrained decoding: enabled (Outlines + NML CFG)")
+                from mlx_lm import load
+                print(f"Loading model: {model_path}")
+                model, tokenizer = load(model_path)
+                print(f"Model loaded: {model_path}")
+                try:
+                    import outlines
+                    from outlines.types import CFG
+                    grammar_path = PROJECT_ROOT / "transpilers" / "nml_lark_grammar.py"
+                    if grammar_path.exists():
+                        sys.path.insert(0, str(grammar_path.parent))
+                        from nml_lark_grammar import NML_GRAMMAR
+                        outlines_model = outlines.from_mlxlm(model, tokenizer)
+                        nml_cfg = CFG(NML_GRAMMAR)
+                        print(f"Constrained decoding: enabled (Outlines + NML CFG)")
+                except ImportError:
+                    print(f"Constrained decoding: disabled (install outlines[mlxlm] llguidance)")
+                except Exception as e:
+                    print(f"Constrained decoding: disabled ({e})")
             except ImportError:
-                print(f"Constrained decoding: disabled (install outlines[mlxlm] llguidance)")
+                print(f"WARNING: mlx_lm not available (not macOS?). Use --model http://host:port to proxy to an external LLM server.")
             except Exception as e:
-                print(f"Constrained decoding: disabled ({e})")
-        except Exception as e:
-            print(f"WARNING: Could not load model: {e}")
+                print(f"WARNING: Could not load model: {e}")
 
     async def handle_options(request):
         return web.Response(status=204, headers=_cors())
@@ -399,11 +408,21 @@ def create_http_app(model_path: str = None):
             "status": "healthy",
             "service": "nml-server",
             "tools": [t["name"] for t in TOOLS],
-            "model": model_path if model else None,
+            "model": model_path if (model or llm_backend_url) else None,
             "constrained_decoding": outlines_model is not None,
         })
 
     async def handle_models(request):
+        if llm_backend_url:
+            from aiohttp import ClientSession, ClientTimeout
+            try:
+                async with ClientSession(timeout=ClientTimeout(total=5)) as session:
+                    async with session.get(f"{llm_backend_url}/v1/models") as resp:
+                        data = await resp.json()
+                        return _json(data)
+            except Exception as e:
+                print(f"  [proxy] /v1/models failed: {e}")
+                return _json({"object": "list", "data": []})
         models = []
         if model:
             name = Path(model_path).name if model_path else "unknown"
@@ -435,8 +454,35 @@ def create_http_app(model_path: str = None):
         return _json({"result": result})
 
     async def handle_chat(request):
+        # Proxy mode: forward to external LLM server (e.g. llama-server)
+        if llm_backend_url:
+            from aiohttp import ClientSession
+            body = await request.json()
+            stream = body.get("stream", False)
+            try:
+                async with ClientSession() as session:
+                    async with session.post(
+                        f"{llm_backend_url}/v1/chat/completions",
+                        json=body,
+                    ) as upstream:
+                        if stream:
+                            resp = web.StreamResponse(headers={
+                                **_cors(),
+                                "Content-Type": "text/event-stream",
+                                "Cache-Control": "no-cache",
+                            })
+                            await resp.prepare(request)
+                            async for chunk in upstream.content.iter_any():
+                                await resp.write(chunk)
+                            return resp
+                        else:
+                            data = await upstream.json()
+                            return _json(data)
+            except Exception as e:
+                return _json({"error": f"LLM backend error: {e}"}, 502)
+
         if not model or not tokenizer:
-            return _json({"error": "No model loaded. Start with --model path/to/model"}, 503)
+            return _json({"error": "No model loaded. Start with --model path/to/model or --model http://host:port"}, 503)
 
         body = await request.json()
         messages = body.get("messages", [])

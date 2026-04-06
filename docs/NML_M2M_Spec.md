@@ -144,6 +144,11 @@ Types are advisory — they do not change runtime behavior by default. The gramm
 | `SOFT`/`Σ` (softmax) | float | — | probability |
 | `PROJ`/`⟐` (project) | float | float | embedding |
 | `DIST`/`⟂` (distance) | embedding | embedding | float |
+| `VOTE`/`⚖` median (#0) | any | — | same as input |
+| `VOTE`/`⚖` mean (#1) | any | — | same as input |
+| `VOTE`/`⚖` quorum (#2) | any | — | bool (Rd); consensus value → RC, same type as input |
+| `VOTE`/`⚖` min (#3) | any | — | same as input |
+| `VOTE`/`⚖` max (#4) | any | — | same as input |
 
 Incompatible operations (e.g., `currency * currency`, `category + currency`) produce a semantic warning when type-checked.
 

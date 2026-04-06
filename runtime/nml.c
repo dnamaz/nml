@@ -75,6 +75,7 @@
 #elif defined(NML_USE_OPENBLAS)
   #include <cblas.h>
   #define NML_HAS_BLAS 1
+  #define NML_HAS_OPENBLAS_THREADS 1
 #elif defined(NML_USE_ONEMKL_CPU)
   #include <mkl_cblas.h>
   #define NML_HAS_BLAS 1
@@ -1675,6 +1676,7 @@ static MemorySlot* vm_memory(VM *vm, const char *label) {
     if (vm->mem_count >= NML_MAX_MEMORY_SLOTS) return NULL;
     MemorySlot *slot = &vm->memory[vm->mem_count++];
     strncpy(slot->label, label, NML_MAX_LABEL_LEN - 1);
+    slot->label[NML_MAX_LABEL_LEN - 1] = '\0';
     slot->used = 1;
     return slot;
 }
@@ -1875,6 +1877,7 @@ static int vm_assemble(VM *vm, const char *source) {
                     instr->int_params[3] = 1;
                 } else if (tokens[2][0] == '@') {
                     strncpy(instr->addr, tokens[2]+1, NML_MAX_LABEL_LEN-1);
+                    instr->addr[NML_MAX_LABEL_LEN-1] = '\0';
                     instr->int_params[3] = 2;
                 } else {
                     instr->reg[1] = parse_register(tokens[2]);
@@ -1909,6 +1912,7 @@ static int vm_assemble(VM *vm, const char *source) {
                 instr->reg[0] = parse_register(tokens[1]);
                 if (tokens[2][0] == '@') {
                     strncpy(instr->addr, tokens[2]+1, NML_MAX_LABEL_LEN-1);
+                    instr->addr[NML_MAX_LABEL_LEN-1] = '\0';
                 } else if (tokens[2][0] == '#' || (tokens[2][0] >= '0' && tokens[2][0] <= '9') || tokens[2][0] == '-') {
                     instr->imm = parse_imm(tokens[2]);
                     instr->int_params[3] = 1;
@@ -1917,11 +1921,13 @@ static int vm_assemble(VM *vm, const char *source) {
                     instr->int_params[3] = 3;
                 } else {
                     strncpy(instr->addr, tokens[2], NML_MAX_LABEL_LEN-1);
+                    instr->addr[NML_MAX_LABEL_LEN-1] = '\0';
                 }
                 break;
             case OP_ST:
                 instr->reg[0] = parse_register(tokens[1]);
                 strncpy(instr->addr, tokens[2][0]=='@' ? tokens[2]+1 : tokens[2], NML_MAX_LABEL_LEN-1);
+                instr->addr[NML_MAX_LABEL_LEN-1] = '\0';
                 break;
 
             /* Alloc / Reshape */
@@ -2007,6 +2013,7 @@ static int vm_assemble(VM *vm, const char *source) {
                 instr->reg[0] = parse_register(tokens[1]);
                 if (tokens[2][0] == '@') {
                     strncpy(instr->addr, tokens[2]+1, NML_MAX_LABEL_LEN-1);
+                    instr->addr[NML_MAX_LABEL_LEN-1] = '\0';
                     instr->int_params[3] = 2;
                 } else if (is_register_token(tokens[2])) {
                     instr->reg[1] = parse_register(tokens[2]);
@@ -2118,13 +2125,16 @@ static int vm_assemble(VM *vm, const char *source) {
                         if (t > 2) strncat(val, " ", NML_MAX_META_VALUE - strlen(val) - 1);
                         strncat(val, tokens[t], NML_MAX_META_VALUE - strlen(val) - 1);
                     }
-                    strncpy(vm->descriptor.entries[vm->descriptor.count].value, val, NML_MAX_META_VALUE - 1);
+                    snprintf(vm->descriptor.entries[vm->descriptor.count].value, NML_MAX_META_VALUE, "%s", val);
                     vm->descriptor.count++;
                 }
                 break;
             }
             case OP_FRAG: case OP_ENDF: case OP_LINK: case OP_PTCH: case OP_SIGN:
-                if (ntokens > 1) strncpy(instr->addr, tokens[1], NML_MAX_LABEL_LEN-1);
+                if (ntokens > 1) {
+                    strncpy(instr->addr, tokens[1], NML_MAX_LABEL_LEN-1);
+                    instr->addr[NML_MAX_LABEL_LEN-1] = '\0';
+                }
                 break;
             case OP_VRFY:
                 if (ntokens > 1) instr->reg[0] = parse_register(tokens[1]);
@@ -2252,6 +2262,7 @@ static int vm_assemble(VM *vm, const char *source) {
                         instr->imm = (fi < ntokens) ? parse_imm(tokens[fi]) : 1000;
                         instr->int_params[0] = (fi+1 < ntokens) ? (int)(parse_imm(tokens[fi+1]) * 1e6) : 1000;
                         instr->int_params[1] = (fi+2 < ntokens) ? (int)parse_imm(tokens[fi+2]) : 0;
+                        instr->int_params[2] = (fi+3 < ntokens) ? (int)parse_imm(tokens[fi+3]) : 0;
                     }
                 }
                 break;
@@ -2308,10 +2319,13 @@ static int vm_assemble(VM *vm, const char *source) {
                     for (int ti = fi + 3; ti < ntokens; ti++) {
                         if (tokens[ti][0] != '@') continue;
                         const char *name = tokens[ti] + 1;
-                        if (instr->data_label[0] == '\0')
+                        if (instr->data_label[0] == '\0') {
                             strncpy(instr->data_label,   name, NML_MAX_LABEL_LEN - 1);
-                        else if (instr->target_label[0] == '\0')
+                            instr->data_label[NML_MAX_LABEL_LEN - 1] = '\0';
+                        } else if (instr->target_label[0] == '\0') {
                             strncpy(instr->target_label, name, NML_MAX_LABEL_LEN - 1);
+                            instr->target_label[NML_MAX_LABEL_LEN - 1] = '\0';
+                        }
                     }
                 }
                 break;
@@ -2328,10 +2342,13 @@ static int vm_assemble(VM *vm, const char *source) {
                 for (int ti = 2; ti < ntokens; ti++) {
                     if (tokens[ti][0] != '@') continue;
                     const char *name = tokens[ti] + 1;
-                    if (instr->data_label[0] == '\0')
+                    if (instr->data_label[0] == '\0') {
                         strncpy(instr->data_label,   name, NML_MAX_LABEL_LEN - 1);
-                    else if (instr->target_label[0] == '\0')
+                        instr->data_label[NML_MAX_LABEL_LEN - 1] = '\0';
+                    } else if (instr->target_label[0] == '\0') {
                         strncpy(instr->target_label, name, NML_MAX_LABEL_LEN - 1);
+                        instr->target_label[NML_MAX_LABEL_LEN - 1] = '\0';
+                    }
                 }
                 break;
             /* INFER Rd [R_input]
@@ -3439,7 +3456,8 @@ static int vm_execute(VM *vm) {
             int H = w1->shape[w1->ndim - 1];
             int N = input->shape[0];
             int K = w1->shape[0];
-            int B = (N <= 64) ? N : 64;
+            int user_bs = ins->int_params[2];
+            int B = (user_bs > 0 && user_bs < N) ? user_bs : (N <= 64 ? N : 64);
             int nbatch = (N + B - 1) / B;
 
             size_t bh = (size_t)B * H, kh = (size_t)K * H;
@@ -5374,6 +5392,7 @@ int main(int argc, char **argv) {
     int max_cycles = NML_DEFAULT_MAX_CYCLES;
     int describe_only = 0;
     const char *fragment_name = NULL;
+    int blas_threads = 0;  /* 0 = auto (OpenBLAS default) */
 #ifdef NML_CRYPTO
     int sign_mode = 0;
     int keygen_mode = 0;
@@ -5393,6 +5412,8 @@ int main(int argc, char **argv) {
             fragment_name = argv[++i];
         } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
             output_path = argv[++i];
+        } else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
+            blas_threads = atoi(argv[++i]);
 #ifdef NML_CRYPTO
         } else if (strcmp(argv[i], "--keygen") == 0) {
             keygen_mode = 1;
@@ -5498,6 +5519,17 @@ int main(int argc, char **argv) {
     nml_gpu_thresholds_init();
 
     srand((unsigned)time(NULL));
+
+#ifdef NML_HAS_OPENBLAS_THREADS
+    if (blas_threads > 0) {
+        openblas_set_num_threads(blas_threads);
+    }
+    if (trace) {
+        printf("[NML] OpenBLAS: %s, threads=%d\n",
+               openblas_get_config(), openblas_get_num_threads());
+    }
+#endif
+    (void)blas_threads;  /* suppress unused warning when no BLAS */
 
     VM *vm = (VM*)calloc(1, sizeof(VM));
     if (!vm) { fprintf(stderr, "ERROR: Cannot allocate VM\n"); return 1; }

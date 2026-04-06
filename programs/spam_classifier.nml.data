@@ -1,0 +1,2 @@
+@email_scores shape=5,1 dtype=f64 data=-2.5,-0.8,0.0,1.1,4.0
+@threshold shape=1,1 dtype=f64 data=0.5

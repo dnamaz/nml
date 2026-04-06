@@ -3,26 +3,35 @@ set -e
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="$PROJECT_ROOT/serve/logs"
-MODEL_DIR="$PROJECT_ROOT/domain/output/model"
+MODEL_DIR="$PROJECT_ROOT/../nml-model-training/models"
 
 PORT_SERVER=8082
 PORT_GATEWAY=8083
+PORT_THINK=8084
+
+THINK_MODEL="$PROJECT_ROOT/../nml-model-training/models/nml-think-v2-6bit"
 
 PIDS=()
 MODEL=""
-NO_UI=false
+CHAT_UI=false
+PIPELINE_UI=false
 NO_GATEWAY=false
+NO_THINK=false
 
 for arg in "$@"; do
     case "$arg" in
-        --no-ui)      NO_UI=true ;;
-        --no-gateway) NO_GATEWAY=true ;;
+        --chat-ui)     CHAT_UI=true ;;
+        --pipeline-ui) PIPELINE_UI=true ;;
+        --no-gateway)  NO_GATEWAY=true ;;
+        --no-think)    NO_THINK=true ;;
         --help|-h)
-            echo "Usage: $0 [model-name] [--no-ui] [--no-gateway]"
+            echo "Usage: $0 [model-name] [options]"
             echo ""
-            echo "  model-name     Model directory name (default: nml-equalized-merged)"
-            echo "  --no-ui        Don't launch the chat UI"
-            echo "  --no-gateway   Don't start the domain RAG gateway"
+            echo "  model-name      Code model directory name (default: nml-v09-merged-6bit)"
+            echo "  --chat-ui       Launch the chat UI"
+            echo "  --pipeline-ui   Launch the pipeline UI"
+            echo "  --no-think      Don't start the think model server"
+            echo "  --no-gateway    Don't start the domain RAG gateway"
             exit 0
             ;;
         --*)
@@ -35,7 +44,7 @@ for arg in "$@"; do
     esac
 done
 
-MODEL="${MODEL:-nml-next-merged}"
+MODEL="${MODEL:-nml-v09-merged-6bit}"
 MODEL_PATH="$MODEL_DIR/$MODEL"
 
 cleanup() {
@@ -67,18 +76,33 @@ fi
 echo ""
 echo "  Starting NML agent services..."
 
-echo "  NML Server on :$PORT_SERVER (model: $MODEL)"
+# Code model server (v09)
+echo "  Code Server  on :$PORT_SERVER (model: $MODEL)"
 python3 "$PROJECT_ROOT/serve/nml_server.py" --http --port "$PORT_SERVER" \
     --model "$MODEL_PATH" \
     > "$LOG_DIR/server.log" 2>&1 &
 PIDS+=($!)
 
-if ! $NO_GATEWAY; then
-    echo "  Domain RAG gateway on :$PORT_GATEWAY"
-    python3 "$PROJECT_ROOT/domain/transpilers/domain_rag_server.py" \
-        --domains tax --port "$PORT_GATEWAY" \
-        > "$LOG_DIR/gateway.log" 2>&1 &
+# Think model server (Qwen3.5-4B reasoning)
+if ! $NO_THINK; then
+    echo "  Think Server on :$PORT_THINK (model: $(basename $THINK_MODEL))"
+    python3 "$PROJECT_ROOT/serve/nml_server.py" --http --port "$PORT_THINK" \
+        --model "$THINK_MODEL" \
+        > "$LOG_DIR/think_server.log" 2>&1 &
     PIDS+=($!)
+fi
+
+# Domain RAG gateway (optional)
+if ! $NO_GATEWAY; then
+    if [ -f "$PROJECT_ROOT/domain/transpilers/domain_rag_server.py" ]; then
+        echo "  Gateway      on :$PORT_GATEWAY"
+        python3 "$PROJECT_ROOT/domain/transpilers/domain_rag_server.py" \
+            --domains tax --port "$PORT_GATEWAY" \
+            > "$LOG_DIR/gateway.log" 2>&1 &
+        PIDS+=($!)
+    else
+        NO_GATEWAY=true
+    fi
 fi
 
 echo "  Waiting for services to become ready..."
@@ -95,7 +119,10 @@ wait_for() {
     return 1
 }
 
-wait_for "http://localhost:$PORT_SERVER/health" "NML Server"
+wait_for "http://localhost:$PORT_SERVER/health" "Code Server"
+if ! $NO_THINK; then
+    wait_for "http://localhost:$PORT_THINK/health" "Think Server"
+fi
 if ! $NO_GATEWAY; then
     wait_for "http://localhost:$PORT_GATEWAY/v1/rag/status" "Gateway"
 fi
@@ -105,21 +132,25 @@ echo "  ════════════════════════
 echo "  NML Agent Services — Ready"
 echo "  ═══════════════════════════════════════════"
 echo ""
-echo "  NML Server  http://localhost:$PORT_SERVER"
-echo "    Chat      http://localhost:$PORT_SERVER/v1/chat/completions"
-echo "    Execute   http://localhost:$PORT_SERVER/execute"
-echo "    Validate  http://localhost:$PORT_SERVER/validate"
-if ! $NO_GATEWAY; then
-    echo "  Gateway     http://localhost:$PORT_GATEWAY"
+echo "  Code Server   http://localhost:$PORT_SERVER  ($MODEL)"
+if ! $NO_THINK; then
+    echo "  Think Server  http://localhost:$PORT_THINK  ($(basename $THINK_MODEL))"
 fi
-echo ""
-echo "  Model: $MODEL"
-echo "  Logs:  $LOG_DIR/"
+if ! $NO_GATEWAY; then
+    echo "  Gateway       http://localhost:$PORT_GATEWAY"
+fi
+echo "  Logs:         $LOG_DIR/"
 echo ""
 
-if ! $NO_UI; then
+if $CHAT_UI; then
     echo "  Launching NML chat UI..."
-    cd "$PROJECT_ROOT" && bun ~/.cursor/skills/jxs-runner/scripts/jxs.ts terminal/nml_chat.jsx &
+    cd "$PROJECT_ROOT" && bun ~/.cursor/skills/jxs-runner/scripts/jsx.ts terminal/nml_chat.jsx &
+    PIDS+=($!)
+fi
+
+if $PIPELINE_UI; then
+    echo "  Launching NML pipeline UI..."
+    cd "$PROJECT_ROOT" && bun ~/.cursor/skills/jxs-runner/scripts/jsx.ts terminal/nml_pipeline.jsx &
     PIDS+=($!)
 fi
 

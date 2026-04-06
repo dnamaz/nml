@@ -1,0 +1,35 @@
+; ============================================
+; Spam Classifier — sigmoid probability demo
+; Equivalent to nml_terminal.jsx Python code
+; ============================================
+; Input:  5 email "spamminess" scores
+; Output: probabilities (via sigmoid) and
+;         binary predictions (threshold 0.5)
+; ============================================
+
+; --- Load data ---
+LD    R0 @email_scores      ; R0 = [-2.5, -0.8, 0.0, 1.1, 4.0]
+LD    R4 @threshold          ; R4 = 0.5
+
+; --- Sigmoid: prob = 1 / (1 + exp(-score)) ---
+SIGM  R1 R0                  ; R1 = sigmoid(R0) → probabilities
+
+; --- Classification: prediction = (prob >= threshold) ---
+; Subtract threshold, then check sign via ReLU trick:
+;   diff = prob - threshold
+;   if diff >= 0 → spam (1.0 after clamp), else safe (0.0)
+SSUB  R2 R1 R4              ; R2 = probabilities - 0.5
+RELU  R3 R2                  ; R3 = max(0, diff) — positive only for spam
+; Normalize to binary 0/1: clamp any positive value to 1.0
+; Use: sign(relu) → if > 0, it's 1.0 (spam); if 0, it's 0.0 (safe)
+SCLR  R5 R3 #1000.0         ; amplify positive diffs
+RELU  R5 R5                  ; still 0 for safe, large for spam
+; Clamp to 1.0 via sigmoid of large values
+SIGM  R5 R5                  ; ≈1.0 for spam, 0.5 for safe (score=0 edge)
+
+; --- Store results ---
+ST    R0 @raw_scores         ; original scores
+ST    R1 @probabilities      ; sigmoid outputs
+ST    R5 @predictions        ; 1.0 = SPAM, ~0.5 = borderline, 0.0 = Safe
+
+HALT
