@@ -97,5 +97,6 @@ tests/compare_*.json
 # Large generated test data (regenerated, not core)
 tests/test_*.nml.data
 tests/eval_fixtures.nml.data
+tests/test_4096.nml.data
 
 *.exe
