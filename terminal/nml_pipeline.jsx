@@ -39,6 +39,11 @@ Rules:
 - ST takes a register and a named tensor: ST R0 @name
 - Always end with HALT
 - Never use immediates (#value) as operands to MMUL, MADD, RELU, SOFT
+- TNET runs end-to-end mini-batch SGD: TNET #epochs #lr #loss_type #batch_size
+  Where loss_type=0 (MSE) and batch_size=0 means full-batch. Example: TNET #100 #0.0100 #0 #32
+  Register layout for TNET: R0=training_data(N×K), R1=w1(K×H), R2=b1(1×H), R3=w2(H×1), R4=b2(1×1), R9=training_labels(N×1)
+  TNET writes updated weights to R1-R4 and final loss to R8; no manual BKWD/WUPD needed
+  For inference after training: LD @new_input → MMUL → MADD → RELU → MMUL → MADD → ST @output
 
 Be specific. The code generator cannot infer missing details.`;
 
@@ -246,10 +251,22 @@ export default function NMLPipeline() {
   const DATA_TEMPLATE = `; .nml.data — named tensor definitions
 ; Format: @name shape=rows,cols dtype=f32 data=v1,v2,...
 
+; --- Inference example ---
 @input    shape=1,4   dtype=f32  data=0.5,0.3,0.8,0.1
 @w1       shape=4,8   dtype=f32  data=0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2,0.1,0.2
 @b1       shape=1,8   dtype=f32  data=0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-@target   shape=1,3   dtype=f32  data=0.0,1.0,0.0`;
+@target   shape=1,3   dtype=f32  data=0.0,1.0,0.0
+
+; --- Training example (TNET) ---
+; N=4 samples, K=2 features → training_data shape=4,2
+; training_labels shape=4,1  (regression target)
+; @w1 shape=2,4  @b1 shape=1,4  @w2 shape=4,1  @b2 shape=1,1
+@training_data    shape=4,2  dtype=f32  data=0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8
+@training_labels  shape=4,1  dtype=f32  data=0.3,0.7,1.1,1.5
+@w1               shape=2,4  dtype=f32  data=0.1,-0.2,0.3,-0.1,0.2,-0.3,0.1,-0.2
+@b1               shape=1,4  dtype=f32  data=0.0,0.0,0.0,0.0
+@w2               shape=4,1  dtype=f32  data=0.2,-0.1,0.3,-0.2
+@b2               shape=1,1  dtype=f32  data=0.0`;
 
   const callModel = async (base, system, userMsg, setOut, setLoading, setError, maxTokens = 800) => {
     setLoading(true);
@@ -465,7 +482,7 @@ export default function NMLPipeline() {
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {/* Think + Code panels */}
           <div style={{ flex: 1, display: "flex", gap: 12, padding: "12px 16px 6px", overflow: "hidden" }}>
-            <Panel title="Think Model" subtitle="nml-think-v2-4bit + adapters · Reasoning"
+            <Panel title="Think Model" subtitle="nml-think-v2-6bit + adapters · Reasoning"
               color="think" content={showThinkRaw ? thinkRaw : thinkOut}
               isCode={false} loading={thinkLoading} error={thinkError}>
               {thinkOut && (

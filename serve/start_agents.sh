@@ -9,7 +9,7 @@ PORT_SERVER=8082
 PORT_GATEWAY=8083
 PORT_THINK=8084
 
-THINK_MODEL="$PROJECT_ROOT/../nml-model-training/models/nml-think-v2-merged"
+THINK_MODEL="$PROJECT_ROOT/../nml-model-training/models/nml-think-v2-6bit"
 
 PIDS=()
 MODEL=""

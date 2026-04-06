@@ -447,6 +447,94 @@ class NMLEmulator {
           else this.log.push({ type: "exec", op: opcode, msg: `sys #${code}` });
           break;
         }
+        case "TNET": {
+          /* Mini-batch SGD training loop.
+           * Registers: R0=input(N×K) R1=w1(K×H) R2=b1(1×H)
+           *            R3=w2(H×1)   R4=b2(1×1)  R9=target(N×1)
+           * Immediates: #epochs #lr #loss_type #batch_size
+           * Writes: R1 R2 R3 R4 (updated weights), R8 (final loss) */
+          const epochs    = ops[0] ? parseInt(ops[0].replace("#", ""))   : 100;
+          const lr        = ops[1] ? parseFloat(ops[1].replace("#", "")) : 0.01;
+          const bsArg     = ops[3] ? parseInt(ops[3].replace("#", ""))   : 0;
+
+          const X  = this._getTensor("R0");
+          const w1 = this._getTensor("R1");
+          const b1 = this._getTensor("R2");
+          const w2 = this._getTensor("R3");
+          const b2 = this._getTensor("R4");
+          const yT = this._getTensor("R9");
+
+          const N = X.shape[0];
+          const K = w1.shape[0];
+          const H = w1.shape[w1.shape.length - 1];
+          const B = (bsArg > 0 && bsArg < N) ? bsArg : Math.min(N, 64);
+
+          const W1 = w1.data.slice(), B1 = b1.data.slice();
+          const W2 = w2.data.slice(), B2 = b2.data.slice();
+
+          let finalLoss = 0;
+          for (let ep = 0; ep < epochs; ep++) {
+            finalLoss = 0;
+            const nbatch = Math.ceil(N / B);
+            for (let bat = 0; bat < nbatch; bat++) {
+              const s = bat * B, Bn = Math.min(B, N - s);
+              // Forward
+              const pre = new Float32Array(Bn * H);
+              const hid = new Float32Array(Bn * H);
+              for (let i = 0; i < Bn; i++)
+                for (let j = 0; j < H; j++) {
+                  let sum = 0;
+                  for (let p = 0; p < K; p++) sum += X.data[(s+i)*K+p] * W1[p*H+j];
+                  pre[i*H+j] = sum + B1[j];
+                  hid[i*H+j] = Math.max(0, pre[i*H+j]);
+                }
+              const out = new Float32Array(Bn);
+              for (let i = 0; i < Bn; i++) {
+                let sum = 0;
+                for (let j = 0; j < H; j++) sum += hid[i*H+j] * W2[j];
+                out[i] = sum + B2[0];
+              }
+              // Loss (MSE) + d_out
+              const dout = new Float32Array(Bn);
+              for (let i = 0; i < Bn; i++) {
+                const diff = out[i] - yT.data[s+i];
+                finalLoss += diff * diff;
+                dout[i] = 2 * diff / Bn;
+              }
+              // d_W2, d_B2
+              const dW2 = new Float32Array(H); let dB2 = 0;
+              for (let i = 0; i < Bn; i++) { for (let j = 0; j < H; j++) dW2[j] += dout[i] * hid[i*H+j]; dB2 += dout[i]; }
+              // d_hidden → ReLU backward → d_pre
+              const dPre = new Float32Array(Bn * H);
+              for (let i = 0; i < Bn; i++)
+                for (let j = 0; j < H; j++)
+                  dPre[i*H+j] = pre[i*H+j] > 0 ? dout[i] * W2[j] : 0;
+              // d_W1, d_B1
+              const dW1 = new Float32Array(K * H); const dB1 = new Float32Array(H);
+              for (let i = 0; i < Bn; i++)
+                for (let j = 0; j < H; j++) {
+                  for (let p = 0; p < K; p++) dW1[p*H+j] += dPre[i*H+j] * X.data[(s+i)*K+p];
+                  dB1[j] += dPre[i*H+j];
+                }
+              // Update weights
+              for (let i = 0; i < K*H; i++) W1[i] -= lr * dW1[i];
+              for (let i = 0; i < H; i++)   B1[i] -= lr * dB1[i];
+              for (let i = 0; i < H; i++)   W2[i] -= lr * dW2[i];
+              B2[0] -= lr * dB2;
+            }
+            finalLoss /= N;
+          }
+
+          this.registers[this._reg("R1")] = new NMLTensor(w1.shape, W1);
+          this.registers[this._reg("R2")] = new NMLTensor(b1.shape, B1);
+          this.registers[this._reg("R3")] = new NMLTensor(w2.shape, W2);
+          this.registers[this._reg("R4")] = new NMLTensor(b2.shape, B2);
+          this.registers[this._reg("R8")] = new NMLTensor([1], [finalLoss]);
+          const batchLabel = bsArg > 0 ? `batch=${B}` : `batch=${B}(auto)`;
+          this.log.push({ type: "exec", op: opcode,
+            msg: `trained ${epochs} epochs · ${batchLabel} · lr=${lr} → loss=${finalLoss.toFixed(6)}` });
+          break;
+        }
         case "DOT": {
           const a = this._getTensor(ops[1]);
           const b = this._getTensor(ops[2]);
@@ -634,6 +722,27 @@ JMPT  #-8
 HALT`,
     memory: {}
   },
+  "TNET Training": {
+    code: `; Mini-batch SGD — TNET #epochs #lr #loss #batch_size
+; 4th immediate sets mini-batch size (0 = full-batch / auto)
+LD    R1 @w1
+LD    R2 @b1
+LD    R3 @w2
+LD    R4 @b2
+LD    R0 @training_data
+LD    R9 @training_labels
+TNET  #300 #0.0500 #0 #4
+ST    R8 @loss
+HALT`,
+    memory: {
+      training_data:   { shape: [8, 2], data: [0.1,0.2, 0.3,0.4, 0.5,0.1, 0.7,0.8, 0.2,0.9, 0.4,0.3, 0.6,0.5, 0.8,0.1] },
+      training_labels: { shape: [8, 1], data: [0, 0, 0, 1, 0, 0, 1, 1] },
+      w1: { shape: [2, 4], data: [ 0.1,-0.2, 0.3, 0.1, -0.1, 0.4,-0.2, 0.2] },
+      b1: { shape: [1, 4], data: [0, 0, 0, 0] },
+      w2: { shape: [4, 1], data: [0.2,-0.1, 0.3, 0.1] },
+      b2: { shape: [1, 1], data: [0] },
+    }
+  },
   "Symbolic": {
     code: `; Symbolic syntax: scale and store
 ∎  ι  #42.0
@@ -685,6 +794,7 @@ function syntaxHighlight(line) {
          "CONV","POOL","UPSC","PADZ","ATTN","NORM","EMBD",
          "RDUC","WHER","CLMP","CMPR","FFT","FILT",
          "META","FRAG","ENDF","LINK","PTCH","SIGN","VRFY","VOTE","PROJ","DIST","GATH","SCAT","SCTR",
+         "TNET","BKWD","WUPD","LOSS","TNDEEP",
          "SYS","MOD","ITOF","FTOI","BNOT"].includes(upper)) {
       return <span key={i} style={{ color: COLORS.opcode, fontWeight: 700 }}>{p}</span>;
     }
@@ -745,12 +855,17 @@ export default function NMLTerminal() {
     setOutput(log);
     setRegisters({ ...emu.registers });
     setMemoryView({ ...emu.memory });
+    /* Check if a TNET instruction ran and extract loss for display */
+    const tnetEntry = log.find(e => e.op === "TNET");
+    const tnetLoss = tnetEntry ? tnetEntry.msg.match(/loss=([\d.]+)/) : null;
+
     setStats({
       cycles: emu.cycles,
       instructions: instrCount,
       tokens: tokenCount,
       timeMs: elapsed.toFixed(2),
       halted: emu.halted,
+      loss: tnetLoss ? tnetLoss[1] : null,
     });
 
     setTimeout(() => setIsRunning(false), 150);
@@ -789,7 +904,7 @@ export default function NMLTerminal() {
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <span style={{ color: COLORS.accent, fontSize: 20, fontWeight: 800, letterSpacing: 3 }}>NML</span>
-          <span style={{ color: COLORS.textDim, fontSize: 11, letterSpacing: 1 }}>NEURAL MACHINE LANGUAGE v0.7.0</span>
+          <span style={{ color: COLORS.textDim, fontSize: 11, letterSpacing: 1 }}>NEURAL MACHINE LANGUAGE v0.8.0</span>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span style={{ color: COLORS.textDim, fontSize: 11, marginRight: 8 }}>EXAMPLES:</span>
@@ -932,6 +1047,7 @@ export default function NMLTerminal() {
               <span>CYCLES: <span style={{ color: COLORS.accent }}>{stats.cycles}</span></span>
               <span>TOKENS: <span style={{ color: COLORS.accent }}>{stats.tokens}</span></span>
               <span>TIME: <span style={{ color: COLORS.accent }}>{stats.timeMs}ms</span></span>
+              {stats.loss && <span>LOSS: <span style={{ color: COLORS.warn }}>{stats.loss}</span></span>}
               <span>STATUS: <span style={{ color: stats.halted ? COLORS.halt : COLORS.error }}>{stats.halted ? "HALTED" : "ERROR"}</span></span>
             </div>
           )}
@@ -973,7 +1089,7 @@ export default function NMLTerminal() {
                 <div style={{ color: COLORS.textDim, fontSize: 12, padding: 20, textAlign: "center", lineHeight: 1.8 }}>
                   Press <span style={{ color: COLORS.accent, fontWeight: 700 }}>EXECUTE</span> or <span style={{ color: COLORS.accent }}>Ctrl+Enter</span> to run
                   <br />
-                  <span style={{ fontSize: 10, opacity: 0.6 }}>82 opcodes. Tri-syntax. Zero ambiguity. Machine-first.</span>
+                  <span style={{ fontSize: 10, opacity: 0.6 }}>85 opcodes. Tri-syntax. Zero ambiguity. Machine-first.</span>
                 </div>
               ) : (
                 output.map((entry, i) => (
@@ -1068,8 +1184,8 @@ export default function NMLTerminal() {
         letterSpacing: 1,
         flexShrink: 0,
       }}>
-        <span>82 OPCODES • 32 REGISTERS • TRI-SYNTAX • FIXED-WIDTH ENCODING</span>
-        <span>NML EMULATOR v0.7.0</span>
+        <span>85 OPCODES • 32 REGISTERS • TRI-SYNTAX • MINI-BATCH SGD</span>
+        <span>NML EMULATOR v0.8.0</span>
       </div>
     </div>
   );

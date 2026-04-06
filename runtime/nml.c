@@ -1867,6 +1867,7 @@ static int vm_assemble(VM *vm, const char *source) {
                     instr->imm = (fi < ntokens) ? parse_imm(tokens[fi]) : 1000;
                     instr->int_params[0] = (fi+1 < ntokens) ? (int)(parse_imm(tokens[fi+1]) * 1e6) : 1000;
                     instr->int_params[1] = (fi+2 < ntokens) ? (int)parse_imm(tokens[fi+2]) : 0;
+                    instr->int_params[2] = (fi+3 < ntokens) ? (int)parse_imm(tokens[fi+3]) : 0;
                 }
                 break;
             /* NML-TR Backward — 3-register activation backward opcodes */
@@ -2723,7 +2724,8 @@ static int vm_execute(VM *vm) {
             int H = w1->shape[w1->ndim - 1];
             int N = input->shape[0];
             int K = w1->shape[0];
-            int B = (N <= 64) ? N : 64;
+            int user_bs = ins->int_params[2];
+            int B = (user_bs > 0 && user_bs < N) ? user_bs : (N <= 64 ? N : 64);
             int nbatch = (N + B - 1) / B;
 
             size_t bh = (size_t)B * H, kh = (size_t)K * H;
