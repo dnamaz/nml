@@ -368,7 +368,7 @@ export default function NMLPipeline() {
     // Ollama think models need the model name; detect by port
     const isOllama = THINK_PORT === "11434" || THINK_PORT === 11434;
     const model = isOllama ? "qwen3.5:4b" : undefined;  // base model — trained nml-think GGUF has tokenizer issues
-    const raw = await callModel(THINK_BASE, THINK_SYSTEM, p, setThinkRaw, setThinkLoading, setThinkError, 700, model);
+    const raw = await callModel(THINK_BASE, THINK_SYSTEM, p, setThinkRaw, setThinkLoading, setThinkError, 1500, model);
     if (raw) {
       // Ollama returns {content, reasoning} — extract reasoning if content is empty
       try {
