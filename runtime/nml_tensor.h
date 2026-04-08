@@ -40,7 +40,7 @@ extern "C" {
   #define NML_MAX_INSTRUCTIONS 8192
 #endif
 #ifndef NML_MAX_MEMORY_SLOTS
-  #define NML_MAX_MEMORY_SLOTS 64
+  #define NML_MAX_MEMORY_SLOTS 256
 #endif
 #ifndef NML_MAX_LOOP_DEPTH
   #define NML_MAX_LOOP_DEPTH   8

@@ -3453,9 +3453,27 @@ static int vm_execute(VM *vm) {
             Tensor *bias2  = &REG(4);
             Tensor *target = &REG(9);
 
+            /* Validate registers are loaded */
+            if (!RVALID(0))  VM_ERROR(vm, NML_ERR_OPCODE, "TNET: R0 (input) not loaded — use LD R0 @data first");
+            if (!RVALID(1))  VM_ERROR(vm, NML_ERR_OPCODE, "TNET: R1 (w1) not loaded — use LD R1 @w1 first");
+            if (!RVALID(2))  VM_ERROR(vm, NML_ERR_OPCODE, "TNET: R2 (b1) not loaded — use LD R2 @b1 first");
+            if (!RVALID(3))  VM_ERROR(vm, NML_ERR_OPCODE, "TNET: R3 (w2) not loaded — use LD R3 @w2 first");
+            if (!RVALID(4))  VM_ERROR(vm, NML_ERR_OPCODE, "TNET: R4 (b2) not loaded — use LD R4 @b2 first");
+            if (!RVALID(9))  VM_ERROR(vm, NML_ERR_OPCODE, "TNET: R9 (target) not loaded — use LD R9 @target first");
+
             int H = w1->shape[w1->ndim - 1];
             int N = input->shape[0];
             int K = w1->shape[0];
+
+            /* Validate shapes for 2-layer topology */
+            if (input->ndim < 1 || input->size < 1)
+                VM_ERROR(vm, NML_ERR_SHAPE, "TNET: R0 (input) is empty — expected shape (N,K)");
+            if (w1->ndim < 2 || H < 1 || K < 1)
+                VM_ERROR(vm, NML_ERR_SHAPE, "TNET: R1 (w1) expected shape (K,H), got %dD with size %d", w1->ndim, w1->size);
+            if (w2->ndim < 1 || w2->shape[0] != H)
+                VM_ERROR(vm, NML_ERR_SHAPE, "TNET: R3 (w2) expected shape (H,1) where H=%d, got shape[0]=%d — w2 must be a column vector matching w1's hidden size", H, w2->shape[0]);
+            if (target->shape[0] != N)
+                VM_ERROR(vm, NML_ERR_SHAPE, "TNET: R9 (target) expected %d rows to match input, got %d", N, target->shape[0]);
             int user_bs = ins->int_params[2];
             int B = (user_bs > 0 && user_bs < N) ? user_bs : (N <= 64 ? N : 64);
             int nbatch = (N + B - 1) / B;

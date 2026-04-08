@@ -2,62 +2,97 @@ import { useState, useRef, useEffect } from "react";
 import promptsData from "./pipeline_prompts.json";
 
 // ── Server config ─────────────────────────────────────────────────────────────
-// Both think and code use the same model via nml_server proxy on port 8082
+// Server ports: think model (4B Q6) and code model (1.5B Q4) run separately.
+// nml_server on SERVER_PORT proxies /v1/chat/completions to the code model
+// and provides /generate_validated for the full validation pipeline.
 function _getPort() {
   try { return new URLSearchParams(window.location.search).get("port") || "8082"; }
   catch { return "8082"; }
 }
-const API_BASE    = `http://localhost:${_getPort()}/v1`;
-const THINK_BASE  = API_BASE;
+function _getThinkPort() {
+  try { return new URLSearchParams(window.location.search).get("think") || "8084"; }
+  catch { return "8084"; }
+}
+const SERVER_PORT = _getPort();
+const API_BASE    = `http://localhost:${SERVER_PORT}/v1`;
+// Think model: use dedicated port if available, fallback to server proxy
+const THINK_PORT  = _getThinkPort();
+const THINK_BASE  = `http://localhost:${THINK_PORT}/v1`;
 const CODE_BASE   = API_BASE;
+
+// Auto-detect: if think port is same as server port, use server for both
+const THINK_ENDPOINT = THINK_PORT === SERVER_PORT ? API_BASE : THINK_BASE;
 
 const THINK_SYSTEM = `You are an NML v0.10.0 (Neural Machine Language) architecture planner.
 NML is an 89-opcode tensor register machine with 32 registers (R0-RV).
-Analyze the user's request and produce a concrete implementation plan that a code generator will follow exactly.
+Translate the user's request into the SIMPLEST possible NML program. Do not add features, layers, or complexity beyond what was asked.
+
+CRITICAL: Match complexity to the request.
+- "add two tensors" → 3-4 instructions (LD, MADD, ST, HALT)
+- "dot product and scale" → 4-5 instructions (LD, SDOT, SCLR, ST, HALT)
+- "train a network" → use TNET (only when training is explicitly requested)
+Do NOT use TNET, TNDEEP, or training opcodes unless the user specifically asks to train.
 
 Your plan MUST include:
 
-1. TENSOR NAMES — every named tensor the program needs, with shape and purpose.
-   Example: @input shape=1,4, @w1 shape=4,8, @b1 shape=1,8, @w2 shape=8,3, @b2 shape=1,3
+1. TENSOR NAMES — named tensors with shape and purpose.
+   Example: @input shape=1,4, @weights shape=4,1
 
-2. REGISTER LAYOUT — which register holds which tensor.
-   Example: R0=input, R1=w1, R2=b1, R3=w2, R4=b2, R5=hidden, R6=logits, R7=output
+2. REGISTER LAYOUT — which register holds what.
+   Example: R0=input, R1=weights, R2=result
 
-3. INSTRUCTION SEQUENCE — the exact opcodes in order, one per line, with register operands.
+3. INSTRUCTION SEQUENCE — exact opcodes in order.
    Example:
    LD    R0 @input
-   LD    R1 @w1
-   LD    R2 @b1
-   MMUL  R5 R0 R1
-   MADD  R5 R5 R2
-   RELU  R5 R5
-   SOFT  R6 R5
-   ST    R6 @output
+   LD    R1 @weights
+   SDOT  R2 R0 R1
+   ST    R2 @result
    HALT
 
+Opcode quick reference:
+  LD/ST: memory load/store with @name
+  MADD/MSUB/EMUL/EDIV: element-wise arithmetic (3 registers)
+  SADD/SSUB/SDIV/SCLR: scalar operations (Rd Rs #imm)
+  MMUL: matrix multiply [M,K]×[K,N] (3 registers, never immediates)
+  SDOT: dot product (3 registers)
+  RELU/SIGM/TANH/GELU/SOFT: activations (2 registers)
+  CLMP: clamp (Rd Rs #min #max)
+  TNET: training (Rconfig #epochs) — R0=data, R1=config[n_layers,3], R9=labels
+  LOSS: loss function (Rd Rpred Rlabel #type)
+  BKWD: backward pass | WUPD: weight update (Rw Rgrad Rlr)
+  CONV/POOL/ATTN/NORM/EMBD: vision/transformer ops
+  HALT: must be last instruction
+
 Rules:
-- MMUL takes 3 registers: MMUL Rdest Rs1 Rs2  (never immediates)
-- MADD takes 3 registers: MADD Rdest Rs1 Rs2
-- SOFT takes 2 registers: SOFT Rdest Rs
-- RELU takes 2 registers: RELU Rdest Rs
-- LD takes a register and a named tensor: LD R0 @name
-- ST takes a register and a named tensor: ST R0 @name
+- MMUL, MADD, MSUB take 3 registers — never immediates
 - Always end with HALT
-- Never use immediates (#value) as operands to MMUL, MADD, RELU, SOFT
-- TNET runs end-to-end mini-batch SGD: TNET #epochs #lr #loss_type #batch_size
-  Where loss_type=0 (MSE) and batch_size=0 means full-batch. Example: TNET #100 #0.0100 #0 #32
-  Register layout for TNET: R0=training_data(N×K), R1=w1(K×H), R2=b1(1×H), R3=w2(H×1), R4=b2(1×1), R9=training_labels(N×1)
-  TNET writes updated weights to R1-R4 and final loss to R8; no manual BKWD/WUPD needed
-  For inference after training: LD @new_input → MMUL → MADD → RELU → MMUL → MADD → ST @output
-- BN Rd Rs [Rgamma [Rbeta]] — batch normalization (2D or 4D tensors). Normalizes activations.
-  Example: BN R5 R5 R6 R7  (normalize R5 with learned gamma=R6, beta=R7)
-- DROP Rd Rs #rate — inverted dropout with given rate. Use #0.0 at inference to disable.
-  Example: DROP R5 R5 #0.2  (20% dropout during training)
-- SADD Rd Rs Rs2|#imm — scalar add. SSUB Rd Rs Rs2|#imm — scalar subtract.
+- Keep it minimal. Fewer instructions = better.`;
 
-Be specific. The code generator cannot infer missing details.`;
+const CODE_SYSTEM = `You are an NML (Neural Machine Language) assembler. Output only valid NML assembly code. Do not include explanations, markdown, or commentary.
 
-const CODE_SYSTEM = `You are an NML (Neural Machine Language) assembler. Output only valid NML assembly code. Do not include explanations, markdown, or commentary.`;
+NML opcode reference (Rd=dest, Rs=source, #imm=immediate):
+Memory:    LD Rd @name | ST Rs @name | ALLC Rd #shape | MOV Rd Rs
+Arithmetic: MADD Rd Rs1 Rs2 | MSUB Rd Rs1 Rs2 | EMUL Rd Rs1 Rs2 | EDIV Rd Rs1 Rs2
+            SADD Rd Rs #imm | SSUB Rd Rs #imm | SDIV Rd Rs #imm | SCLR Rd Rs #imm
+Matrix:    MMUL Rd Rs1 Rs2 | SDOT Rd Rs1 Rs2 | TRNS Rd Rs | RSHP Rd Rs #shape
+Activation: RELU Rd Rs | SIGM Rd Rs | TANH Rd Rs | GELU Rd Rs | SOFT Rd Rs
+Vision:    CONV Rd Rs Rkernel #stride #pad | POOL Rd Rs #size #stride | UPSC Rd Rs #factor | PADZ Rd Rs #amount
+Transformer: ATTN Rd Rq Rk Rv | NORM Rd Rs Rgamma Rbeta | EMBD Rd Rtable Rindex
+Reduction: RDUC Rd Rs #dim #mode | CLMP Rd Rs #min #max | WHER Rd Rcond Rs1 Rs2 | CMPR Rd Rs #op #thresh
+Training:  TNET Rconfig #epochs | LOSS Rd Rpred Rlabel #type | BKWD Rgrad Ract Rloss
+           WUPD Rw Rgrad Rlr | BN Rd Rs Rgamma Rbeta | DROP Rd Rs #rate | WDECAY Rd #lambda
+Backward:  RELUBK/SIGMBK/TANHBK/GELUBK/SOFTBK Rd Rgrad Rin (3 ops)
+           MMULBK Rd_di Rd_dw Rgrad Rin Rw | CONVBK Rd_di Rd_dk Rgrad Rin Rk (5 ops)
+Control:   HALT | JUMP #off | JMPT #off | JMPF #off | LOOP Rs|#n | ENDP | CALL #off | RET
+General:   SYS Rd #code | FILL Rd #rows #cols #val | CMP Rs1 Rs2 | CMPI Rd Rs #imm
+Signal:    FFT Rd Rs Rtwiddle | FILT Rd Rs Rkernel
+Tree:      LEAF Rd #val | CMPF Rd Rs #feat #thresh
+
+Rules:
+- MMUL needs compatible shapes: [M,K] × [K,N] → [M,N]
+- TNET register layout: R0=data, R1=config[n_layers,3], R9=labels. Config rows=[in,out,activation(0=relu)]
+- Always end with HALT
+- Use @named tensors with LD/ST for data file slots`;
 
 // ── NML opcode highlighting ───────────────────────────────────────────────────
 const NML_OPCODES = new Set([
@@ -269,6 +304,8 @@ export default function NMLPipeline() {
   const [dataInput, setDataInput]         = useState("");
   const [showData, setShowData]           = useState(false);
   const [showDataHelp, setShowDataHelp]   = useState(false);
+  const [validStatus, setValidStatus]     = useState(null);  // null | {valid, attempts, stage, errors, history}
+  const [validLoading, setValidLoading]   = useState(false);
 
   const textareaRef = useRef(null);
 
@@ -292,28 +329,33 @@ export default function NMLPipeline() {
 @w2               shape=4,1  dtype=f32  data=0.2,-0.1,0.3,-0.2
 @b2               shape=1,1  dtype=f32  data=0.0`;
 
-  const callModel = async (base, system, userMsg, setOut, setLoading, setError, maxTokens = 800) => {
+  const callModel = async (base, system, userMsg, setOut, setLoading, setError, maxTokens = 800, model = undefined) => {
     setLoading(true);
     setError("");
     setOut("");
     try {
+      const payload = {
+        messages: [
+          { role: "system", content: system },
+          { role: "user",   content: userMsg },
+        ],
+        max_tokens: maxTokens,
+        stream: false,
+      };
+      if (model) payload.model = model;
+
       const r = await fetch(`${base}/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [
-            { role: "system", content: system },
-            { role: "user",   content: userMsg },
-          ],
-          max_tokens: maxTokens,
-          stream: false,
-        }),
+        body: JSON.stringify(payload),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
-      const text = data.choices?.[0]?.message?.content || "";
+      const msg = data.choices?.[0]?.message || {};
+      // Ollama think models put reasoning in a separate field
+      const text = msg.content || msg.reasoning || "";
       setOut(text);
-      return text;
+      return JSON.stringify(msg);  // return full message for reasoning extraction
     } catch (e) {
       setError(`Error: ${e.message}`);
       return null;
@@ -323,8 +365,20 @@ export default function NMLPipeline() {
   };
 
   const runThink = async (p) => {
-    const raw = await callModel(THINK_BASE, THINK_SYSTEM, p, setThinkRaw, setThinkLoading, setThinkError, 700);
-    if (raw) setThinkOut(extractThinkContent(raw));
+    // Ollama think models need the model name; detect by port
+    const isOllama = THINK_PORT === "11434" || THINK_PORT === 11434;
+    const model = isOllama ? "qwen3.5:4b" : undefined;  // base model — trained nml-think GGUF has tokenizer issues
+    const raw = await callModel(THINK_BASE, THINK_SYSTEM, p, setThinkRaw, setThinkLoading, setThinkError, 700, model);
+    if (raw) {
+      // Ollama returns {content, reasoning} — extract reasoning if content is empty
+      try {
+        const msg = JSON.parse(raw);
+        const reasoning = msg.reasoning || msg.content || raw;
+        setThinkOut(extractThinkContent(reasoning));
+      } catch {
+        setThinkOut(extractThinkContent(raw));
+      }
+    }
     return raw;
   };
 
@@ -337,7 +391,7 @@ export default function NMLPipeline() {
     setExecError("");
     setExecOut("");
     try {
-      const r = await fetch(`http://localhost:${_getPort()}/execute`, {
+      const r = await fetch(`http://localhost:${SERVER_PORT}/execute`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ nml_program: code, data: dataInput }),
@@ -354,24 +408,58 @@ export default function NMLPipeline() {
     }
   };
 
+
+  const runValidated = async (codePrompt) => {
+    setValidLoading(true);
+    setValidStatus(null);
+    try {
+      const r = await fetch(`http://localhost:${SERVER_PORT}/generate_validated`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: codePrompt,
+          max_retries: 3,
+          max_tokens: 600,
+        }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const result = await r.json();
+      setValidStatus(result);
+      if (result.code) setCodeOut(result.code);
+      if (!result.valid && result.grammar_errors?.length)
+        setCodeError(`Validation failed: ${result.grammar_errors[0]}`);
+      if (!result.valid && result.runtime_errors?.length)
+        setCodeError(`Runtime error: ${result.runtime_errors[0]}`);
+      return result;
+    } catch (e) {
+      setCodeError(`Validation error: ${e.message}`);
+      return null;
+    } finally {
+      setValidLoading(false);
+    }
+  };
+
   const runPipeline = async () => {
     if (!prompt.trim()) return;
     setCodeOut("");
     setCodeError("");
     setExecOut(null);
+    setValidStatus(null);
 
     const raw = await runThink(prompt);
     if (!raw) return;
 
     const reasoning = extractThinkContent(raw);
-    const codePrompt = `Generate NML assembly for: ${prompt}\n\nPlan:\n${reasoning.slice(0, 1000)}`;
-    await runCode(codePrompt);
+    const codePrompt = `Generate NML assembly for: ${prompt}\n\nFollow this plan exactly — do not add extra operations:\n${reasoning.slice(0, 1000)}`;
+
+    // Use validated generation — generates, validates, retries automatically
+    await runValidated(codePrompt);
   };
 
   const sendToCode = async () => {
     if (!thinkOut) return;
-    const codePrompt = `Generate NML assembly for: ${prompt}\n\nPlan:\n${thinkOut.slice(0, 1000)}`;
-    await runCode(codePrompt);
+    const codePrompt = `Generate NML assembly for: ${prompt}\n\nFollow this plan exactly — do not add extra operations:\n${thinkOut.slice(0, 1000)}`;
+    await runValidated(codePrompt);
   };
 
   const handleKeyDown = (e) => {
@@ -498,7 +586,7 @@ export default function NMLPipeline() {
               {showData ? "Hide Data" : "Data ▾"}
             </button>
             <button
-              onClick={() => { setThinkOut(""); setThinkRaw(""); setCodeOut(""); setThinkError(""); setCodeError(""); setExecOut(null); setExecError(""); }}
+              onClick={() => { setThinkOut(""); setThinkRaw(""); setCodeOut(""); setThinkError(""); setCodeError(""); setExecOut(null); setExecError(""); setValidStatus(null); }}
               style={{ ...btnStyle("#21262d", false), color: "#8b949e", marginLeft: "auto" }}>
               Clear
             </button>
@@ -543,7 +631,7 @@ export default function NMLPipeline() {
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           {/* Think + Code panels */}
           <div style={{ flex: 1, display: "flex", gap: 12, padding: "12px 16px 6px", overflow: "hidden" }}>
-            <Panel title="Think Model" subtitle="nml-1.5b-instruct-v0.10.0 · Reasoning"
+            <Panel title="Think Model" subtitle="nml-4b-think Q6 · Architecture Planning"
               color="think" content={showThinkRaw ? thinkRaw : thinkOut}
               isCode={false} loading={thinkLoading} error={thinkError}>
               {thinkOut && (
@@ -553,10 +641,29 @@ export default function NMLPipeline() {
               )}
             </Panel>
 
-            <Panel title="Code Model" subtitle="nml-1.5b-instruct-v0.10.0 · NML Assembly"
+            <Panel title="Code Model"
+              subtitle={
+                validStatus
+                  ? `nml-1.5b · ${validStatus.valid ? "Validated" : "Failed"} · ${validStatus.attempts} attempt${validStatus.attempts > 1 ? "s" : ""}`
+                  : validLoading
+                  ? "nml-1.5b · Validating..."
+                  : "nml-1.5b-instruct-v0.10.0 · NML Assembly"
+              }
               color="code" content={codeOut}
-              isCode={true} loading={codeLoading} error={codeError}>
-              <div style={{ display: "flex", gap: 6 }}>
+              isCode={true} loading={codeLoading || validLoading} error={codeError}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {/* Validation badge */}
+                {validStatus && (
+                  <span style={{
+                    fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4,
+                    background: validStatus.valid ? "#2ea04322" : "#f8514922",
+                    color: validStatus.valid ? "#3fb950" : "#f85149",
+                    border: `1px solid ${validStatus.valid ? "#2ea04366" : "#f8514966"}`,
+                  }}>
+                    {validStatus.valid ? "VALID" : "INVALID"}
+                    {validStatus.attempts > 1 && ` (retry ${validStatus.attempts - 1})`}
+                  </span>
+                )}
                 {codeOut && (
                   <button onClick={() => navigator.clipboard?.writeText(codeOut)} style={smallBtn(false)}>
                     Copy
@@ -565,7 +672,7 @@ export default function NMLPipeline() {
                 {codeOut && (
                   <button onClick={() => runExecute(codeOut)} disabled={execLoading}
                     style={{ ...smallBtn(false), color: execLoading ? "#8b949e" : "#b392f0", borderColor: "#6e40c9" }}>
-                    {execLoading ? "Running..." : "⚡ Execute"}
+                    {execLoading ? "Running..." : "Execute"}
                   </button>
                 )}
               </div>

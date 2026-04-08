@@ -633,12 +633,227 @@ def create_http_app(model_path: str = None):
 
         return _json({"strategy": strategy, "values": nums, "consensus": result})
 
+    async def handle_generate_validated(request):
+        """Generate NML with validation loop: generate → validate → retry.
+
+        POST /generate_validated
+        Body: {"prompt": "...", "max_retries": 3, "max_tokens": 512}
+
+        Uses the connected LLM backend (--model) for generation, the grammar
+        validator for syntax checking, and the C runtime for execution checking.
+        On validation failure, feeds errors + opcode schemas back to the LLM
+        for self-correction (up to max_retries attempts).
+        """
+        body = await request.json()
+        prompt = body.get("prompt", "")
+        max_retries = body.get("max_retries", 3)
+        max_tokens = body.get("max_tokens", 512)
+        data = body.get("data", "")
+
+        if not prompt:
+            return _json({"error": "prompt is required"}, 400)
+
+        # Build system prompt — include available data slots if provided
+        data_slots_hint = ""
+        if data.strip():
+            slots = re.findall(r'@(\w+)\s+shape=(\S+)', data)
+            if slots:
+                data_slots_hint = (
+                    "\nAvailable data slots (use LD Rn @name to load):\n"
+                    + "\n".join(f"  @{name} shape={shape}" for name, shape in slots))
+        else:
+            data_slots_hint = (
+                "\nNo data file provided. Use FILL to create tensors inline. "
+                "Example: FILL R0 #2 #3 #0.5 creates a 2x3 tensor filled with 0.5. "
+                "Do NOT use LD with @named slots unless data slots are listed above.")
+
+        system_msg = (
+            "You are an NML (Neural Machine Language) assembler. "
+            "Output only valid NML assembly code. "
+            "Do not include explanations, markdown, or commentary.\n\n"
+            "NML opcode reference (Rd=dest, Rs=source, #imm=immediate):\n"
+            "Memory:    LD Rd @name | ST Rs @name | ALLC Rd #shape | MOV Rd Rs\n"
+            "Arithmetic: MADD Rd Rs1 Rs2 | MSUB Rd Rs1 Rs2 | EMUL Rd Rs1 Rs2 | EDIV Rd Rs1 Rs2\n"
+            "            SADD Rd Rs #imm | SSUB Rd Rs #imm | SDIV Rd Rs #imm | SCLR Rd Rs #imm\n"
+            "Matrix:    MMUL Rd Rs1 Rs2 | SDOT Rd Rs1 Rs2 | TRNS Rd Rs | RSHP Rd Rs #shape\n"
+            "Activation: RELU Rd Rs | SIGM Rd Rs | TANH Rd Rs | GELU Rd Rs | SOFT Rd Rs\n"
+            "Vision:    CONV Rd Rs Rkernel #stride #pad | POOL Rd Rs #size #stride | UPSC Rd Rs #factor\n"
+            "Transformer: ATTN Rd Rq Rk Rv | NORM Rd Rs Rgamma Rbeta | EMBD Rd Rtable Rindex\n"
+            "Reduction: RDUC Rd Rs #dim #mode | CLMP Rd Rs #min #max | WHER Rd Rcond Rs1 Rs2\n"
+            "Training:  TNET Rconfig #epochs | LOSS Rd Rpred Rlabel #type | BKWD Rgrad Ract Rloss\n"
+            "           WUPD Rw Rgrad Rlr | BN Rd Rs Rgamma Rbeta | DROP Rd Rs #rate\n"
+            "Backward:  RELUBK/SIGMBK/TANHBK/GELUBK/SOFTBK Rd Rgrad Rin (3 ops)\n"
+            "           MMULBK Rd_di Rd_dw Rgrad Rin Rw | CONVBK Rd_di Rd_dk Rgrad Rin Rk (5 ops)\n"
+            "Control:   HALT | JUMP #off | JMPT #off | JMPF #off | LOOP Rs|#n | ENDP | CALL #off | RET\n"
+            "General:   SYS Rd #code | CMP Rs1 Rs2 | CMPI Rd Rs #imm\n"
+            "Rules: MMUL needs [M,K]×[K,N]. Always end with HALT."
+            + data_slots_hint
+        )
+
+        # Load opcode schemas for error correction
+        opcode_schemas = ""
+        try:
+            sys.path.insert(0, str(PROJECT_ROOT / "lsp" / "nml_lsp"))
+            from opcode_db import OPCODES
+            def _get_help(errors_text):
+                """Extract opcode names from errors and return schemas."""
+                ops = set()
+                for word in errors_text.split():
+                    # Strip punctuation and quotes
+                    cleaned = word.strip("'\",:;()[]")
+                    canonical = cleaned.replace("_", "").upper()
+                    if canonical in OPCODES:
+                        ops.add(canonical)
+                # Also scan for @slot errors — add memory/load hints
+                if "@" in errors_text and "not found" in errors_text:
+                    ops.update({"LD", "ST"})
+                if not ops:
+                    return ""
+                lines = ["\nCorrect operand signatures:"]
+                for op in sorted(ops):
+                    info = OPCODES[op]
+                    lines.append(f"  {op} {info.operand_schema} — {info.description[:60]}")
+                # If any backward op, show all backward ops
+                if any(op.endswith("BK") for op in ops):
+                    lines.append("\nAll backward ops:")
+                    for op in ["RELUBK","SIGMBK","TANHBK","GELUBK","SOFTBK",
+                               "MMULBK","CONVBK","POOLBK","NORMBK","ATTNBK"]:
+                        if op in OPCODES:
+                            info = OPCODES[op]
+                            lines.append(f"  {op} {info.operand_schema}")
+                # TNET/TNDEEP usage example
+                if "TNET" in ops or "TNDEEP" in ops or "n_layers" in errors_text:
+                    lines.append(
+                        "\nTNET usage (config-driven N-layer MLP):"
+                        "\n  R0 = training data [samples, features]"
+                        "\n  R9 = labels [samples, outputs]"
+                        "\n  R1 = arch config [n_layers, 3] where each row = [in_size, out_size, activation]"
+                        "\n       activation: 0=ReLU, 1=sigmoid, 2=tanh, 3=GELU, 4=linear"
+                        "\n  TNET R1 #epochs"
+                        "\n"
+                        "\nExample (2-layer: 2->4->1, 500 epochs):"
+                        "\n  FILL  R0 #4 #2 #0.0    ; training data placeholder [4,2]"
+                        "\n  FILL  R9 #4 #1 #0.0    ; labels placeholder [4,1]"
+                        "\n  CONST R1 #2 #3 0 2,4,0,4,1,0  ; config [2,3]: layer1=[2,4,relu] layer2=[4,1,relu]"
+                        "\n  TNET  R1 #500           ; train 500 epochs"
+                        "\n  HALT")
+                return "\n".join(lines)
+        except ImportError:
+            _get_help = lambda _: ""
+
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": prompt},
+        ]
+
+        attempts = []
+        for attempt in range(1, max_retries + 1):
+            # Generate via LLM backend
+            gen_text = ""
+            if llm_backend_url:
+                from aiohttp import ClientSession
+                try:
+                    async with ClientSession() as session:
+                        async with session.post(
+                            f"{llm_backend_url}/v1/chat/completions",
+                            json={"messages": messages, "max_tokens": max_tokens,
+                                  "temperature": 0.1, "stream": False},
+                        ) as resp:
+                            resp_data = await resp.json()
+                            gen_text = resp_data.get("choices", [{}])[0].get(
+                                "message", {}).get("content", "")
+                except Exception as e:
+                    attempts.append({"attempt": attempt, "error": str(e)})
+                    continue
+            elif model and tokenizer:
+                # Local model generation
+                prompt_text = tokenizer.apply_chat_template(
+                    messages, add_generation_prompt=True, tokenize=False)
+                gen_text = generate(model, tokenizer, prompt=prompt_text,
+                                    max_tokens=max_tokens, verbose=False)
+            else:
+                return _json({"error": "No model available"}, 503)
+
+            # Strip markdown/think blocks
+            code = re.sub(r'<think>.*?</think>', '', gen_text, flags=re.DOTALL)
+            code = re.sub(r'```[a-z]*\n?|```', '', code).strip()
+
+            # Validate grammar
+            vresult = validate_program(code)
+            if not vresult.get("valid", False):
+                errors_text = "; ".join(
+                    e.get("message", str(e)) for e in vresult.get("errors", []))
+                help_text = _get_help(errors_text)
+                attempts.append({
+                    "attempt": attempt, "stage": "grammar",
+                    "code": code, "errors": errors_text,
+                })
+                # Feed error back to LLM
+                messages.append({"role": "assistant", "content": gen_text})
+                messages.append({"role": "user", "content":
+                    f"Your NML code had errors. Fix them.\n\n"
+                    f"Previous code:\n{code}\n\n"
+                    f"Errors:\n{errors_text}\n{help_text}\n\n"
+                    f"Output only the corrected NML code."
+                })
+                continue
+
+            # Runtime execution — only when data is provided
+            if data.strip():
+                exec_result = execute_program(code, data=data)
+                if exec_result.get("status") not in ("ok", "HALTED"):
+                    runtime_err = (exec_result.get("stderr")
+                                   or exec_result.get("error")
+                                   or exec_result.get("message")
+                                   or "unknown runtime error")
+                    help_text = _get_help(runtime_err)
+                    attempts.append({
+                        "attempt": attempt, "stage": "runtime",
+                        "code": code, "errors": runtime_err,
+                    })
+                    messages.append({"role": "assistant", "content": gen_text})
+                    data_slots = re.findall(r'@(\w+)', data)
+                    data_hint = ""
+                    if data_slots and ("not found" in runtime_err or "@" in runtime_err):
+                        data_hint = f"\nAvailable data slots: {', '.join('@' + s for s in data_slots)}"
+                    messages.append({"role": "user", "content":
+                        f"Your NML code had a runtime error. Fix it.\n\n"
+                        f"Previous code:\n{code}\n\n"
+                        f"Error:\n{runtime_err}\n{help_text}{data_hint}\n\n"
+                        f"Output only the corrected NML code."
+                    })
+                    continue
+
+            # Success
+            return _json({
+                "valid": True,
+                "code": code,
+                "attempts": attempt,
+                "stage": "complete",
+                "grammar_errors": [],
+                "runtime_errors": [],
+                "history": attempts,
+            })
+
+        # All retries exhausted
+        last = attempts[-1] if attempts else {}
+        return _json({
+            "valid": False,
+            "code": last.get("code", ""),
+            "attempts": max_retries,
+            "stage": last.get("stage", "exhausted"),
+            "grammar_errors": [last.get("errors", "")] if last.get("stage") == "grammar" else [],
+            "runtime_errors": [last.get("errors", "")] if last.get("stage") == "runtime" else [],
+            "history": attempts,
+        })
+
     app = web.Application()
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_post("/v1/chat/completions", handle_chat)
     app.router.add_post("/validate", handle_validate)
     app.router.add_post("/execute", handle_execute)
+    app.router.add_post("/generate_validated", handle_generate_validated)
     app.router.add_post("/format", handle_format)
     app.router.add_post("/spec", handle_spec)
     app.router.add_post("/agent/register", handle_agent_register)

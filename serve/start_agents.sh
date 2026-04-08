@@ -76,7 +76,7 @@ fi
 echo ""
 echo "  Starting NML agent services..."
 
-# Code model server (v09)
+# Code model server (MLX, context includes opcode reference from nml_server.py)
 echo "  Code Server  on :$PORT_SERVER (model: $MODEL)"
 python3 "$PROJECT_ROOT/serve/nml_server.py" --http --port "$PORT_SERVER" \
     --model "$MODEL_PATH" \
