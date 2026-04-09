@@ -1,0 +1,533 @@
+{
+  "version": "1.0.0",
+  "description": "ML Algorithm Knowledge Base for the NML Advisor. Maps problem types to algorithms, NML implementation patterns, ML Journey lesson references, and decision heuristics.",
+
+  "problem_types": [
+    {
+      "id": "binary_classification",
+      "name": "Binary Classification",
+      "description": "Predict one of two categories (yes/no, spam/ham, churn/stay, fraud/legit).",
+      "signals": ["two classes", "yes or no", "binary", "spam", "fraud", "churn", "positive or negative", "true or false", "detect", "classify"],
+      "algorithms": [
+        {
+          "name": "Logistic Regression",
+          "when": "Small dataset (<10k rows), linearly separable features, need interpretability, baseline model.",
+          "nml_pattern": "MMUL + MADD + SIGM → probability. Threshold at 0.5.",
+          "nml_opcodes": ["MMUL", "MADD", "SIGM", "ST"],
+          "lesson_ref": "Lesson 06 — Classification Basics",
+          "sample": "lesson_06_binary_classifier.nml",
+          "complexity": "simple"
+        },
+        {
+          "name": "2-Layer MLP",
+          "when": "Medium dataset (1k–100k), non-linear relationships, feature interactions matter.",
+          "nml_pattern": "MMUL + MADD + RELU (hidden) → MMUL + MADD + SIGM (output). Train with TNET or manual BKWD+WUPD.",
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "SIGM", "TNET", "LOSS"],
+          "lesson_ref": "Lesson 06 — Classification Basics, Lesson 13 — Neural Networks",
+          "sample": "lesson_06_multilayer_classifier.nml",
+          "complexity": "moderate"
+        },
+        {
+          "name": "MLP with BN + Dropout",
+          "when": "Small-to-medium dataset where overfitting is a risk, need regularization.",
+          "nml_pattern": "MMUL + MADD + BN + RELU + DROP per hidden layer → SIGM output.",
+          "nml_opcodes": ["MMUL", "MADD", "BN", "RELU", "DROP", "SIGM", "TNET"],
+          "lesson_ref": "Lesson 10 — Regularization, Lesson 13 — Neural Networks",
+          "sample": "lesson_10_regularized.nml",
+          "complexity": "moderate"
+        },
+        {
+          "name": "SVM (Linear)",
+          "when": "High-dimensional sparse features (text), clean decision boundary, <50k samples.",
+          "nml_pattern": "MMUL + MADD → decision value. Positive = class 1, negative = class 0.",
+          "nml_opcodes": ["MMUL", "MADD", "CLMP", "ST"],
+          "lesson_ref": "Lesson 07 — Support Vector Machines",
+          "sample": "lesson_07_svm_linear.nml",
+          "complexity": "simple"
+        },
+        {
+          "name": "Decision Tree",
+          "when": "Need full interpretability (explain every decision), categorical features, regulatory requirements.",
+          "nml_pattern": "CMPF + JMPT/JMPF branching → LEAF terminal values.",
+          "nml_opcodes": ["CMPF", "JMPT", "JMPF", "LEAF"],
+          "lesson_ref": "Lesson 11 — Decision Trees & Random Forests",
+          "sample": "lesson_11_decision_tree.nml",
+          "complexity": "simple"
+        },
+        {
+          "name": "Naive Bayes",
+          "when": "Text classification, very fast training needed, features are roughly independent.",
+          "nml_pattern": "Log-probability accumulation: EMUL + SADD + SOFT.",
+          "nml_opcodes": ["EMUL", "SADD", "SOFT", "ST"],
+          "lesson_ref": "Lesson 08 — Naive Bayes",
+          "sample": "lesson_08_spam_classifier.nml",
+          "complexity": "simple"
+        }
+      ]
+    },
+    {
+      "id": "multiclass_classification",
+      "name": "Multi-Class Classification",
+      "description": "Predict one of 3+ categories (species, product type, sentiment level, digit recognition).",
+      "signals": ["multiple classes", "multi-class", "categories", "which type", "classify into", "sentiment", "species", "digit"],
+      "algorithms": [
+        {
+          "name": "Softmax Classifier",
+          "when": "Baseline multi-class, linearly separable features.",
+          "nml_pattern": "MMUL + MADD + SOFT → K probabilities summing to 1.0.",
+          "nml_opcodes": ["MMUL", "MADD", "SOFT", "ST"],
+          "lesson_ref": "Lesson 06 — Classification Basics",
+          "sample": "lesson_06_multiclass.nml",
+          "complexity": "simple"
+        },
+        {
+          "name": "Multi-Layer MLP + Softmax",
+          "when": "Non-linear class boundaries, medium dataset, need class probabilities.",
+          "nml_pattern": "MMUL + MADD + RELU (hidden layers) → MMUL + MADD + SOFT (output). Use LOSS #2 (cross-entropy).",
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "SOFT", "TNET", "LOSS"],
+          "lesson_ref": "Lesson 06, Lesson 13 — Neural Networks",
+          "sample": "lesson_06_multiclass.nml",
+          "complexity": "moderate"
+        },
+        {
+          "name": "CNN Image Classifier",
+          "when": "Image input, spatial features matter, pattern recognition.",
+          "nml_pattern": "CONV + POOL + RELU → flatten → MMUL + SOFT.",
+          "nml_opcodes": ["CONV", "POOL", "RELU", "RSHP", "MMUL", "SOFT"],
+          "lesson_ref": "Lesson 14 — CNNs & Computer Vision",
+          "sample": "lesson_14_edge_detector.nml",
+          "complexity": "complex"
+        }
+      ]
+    },
+    {
+      "id": "regression",
+      "name": "Regression",
+      "description": "Predict a continuous numeric value (price, temperature, score, quantity).",
+      "signals": ["predict a number", "how much", "price", "value", "forecast", "estimate", "continuous", "regression"],
+      "algorithms": [
+        {
+          "name": "Linear Regression",
+          "when": "Simple relationships, few features, need interpretability, baseline.",
+          "nml_pattern": "MMUL + MADD → predicted value. Loss: LOSS #0 (MSE).",
+          "nml_opcodes": ["MMUL", "MADD", "ST", "LOSS"],
+          "lesson_ref": "Lesson 05 — Your First ML Model",
+          "sample": "lesson_05_linear_regression.nml",
+          "complexity": "simple"
+        },
+        {
+          "name": "Multiple Regression",
+          "when": "Multiple input features, linear relationships.",
+          "nml_pattern": "MMUL (features × weights) + MADD (bias) → prediction.",
+          "nml_opcodes": ["MMUL", "MADD", "ST"],
+          "lesson_ref": "Lesson 05 — Your First ML Model",
+          "sample": "lesson_05_multiple_regression.nml",
+          "complexity": "simple"
+        },
+        {
+          "name": "Neural Network Regression",
+          "when": "Non-linear relationships, feature interactions, medium-to-large dataset.",
+          "nml_pattern": "MMUL + MADD + RELU (hidden) → MMUL + MADD (linear output). Train with TNET, LOSS #0 (MSE).",
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "TNET", "LOSS"],
+          "lesson_ref": "Lesson 13 — Neural Networks",
+          "sample": "lesson_13_self_train.nml",
+          "complexity": "moderate"
+        },
+        {
+          "name": "Decision Tree Regression",
+          "when": "Non-linear, need interpretability, categorical features, price brackets.",
+          "nml_pattern": "CMPF + JMPT/JMPF branching → LEAF terminal values.",
+          "nml_opcodes": ["CMPF", "JMPT", "JMPF", "LEAF"],
+          "lesson_ref": "Lesson 11 — Decision Trees",
+          "sample": "lesson_11_decision_tree.nml",
+          "complexity": "simple"
+        },
+        {
+          "name": "Gradient Boosted Ensemble",
+          "when": "Tabular data, need best accuracy, willing to trade interpretability.",
+          "nml_pattern": "Multiple CMPF/LEAF trees → weighted MADD combination → VOTE consensus.",
+          "nml_opcodes": ["CMPF", "LEAF", "JMPT", "JMPF", "SCLR", "MADD", "VOTE"],
+          "lesson_ref": "Lesson 12 — Gradient Boosting",
+          "sample": "lesson_12_boosted_ensemble.nml",
+          "complexity": "complex"
+        }
+      ]
+    },
+    {
+      "id": "clustering",
+      "name": "Clustering",
+      "description": "Group similar items without labels. Customer segments, document topics, anomaly groups.",
+      "signals": ["group", "cluster", "segment", "similar", "unsupervised", "no labels", "natural groups", "patterns"],
+      "algorithms": [
+        {
+          "name": "K-Means Distance",
+          "when": "Known number of clusters, numeric features, roughly spherical clusters.",
+          "nml_pattern": "MSUB (point - centroid) → EMUL (square) → MMUL with ones (sum) → compare distances.",
+          "nml_opcodes": ["MSUB", "EMUL", "MMUL", "ST"],
+          "lesson_ref": "Lesson 03 — Unsupervised Learning Deep Dive",
+          "sample": "lesson_03_kmeans.nml",
+          "complexity": "simple"
+        }
+      ]
+    },
+    {
+      "id": "anomaly_detection",
+      "name": "Anomaly Detection",
+      "description": "Find outliers, unusual patterns, defects, fraud. Often unsupervised or semi-supervised.",
+      "signals": ["anomaly", "outlier", "unusual", "defect", "fraud detection", "abnormal", "rare event", "novelty"],
+      "algorithms": [
+        {
+          "name": "Autoencoder",
+          "when": "High-dimensional data, learn normal patterns, reconstruction error = anomaly score.",
+          "nml_pattern": "Encoder: MMUL + MADD + RELU → bottleneck. Decoder: MMUL + MADD + SIGM → reconstruction. Error: MSUB + EMUL + sum.",
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "SIGM", "MSUB", "EMUL"],
+          "lesson_ref": "Lesson 03 — Unsupervised Learning, Lesson 13 — Neural Networks",
+          "sample": "lesson_03_autoencoder.nml",
+          "complexity": "moderate"
+        },
+        {
+          "name": "Threshold Classifier",
+          "when": "Single score/feature, simple rule-based detection, sensor threshold.",
+          "nml_pattern": "CMPR (score > threshold) → WHER (flag anomalies).",
+          "nml_opcodes": ["CMPR", "WHER", "CLMP", "ST"],
+          "lesson_ref": "Lesson 13 — Neural Networks",
+          "sample": "lesson_13_anomaly_detector.nml",
+          "complexity": "simple"
+        },
+        {
+          "name": "Neural Network Anomaly Detector",
+          "when": "Complex feature interactions, labeled normal/anomaly data available.",
+          "nml_pattern": "Multi-layer: MMUL + MADD + RELU → SIGM output. Score > 0.5 = anomaly.",
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "SIGM", "TNET"],
+          "lesson_ref": "Lesson 13 — Neural Networks",
+          "sample": "lesson_13_anomaly_detector.nml",
+          "complexity": "moderate"
+        }
+      ]
+    },
+    {
+      "id": "dimensionality_reduction",
+      "name": "Dimensionality Reduction",
+      "description": "Compress high-dimensional data to fewer dimensions for visualization or preprocessing.",
+      "signals": ["reduce dimensions", "compress", "visualization", "too many features", "feature extraction", "bottleneck", "embedding"],
+      "algorithms": [
+        {
+          "name": "Autoencoder Compression",
+          "when": "Non-linear compression, learn meaningful low-dimensional representation.",
+          "nml_pattern": "Encoder: MMUL + MADD + RELU → bottleneck (low-dim). ST bottleneck as embedding.",
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "ST"],
+          "lesson_ref": "Lesson 03 — Unsupervised Learning Deep Dive",
+          "sample": "lesson_03_autoencoder.nml",
+          "complexity": "moderate"
+        },
+        {
+          "name": "Linear Projection",
+          "when": "Simple linear compression, known projection matrix (PCA-like).",
+          "nml_pattern": "MMUL input × projection_matrix → low-dim output.",
+          "nml_opcodes": ["MMUL", "ST"],
+          "lesson_ref": "Lesson 03 — Unsupervised Learning",
+          "sample": null,
+          "complexity": "simple"
+        }
+      ]
+    },
+    {
+      "id": "ensemble",
+      "name": "Ensemble Methods",
+      "description": "Combine multiple models for better accuracy and robustness.",
+      "signals": ["ensemble", "combine models", "voting", "bagging", "boosting", "random forest", "multiple models"],
+      "algorithms": [
+        {
+          "name": "Voting Ensemble",
+          "when": "Multiple diverse models available, want robustness, reduce variance.",
+          "nml_pattern": "Run N models independently → collect predictions → VOTE (median/mean).",
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "SIGM", "VOTE"],
+          "lesson_ref": "Lesson 11 — Decision Trees & Random Forests",
+          "sample": "lesson_11_ensemble.nml",
+          "complexity": "moderate"
+        },
+        {
+          "name": "Gradient Boosting",
+          "when": "Tabular data, need state-of-the-art accuracy, sequential correction of errors.",
+          "nml_pattern": "Tree1 → residual → Tree2 → residual → Tree3 → weighted sum.",
+          "nml_opcodes": ["CMPF", "LEAF", "JMPT", "JMPF", "SCLR", "MADD"],
+          "lesson_ref": "Lesson 12 — Gradient Boosting",
+          "sample": "lesson_12_boosted_ensemble.nml",
+          "complexity": "complex"
+        }
+      ]
+    },
+    {
+      "id": "computer_vision",
+      "name": "Computer Vision",
+      "description": "Process images: classification, object detection, edge detection, segmentation.",
+      "signals": ["image", "photo", "picture", "visual", "camera", "pixel", "convolution", "edge", "object detection", "segmentation"],
+      "algorithms": [
+        {
+          "name": "CNN Pipeline",
+          "when": "Image classification, feature extraction from 2D data.",
+          "nml_pattern": "PADZ → CONV + POOL + RELU (feature extraction) → RSHP (flatten) → MMUL + SOFT (classify).",
+          "nml_opcodes": ["PADZ", "CONV", "POOL", "RELU", "RSHP", "MMUL", "SOFT"],
+          "lesson_ref": "Lesson 14 — CNNs & Computer Vision",
+          "sample": "lesson_14_edge_detector.nml",
+          "complexity": "complex"
+        },
+        {
+          "name": "Edge Detection",
+          "when": "Simple feature extraction, preprocessing for downstream tasks.",
+          "nml_pattern": "CONV with edge kernel (Sobel/Laplacian) → POOL.",
+          "nml_opcodes": ["CONV", "POOL", "ST"],
+          "lesson_ref": "Lesson 14 — CNNs & Computer Vision",
+          "sample": "lesson_14_edge_detector.nml",
+          "complexity": "simple"
+        }
+      ]
+    },
+    {
+      "id": "nlp_transformers",
+      "name": "NLP / Transformers",
+      "description": "Process text: sentiment analysis, text generation, translation, summarization.",
+      "signals": ["text", "language", "NLP", "sentiment", "translation", "summarization", "tokens", "transformer", "attention", "GPT", "BERT"],
+      "algorithms": [
+        {
+          "name": "Transformer Block",
+          "when": "Sequential/text data, need attention over full context, language understanding.",
+          "nml_pattern": "EMBD → positional add → ATTN (Q,K,V) → NORM → MMUL + GELU → NORM → output.",
+          "nml_opcodes": ["EMBD", "MADD", "ATTN", "NORM", "MMUL", "GELU"],
+          "lesson_ref": "Lesson 15 — How Language Models Work",
+          "sample": "lesson_15_transformer_block.nml",
+          "complexity": "complex"
+        },
+        {
+          "name": "Sentiment Classifier",
+          "when": "Classify text into positive/negative/neutral. Simpler than full transformer for short text.",
+          "nml_pattern": "EMBD → mean pool → MMUL + MADD + SOFT (classify).",
+          "nml_opcodes": ["EMBD", "RDUC", "MMUL", "MADD", "SOFT"],
+          "lesson_ref": "Lesson 15 — How Language Models Work",
+          "sample": "lesson_15_sentiment_analysis.nml",
+          "complexity": "moderate"
+        }
+      ]
+    },
+    {
+      "id": "time_series",
+      "name": "Time Series / Sequential",
+      "description": "Predict future values from historical sequences. Stock prices, sensor readings, demand forecasting.",
+      "signals": ["time series", "forecast", "sequential", "temporal", "trend", "seasonality", "stock", "sensor", "demand", "next value"],
+      "algorithms": [
+        {
+          "name": "Sliding Window MLP",
+          "when": "Fixed-length history window, tabular time features.",
+          "nml_pattern": "Concatenate last N values → MMUL + MADD + RELU → MMUL + MADD → prediction.",
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "ST"],
+          "lesson_ref": "Lesson 16 — Time Series & Sequential Data",
+          "sample": null,
+          "complexity": "moderate"
+        },
+        {
+          "name": "Transformer Time Series",
+          "when": "Long-range dependencies, multiple channels, attention over time steps.",
+          "nml_pattern": "EMBD positions → ATTN over time steps → NORM → linear projection.",
+          "nml_opcodes": ["EMBD", "ATTN", "NORM", "MMUL", "MADD"],
+          "lesson_ref": "Lesson 16 — Time Series, Lesson 15 — Transformers",
+          "sample": "lesson_16_time_series_transformer.nml",
+          "complexity": "complex"
+        }
+      ]
+    },
+    {
+      "id": "signal_processing",
+      "name": "Signal Processing",
+      "description": "Frequency analysis, noise filtering, audio processing.",
+      "signals": ["signal", "frequency", "audio", "noise", "filter", "FFT", "spectrum", "waveform"],
+      "algorithms": [
+        {
+          "name": "FFT + Frequency Filter",
+          "when": "Remove noise at specific frequencies, analyze spectral content.",
+          "nml_pattern": "FFT → FILT (frequency domain filter) → inverse FFT.",
+          "nml_opcodes": ["FFT", "FILT", "ST"],
+          "lesson_ref": "NML-S Signal Extension (v0.3)",
+          "sample": null,
+          "complexity": "moderate"
+        }
+      ]
+    },
+    {
+      "id": "training_optimization",
+      "name": "Training Optimization",
+      "description": "Improve model training: regularization, normalization, learning rate control.",
+      "signals": ["overfitting", "regularization", "dropout", "batch norm", "learning rate", "weight decay", "training stability"],
+      "algorithms": [
+        {
+          "name": "Batch Normalization",
+          "when": "Deep networks, training instability, internal covariate shift.",
+          "nml_pattern": "BN Rd Rs Rgamma Rbeta after each linear layer, before activation.",
+          "nml_opcodes": ["BN"],
+          "lesson_ref": "Lesson 10 — Regularization & Optimization",
+          "sample": "lesson_10_regularized.nml",
+          "complexity": "simple"
+        },
+        {
+          "name": "Dropout",
+          "when": "Overfitting on small dataset, co-adaptation of neurons.",
+          "nml_pattern": "DROP Rd Rs #rate after activation. Use #0.0 at inference.",
+          "nml_opcodes": ["DROP"],
+          "lesson_ref": "Lesson 10 — Regularization & Optimization",
+          "sample": "lesson_10_regularized.nml",
+          "complexity": "simple"
+        },
+        {
+          "name": "Weight Decay (L2)",
+          "when": "Prevent large weights, generalization.",
+          "nml_pattern": "WDECAY Rw #lambda before each WUPD step.",
+          "nml_opcodes": ["WDECAY"],
+          "lesson_ref": "Lesson 10 — Regularization & Optimization",
+          "sample": null,
+          "complexity": "simple"
+        }
+      ]
+    }
+  ],
+
+  "decision_heuristics": [
+    {
+      "condition": "Dataset has < 1,000 samples",
+      "recommendation": "Use simpler models (logistic regression, decision tree, Naive Bayes). Add dropout/BN if using neural networks.",
+      "avoid": "Deep networks without regularization — they will overfit."
+    },
+    {
+      "condition": "Dataset has > 100,000 samples",
+      "recommendation": "Neural networks can shine. Consider MLP for tabular, CNN for images, Transformer for sequences.",
+      "avoid": "K-nearest neighbors (too slow at scale)."
+    },
+    {
+      "condition": "Need to explain predictions to stakeholders",
+      "recommendation": "Decision trees, logistic regression, or ensemble with SHAP values.",
+      "avoid": "Deep neural networks — they are black boxes."
+    },
+    {
+      "condition": "Features are mostly categorical",
+      "recommendation": "Decision trees, Naive Bayes, or gradient boosting handle categorical data naturally.",
+      "avoid": "Raw neural networks — need careful encoding first."
+    },
+    {
+      "condition": "Input is images or spatial data",
+      "recommendation": "CNN with CONV + POOL layers. Use PADZ for border handling.",
+      "avoid": "Fully-connected MLP — ignores spatial structure."
+    },
+    {
+      "condition": "Input is text or sequences",
+      "recommendation": "Transformer with EMBD + ATTN + NORM. Or simple bag-of-words + MLP for short text classification.",
+      "avoid": "CNN (unless 1D-conv for text), decision trees (can't handle variable-length input)."
+    },
+    {
+      "condition": "No labeled data available",
+      "recommendation": "Unsupervised: K-Means clustering, autoencoder for anomaly detection, dimensionality reduction.",
+      "avoid": "Supervised classifiers — they need labels."
+    },
+    {
+      "condition": "Need real-time / low-latency inference",
+      "recommendation": "Small models: logistic regression, small MLP, decision tree. NML programs are lightweight and execute efficiently.",
+      "avoid": "Large ensembles or deep transformers in the hot path."
+    },
+    {
+      "condition": "Training on edge device / limited memory",
+      "recommendation": "TNET with small config (1-2 layers). Use BN for training stability. Keep tensor shapes small.",
+      "avoid": "Large batch sizes, deep networks, attention layers."
+    },
+    {
+      "condition": "Distributed across multiple nodes (NML Collective)",
+      "recommendation": "Train locally on each worker's data with TNET, use VOTE consensus for model agreement.",
+      "avoid": "Centralized data pooling — defeats the purpose of distributed execution."
+    }
+  ],
+
+  "nml_capability_map": {
+    "supervised_training": {
+      "config_driven": "TNET Rconfig #epochs — auto forward/backward/update. R0=data, R1=config[n_layers,3], R9=labels.",
+      "manual_loop": "LOOP #N → forward → LOSS → BKWD → WUPD → ENDP",
+      "loss_types": {"0": "MSE (regression)", "1": "binary cross-entropy", "2": "categorical cross-entropy"},
+      "activations": {"0": "ReLU", "1": "Sigmoid", "2": "Tanh", "3": "GELU", "4": "Linear (none)"}
+    },
+    "inference_only": {
+      "pattern": "LD weights → forward pass → ST output. No TNET/BKWD/WUPD.",
+      "infer_opcode": "INFER Rd Rs — config-driven forward pass only, no weight update."
+    },
+    "regularization": {
+      "batch_norm": "BN Rd Rs [Rgamma] [Rbeta] — after linear, before activation.",
+      "dropout": "DROP Rd Rs #rate — after activation. #0.0 disables for inference.",
+      "weight_decay": "WDECAY Rw #lambda — before WUPD in training loop."
+    },
+    "data_shapes": {
+      "rule": "NML tensors are 2D: [rows, cols]. Images use RSHP for 4D [N,C,H,W].",
+      "training_data": "@training_data shape=N,K where N=samples, K=features",
+      "labels": "@training_labels shape=N,O where O=output_dim (1 for binary, K for multi-class)"
+    },
+    "data_guide": {
+      "overview": "Every NML program needs a .nml.data file that defines named tensors. Each tensor has a real-world meaning — make this explicit.",
+      "format": "@name shape=rows,cols dtype=f32 data=v1,v2,...",
+      "tensor_categories": {
+        "input_data": {
+          "purpose": "The raw data you want to process or learn from.",
+          "examples": [
+            "@input shape=1,4 — one sample with 4 features (e.g., temperature, pressure, vibration, speed)",
+            "@training_data shape=100,6 — 100 transactions, each with 6 features (amount, time, merchant_category, distance, frequency, is_international)"
+          ],
+          "notes": "Rows = samples/observations. Columns = features/measurements. Normalize numeric features to 0-1 range."
+        },
+        "labels": {
+          "purpose": "The correct answer for supervised training — what you want the model to learn to predict.",
+          "examples": [
+            "@training_labels shape=100,1 — binary label per sample (0=normal, 1=fraud)",
+            "@training_labels shape=100,3 — one-hot encoded 3-class labels ([1,0,0]=cat, [0,1,0]=dog, [0,0,1]=bird)"
+          ],
+          "notes": "Must have same number of rows as training_data. Not needed for unsupervised (autoencoder, k-means)."
+        },
+        "weights": {
+          "purpose": "Learnable parameters that the model adjusts during training. Initialize small random or zeros.",
+          "examples": [
+            "@w1 shape=6,8 — connects 6 input features to 8 hidden neurons",
+            "@b1 shape=1,8 — one bias per hidden neuron (initialize to 0.0)"
+          ],
+          "naming": "Convention: @w1/@b1 for layer 1, @w2/@b2 for layer 2, etc. Shape: [input_dim, output_dim] for weights, [1, output_dim] for biases.",
+          "notes": "TNET auto-creates weights from config — you only need to provide data and labels."
+        },
+        "inference_input": {
+          "purpose": "A new, unseen sample to run through the trained model for prediction.",
+          "examples": [
+            "@new_transaction shape=1,6 — one new transaction to score for fraud",
+            "@test_image shape=1,784 — one 28x28 image flattened to a row"
+          ],
+          "notes": "Must have same number of columns as training features. Only 1 row for single prediction."
+        },
+        "reconstruction_target": {
+          "purpose": "For autoencoders: the target output is the input itself (learn to reconstruct).",
+          "examples": [
+            "Labels = training_data. Reconstruction error = anomaly score."
+          ]
+        }
+      },
+      "tnet_shortcut": "When using TNET config-driven training, you only need: @training_data (R0), config tensor (R1), and @training_labels (R9). TNET creates and manages all intermediate weights automatically.",
+      "data_file_example": "; Credit card fraud detection — 5 training transactions\n; Features: amount_normalized, time_since_last, merchant_risk, distance_km, frequency_7d, is_international\n@training_data    shape=5,6  dtype=f32  data=0.12,0.85,0.03,0.15,0.0,0.10, 0.25,0.50,0.08,0.25,0.0,0.15, 0.08,0.95,0.01,0.10,0.0,0.05, 0.30,0.40,0.12,0.35,0.0,0.20, 0.18,0.60,0.05,0.20,1.0,0.15\n@training_labels  shape=5,1  dtype=f32  data=0.0,0.0,0.0,0.0,1.0\n; New transaction to score\n@new_transaction  shape=1,6  dtype=f32  data=0.95,0.10,0.85,0.90,1.0,1.0"
+    }
+  },
+
+  "lesson_index": {
+    "01": {"topic": "What Is Machine Learning?", "teaches": "ML vs programming, terminology, first model concept"},
+    "02": {"topic": "Types of Machine Learning", "teaches": "Supervised/unsupervised/reinforcement, when to use each"},
+    "03": {"topic": "Unsupervised Learning Deep Dive", "teaches": "K-Means, autoencoders, anomaly detection without labels"},
+    "05": {"topic": "Your First ML Model", "teaches": "Linear regression, gradient descent, Python + NML"},
+    "06": {"topic": "Classification Basics", "teaches": "Logistic regression, sigmoid, softmax, multi-class"},
+    "07": {"topic": "Support Vector Machines", "teaches": "Max-margin, kernel trick, RBF/linear/polynomial"},
+    "08": {"topic": "Naive Bayes", "teaches": "Bayes theorem, text classification, log-probability trick"},
+    "09": {"topic": "Model Evaluation", "teaches": "Accuracy, precision, recall, F1, overfitting, cross-validation"},
+    "10": {"topic": "Regularization & Optimization", "teaches": "L1/L2, dropout, batch norm, Adam, learning rate"},
+    "11": {"topic": "Decision Trees & Random Forests", "teaches": "Tree splits, Gini, ensembles, VOTE"},
+    "12": {"topic": "Gradient Boosting", "teaches": "XGBoost, boosting vs bagging, hyperparameter tuning"},
+    "13": {"topic": "Neural Networks", "teaches": "Neurons, layers, backprop, activation functions"},
+    "14": {"topic": "CNNs & Computer Vision", "teaches": "Convolutions, pooling, feature maps, transfer learning"},
+    "15": {"topic": "Language Models & Transformers", "teaches": "Tokenization, embeddings, self-attention, GPT"},
+    "16": {"topic": "Time Series & Sequential Data", "teaches": "RNNs, LSTMs, sliding windows, ARIMA"},
+    "17": {"topic": "End-to-End ML Project", "teaches": "Complete workflow: data → train → evaluate → deploy"}
+  }
+}

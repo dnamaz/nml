@@ -17,6 +17,8 @@ CHAT_UI=false
 PIPELINE_UI=false
 NO_GATEWAY=false
 NO_THINK=false
+ADVISOR_LLM=""
+ADVISOR_MODEL=""
 
 for arg in "$@"; do
     case "$arg" in
@@ -24,14 +26,19 @@ for arg in "$@"; do
         --pipeline-ui) PIPELINE_UI=true ;;
         --no-gateway)  NO_GATEWAY=true ;;
         --no-think)    NO_THINK=true ;;
+        --advisor-llm=*)   ADVISOR_LLM="${arg#*=}" ;;
+        --advisor-model=*) ADVISOR_MODEL="${arg#*=}" ;;
         --help|-h)
             echo "Usage: $0 [model-name] [options]"
             echo ""
-            echo "  model-name      Code model directory name (default: nml-v09-merged-6bit)"
-            echo "  --chat-ui       Launch the chat UI"
-            echo "  --pipeline-ui   Launch the pipeline UI"
-            echo "  --no-think      Don't start the think model server"
-            echo "  --no-gateway    Don't start the domain RAG gateway"
+            echo "  model-name               Code model directory name (default: nml-v09-merged-6bit)"
+            echo "  --chat-ui                Launch the chat UI"
+            echo "  --pipeline-ui            Launch the pipeline UI"
+            echo "  --no-think               Don't start the think model server"
+            echo "  --no-gateway             Don't start the domain RAG gateway"
+            echo "  --advisor-llm=URL        High-reasoning LLM for ML Advisor"
+            echo "                           (e.g. https://api.anthropic.com)"
+            echo "  --advisor-model=MODEL    Model name (e.g. claude-sonnet-4-20250514)"
             exit 0
             ;;
         --*)
@@ -77,9 +84,16 @@ echo ""
 echo "  Starting NML agent services..."
 
 # Code model server (MLX, context includes opcode reference from nml_server.py)
+ADVISOR_FLAG=""
+if [ -n "$ADVISOR_LLM" ]; then
+    ADVISOR_FLAG="--advisor-llm $ADVISOR_LLM"
+fi
+if [ -n "$ADVISOR_MODEL" ]; then
+    ADVISOR_FLAG="$ADVISOR_FLAG --advisor-model $ADVISOR_MODEL"
+fi
 echo "  Code Server  on :$PORT_SERVER (model: $MODEL)"
 python3 "$PROJECT_ROOT/serve/nml_server.py" --http --port "$PORT_SERVER" \
-    --model "$MODEL_PATH" \
+    --model "$MODEL_PATH" $ADVISOR_FLAG \
     > "$LOG_DIR/server.log" 2>&1 &
 PIDS+=($!)
 
@@ -139,6 +153,12 @@ fi
 if ! $NO_GATEWAY; then
     echo "  Gateway       http://localhost:$PORT_GATEWAY"
 fi
+if [ -n "$ADVISOR_LLM" ]; then
+    echo "  ML Advisor    $ADVISOR_LLM"
+else
+    echo "  ML Advisor    KB-only (use --advisor-llm=URL for cloud LLM)"
+fi
+echo "  Advise API    http://localhost:$PORT_SERVER/advise"
 echo "  Logs:         $LOG_DIR/"
 echo ""
 

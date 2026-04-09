@@ -34,9 +34,11 @@ import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
+SERVE_DIR = Path(__file__).parent
 NML_BINARY = PROJECT_ROOT / ("nml.exe" if sys.platform == "win32" else "nml")
 SPEC_PATH = PROJECT_ROOT / "docs" / "NML_SPEC.md"
 GETTING_STARTED = PROJECT_ROOT / "docs" / "GETTING_STARTED.md"
+ML_ADVISOR_KB_PATH = SERVE_DIR / "ml_advisor_kb.json"
 
 # ═══════════════════════════════════════════
 # MCP Tool: Spec Lookup
@@ -172,7 +174,7 @@ def execute_program(nml_program: str, data: str = "",
                 if len(vals_str) == 1:
                     outputs[name] = float(vals_str[0].strip())
                 else:
-                    outputs[name] = [float(v.strip()) for v in vals_str]
+                    outputs[name] = [float(v.strip()) for v in vals_str if v.strip() not in ("...", "")]
             if "HALTED" in stripped:
                 status = "HALTED"
                 cm = re.search(r"(\d+) cycles", stripped)
@@ -346,10 +348,186 @@ def _dispatch_tool(name: str, args: dict):
 
 
 # ═══════════════════════════════════════════
+# ML Advisor — algorithm selection via KB + high-reasoning LLM
+# ═══════════════════════════════════════════
+
+_advisor_kb = None
+
+def _load_advisor_kb():
+    global _advisor_kb
+    if _advisor_kb is not None:
+        return _advisor_kb
+    if ML_ADVISOR_KB_PATH.exists():
+        with open(ML_ADVISOR_KB_PATH) as f:
+            _advisor_kb = json.load(f)
+    else:
+        _advisor_kb = {}
+    return _advisor_kb
+
+
+def advisor_match_problem(description: str) -> list:
+    """Score each problem type against the user description using keyword signals."""
+    kb = _load_advisor_kb()
+    desc_lower = description.lower()
+    scored = []
+    for pt in kb.get("problem_types", []):
+        hits = sum(1 for s in pt.get("signals", []) if s in desc_lower)
+        if hits > 0:
+            scored.append((hits, pt))
+    scored.sort(key=lambda x: -x[0])
+    return [pt for _, pt in scored[:3]]
+
+
+def advisor_build_context(description: str) -> str:
+    """Build a rich system prompt grounding the advisor in the KB."""
+    kb = _load_advisor_kb()
+    matches = advisor_match_problem(description)
+
+    parts = [
+        "You are an ML Advisor for the NML (Neural Machine Language) platform.",
+        "NML is an 89-opcode tensor register machine. The runtime is a small C binary;",
+        "programs and data are separate files with no inherent size limit.",
+        "Your job: given a real-world problem description, recommend the best ML algorithm,",
+        "explain WHY it fits, describe the data pipeline, and show how to implement it in NML.",
+        "",
+        "Your response MUST include these sections in order:",
+        "",
+        "1. PROBLEM TYPE — classify the problem (regression, binary classification, etc.)",
+        "",
+        "2. WHAT YOU'RE DOING AND WHY",
+        "   Explain in plain language: what is the goal, what goes in, what comes out.",
+        "   Example: 'You are training a model to learn what normal credit card transactions",
+        "   look like, so that when a new transaction arrives, the model can score how",
+        "   different it is from normal — a high score means likely fraud.'",
+        "",
+        "3. DATA REQUIREMENTS",
+        "   For each tensor the model needs, explain:",
+        "   - What real-world data it represents (not just '@w1 shape=4,8')",
+        "   - Why this data is needed for the algorithm",
+        "   - Shape and what each dimension means (rows = samples, cols = features, etc.)",
+        "   - Example values with units where applicable",
+        "   Group into: INPUT DATA (what the user provides), MODEL WEIGHTS (initialized by",
+        "   the system), and LABELS/TARGETS (for supervised training).",
+        "   Show the complete .nml.data file with inline comments explaining every tensor.",
+        "",
+        "4. RECOMMENDED ALGORITHM — name and 1-sentence why",
+        "",
+        "5. WHY THIS FITS — 2-3 sentences on why this algorithm matches the constraints",
+        "",
+        "6. ALTERNATIVES — 1-2 other options with trade-offs",
+        "",
+        "7. NML IMPLEMENTATION — specific opcodes, register layout, tensor shapes.",
+        "   Show the data flow: which tensor loads into which register, what operations",
+        "   transform it, and where the output lands.",
+        "",
+        "8. LESSON REFERENCE — which ML Journey lesson covers this",
+        "",
+        "The output feeds into a Think model that plans the NML architecture, and a user",
+        "who needs to prepare their .nml.data file. Be concrete about dimensions and data.",
+    ]
+
+    if matches:
+        parts.append("")
+        parts.append("=== RELEVANT KNOWLEDGE BASE ENTRIES ===")
+        for pt in matches:
+            parts.append(f"\n## {pt['name']}: {pt['description']}")
+            for alg in pt.get("algorithms", []):
+                parts.append(f"  - {alg['name']}: {alg['when']}")
+                parts.append(f"    NML: {alg['nml_pattern']}")
+                parts.append(f"    Opcodes: {', '.join(alg['nml_opcodes'])}")
+                parts.append(f"    Lesson: {alg['lesson_ref']}")
+                if alg.get("sample"):
+                    parts.append(f"    Sample: {alg['sample']}")
+
+    heuristics = kb.get("decision_heuristics", [])
+    if heuristics:
+        parts.append("")
+        parts.append("=== DECISION HEURISTICS ===")
+        for h in heuristics:
+            parts.append(f"  IF {h['condition']}:")
+            parts.append(f"    → {h['recommendation']}")
+            parts.append(f"    AVOID: {h['avoid']}")
+
+    cap = kb.get("nml_capability_map", {})
+    if cap:
+        parts.append("")
+        parts.append("=== NML CAPABILITIES ===")
+        train = cap.get("supervised_training", {})
+        if train:
+            parts.append(f"  Config-driven training: {train.get('config_driven', '')}")
+            parts.append(f"  Manual loop: {train.get('manual_loop', '')}")
+            lt = train.get("loss_types", {})
+            parts.append(f"  Loss types: {', '.join(f'{k}={v}' for k,v in lt.items())}")
+        inf = cap.get("inference_only", {})
+        if inf:
+            parts.append(f"  Inference: {inf.get('infer_opcode', '')}")
+        reg = cap.get("regularization", {})
+        if reg:
+            for k, v in reg.items():
+                parts.append(f"  {k}: {v}")
+        ds = cap.get("data_shapes", {})
+        if ds:
+            parts.append(f"  Data: {ds.get('training_data', '')}; Labels: {ds.get('labels', '')}")
+
+    dg = cap.get("data_guide", {})
+    if dg:
+        parts.append("")
+        parts.append("=== DATA GUIDE ===")
+        parts.append(f"  Format: {dg.get('format', '')}")
+        parts.append(f"  TNET shortcut: {dg.get('tnet_shortcut', '')}")
+        cats = dg.get("tensor_categories", {})
+        for cat_name, cat_info in cats.items():
+            parts.append(f"  {cat_name}: {cat_info.get('purpose', '')}")
+            for ex in cat_info.get("examples", []):
+                parts.append(f"    Example: {ex}")
+            if cat_info.get("notes"):
+                parts.append(f"    Note: {cat_info['notes']}")
+            if cat_info.get("naming"):
+                parts.append(f"    Naming: {cat_info['naming']}")
+        example_file = dg.get("data_file_example", "")
+        if example_file:
+            parts.append(f"  Example .nml.data file:\n    {example_file}")
+
+    return "\n".join(parts)
+
+
+def advisor_local_only(description: str) -> dict:
+    """Return KB-grounded advice without calling an external LLM."""
+    matches = advisor_match_problem(description)
+    if not matches:
+        return {
+            "problem_type": "unknown",
+            "recommendation": "Could not match problem type from description. Try being more specific about what you want to predict or detect.",
+            "algorithms": [],
+            "source": "kb_only",
+        }
+
+    primary = matches[0]
+    algs = primary.get("algorithms", [])
+    best = algs[0] if algs else None
+
+    return {
+        "problem_type": primary["name"],
+        "description": primary["description"],
+        "recommendation": best["name"] if best else "unknown",
+        "why": best["when"] if best else "",
+        "nml_pattern": best["nml_pattern"] if best else "",
+        "nml_opcodes": best["nml_opcodes"] if best else [],
+        "lesson_ref": best["lesson_ref"] if best else "",
+        "sample": best.get("sample"),
+        "alternatives": [
+            {"name": a["name"], "when": a["when"], "complexity": a["complexity"]}
+            for a in algs[1:3]
+        ],
+        "source": "kb_only",
+    }
+
+
+# ═══════════════════════════════════════════
 # HTTP Server (for terminal UI + LLM chat)
 # ═══════════════════════════════════════════
 
-def create_http_app(model_path: str = None):
+def create_http_app(model_path: str = None, advisor_llm: str = None, advisor_model: str = None, advisor_max_tokens: int = 4096):
     """Create an aiohttp app with MCP tool endpoints + optional LLM chat."""
     from aiohttp import web
 
@@ -400,6 +578,120 @@ def create_http_app(model_path: str = None):
             except Exception as e:
                 print(f"WARNING: Could not load model: {e}")
 
+    ADVISOR_SHORTHANDS = {
+        "anthropic": "https://api.anthropic.com",
+        "openai": "https://api.openai.com",
+        "openrouter": "https://openrouter.ai/api",
+    }
+    advisor_llm_url = ADVISOR_SHORTHANDS.get(advisor_llm, advisor_llm) if advisor_llm else None
+    advisor_default_model = (
+        advisor_model
+        or os.environ.get("NML_ADVISOR_MODEL")
+        or None  # will pick per-provider default below
+    )
+    if advisor_llm_url:
+        is_anthropic_default = "anthropic" in advisor_llm_url
+        if not advisor_default_model:
+            advisor_default_model = "claude-opus-4-20250514" if is_anthropic_default else "openai/gpt-4o"
+        print(f"ML Advisor LLM: {advisor_llm_url}  model={advisor_default_model}")
+    else:
+        print(f"ML Advisor: KB-only mode (no --advisor-llm set)")
+
+    async def handle_advise(request):
+        """ML Advisor endpoint — recommend algorithm for a problem description.
+
+        POST /advise
+        Body: {"description": "I have customer data and want to predict churn"}
+        Optional: {"description": "...", "llm": true}  to force LLM call
+
+        Returns structured advice: problem_type, algorithm, why, NML pattern, lesson refs.
+        """
+        body = await request.json()
+        description = body.get("description", "").strip()
+        if not description:
+            return _json({"error": "description is required"}, 400)
+
+        use_llm = body.get("llm", advisor_llm_url is not None)
+
+        if use_llm and advisor_llm_url:
+            system_prompt = advisor_build_context(description)
+            user_msg = (
+                f"Problem: {description}\n\n"
+                "Analyze this problem and recommend the best ML approach for NML. "
+                "Be specific about NML opcodes, tensor shapes, and register layout."
+            )
+
+            from aiohttp import ClientSession, ClientTimeout
+            try:
+                # Detect provider from URL
+                is_anthropic = "anthropic" in advisor_llm_url
+
+                req_model = body.get("model", advisor_default_model)
+                req_max_tokens = body.get("max_tokens", advisor_max_tokens)
+
+                if is_anthropic:
+                    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+                    payload = {
+                        "model": req_model,
+                        "max_tokens": req_max_tokens,
+                        "system": system_prompt,
+                        "messages": [{"role": "user", "content": user_msg}],
+                    }
+                    headers = {
+                        "Content-Type": "application/json",
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                    }
+                    endpoint = advisor_llm_url.rstrip("/")
+                    if not endpoint.endswith("/v1/messages"):
+                        endpoint += "/v1/messages"
+                else:
+                    api_key = os.environ.get("OPENAI_API_KEY", os.environ.get("OPENROUTER_API_KEY", ""))
+                    payload = {
+                        "model": req_model,
+                        "max_tokens": req_max_tokens,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_msg},
+                        ],
+                    }
+                    headers = {"Content-Type": "application/json"}
+                    if api_key:
+                        headers["Authorization"] = f"Bearer {api_key}"
+                    endpoint = advisor_llm_url.rstrip("/")
+                    if "/chat/completions" not in endpoint:
+                        endpoint += "/v1/chat/completions"
+
+                async with ClientSession(timeout=ClientTimeout(total=120)) as session:
+                    async with session.post(endpoint, json=payload, headers=headers) as resp:
+                        data = await resp.json()
+
+                if is_anthropic:
+                    content_blocks = data.get("content", [])
+                    advice_text = "\n".join(
+                        b.get("text", "") for b in content_blocks if b.get("type") == "text"
+                    )
+                else:
+                    advice_text = data.get("choices", [{}])[0].get(
+                        "message", {}).get("content", "")
+
+                kb_matches = advisor_match_problem(description)
+                return _json({
+                    "advice": advice_text,
+                    "problem_types_matched": [m["name"] for m in kb_matches],
+                    "source": "llm",
+                    "model": payload.get("model", "unknown"),
+                })
+
+            except Exception as e:
+                print(f"  [advisor] LLM call failed: {e}, falling back to KB")
+                result = advisor_local_only(description)
+                result["llm_error"] = str(e)
+                return _json(result)
+        else:
+            result = advisor_local_only(description)
+            return _json(result)
+
     async def handle_options(request):
         return web.Response(status=204, headers=_cors())
 
@@ -410,6 +702,11 @@ def create_http_app(model_path: str = None):
             "tools": [t["name"] for t in TOOLS],
             "model": model_path if (model or llm_backend_url) else None,
             "constrained_decoding": outlines_model is not None,
+            "advisor": {
+                "available": True,
+                "mode": "llm" if advisor_llm_url else "kb_only",
+                "llm_url": advisor_llm_url,
+            },
         })
 
     async def handle_models(request):
@@ -522,12 +819,15 @@ def create_http_app(model_path: str = None):
         prompt_parts.append("<|im_start|>assistant\n")
         prompt = "\n".join(prompt_parts)
 
+        loop = asyncio.get_event_loop()
         if constrained and outlines_model and nml_cfg:
-            response_text = outlines_model(prompt, output_type=nml_cfg, max_tokens=max_tokens)
+            response_text = await loop.run_in_executor(
+                None, lambda: outlines_model(prompt, output_type=nml_cfg, max_tokens=max_tokens))
         else:
             from mlx_lm import generate as mlx_generate
-            response_text = mlx_generate(model, tokenizer, prompt=prompt,
-                                         max_tokens=max_tokens, verbose=False)
+            response_text = await loop.run_in_executor(
+                None, lambda: mlx_generate(model, tokenizer, prompt=prompt,
+                                           max_tokens=max_tokens, verbose=False))
 
         if stream:
             async def stream_response(response):
@@ -766,11 +1066,13 @@ def create_http_app(model_path: str = None):
                     attempts.append({"attempt": attempt, "error": str(e)})
                     continue
             elif model and tokenizer:
-                # Local model generation
+                from mlx_lm import generate as mlx_generate
                 prompt_text = tokenizer.apply_chat_template(
                     messages, add_generation_prompt=True, tokenize=False)
-                gen_text = generate(model, tokenizer, prompt=prompt_text,
-                                    max_tokens=max_tokens, verbose=False)
+                loop = asyncio.get_event_loop()
+                gen_text = await loop.run_in_executor(
+                    None, lambda pt=prompt_text, mt=max_tokens: mlx_generate(
+                        model, tokenizer, prompt=pt, max_tokens=mt, verbose=False))
             else:
                 return _json({"error": "No model available"}, 503)
 
@@ -856,6 +1158,7 @@ def create_http_app(model_path: str = None):
     app.router.add_post("/generate_validated", handle_generate_validated)
     app.router.add_post("/format", handle_format)
     app.router.add_post("/spec", handle_spec)
+    app.router.add_post("/advise", handle_advise)
     app.router.add_post("/agent/register", handle_agent_register)
     app.router.add_get("/agent/list", handle_agent_list)
     app.router.add_post("/distribute", handle_distribute)
@@ -893,18 +1196,33 @@ Examples:
                         help="HTTP port (default: 8082)")
     parser.add_argument("--model", type=str, default=None,
                         help="Path to MLX model for chat completions")
+    parser.add_argument("--advisor-llm", type=str, default=None,
+                        help="URL for ML Advisor high-reasoning model "
+                             "(e.g. https://api.anthropic.com or https://openrouter.ai/api)")
+    parser.add_argument("--advisor-model", type=str, default=None,
+                        help="Model name for advisor LLM (default: auto per provider, "
+                             "or NML_ADVISOR_MODEL env var). "
+                             "Examples: claude-opus-4-20250514, claude-sonnet-4-20250514, openai/gpt-4o")
+    parser.add_argument("--advisor-max-tokens", type=int, default=4096,
+                        help="Max tokens for advisor LLM responses (default: 4096, "
+                             "overridable per-request via max_tokens in POST body)")
     args = parser.parse_args()
 
     if args.transport == "stdio":
         asyncio.run(handle_mcp_stdio())
     elif args.http:
         from aiohttp import web
-        app = create_http_app(model_path=args.model)
+        app = create_http_app(model_path=args.model, advisor_llm=args.advisor_llm,
+                              advisor_model=args.advisor_model,
+                              advisor_max_tokens=args.advisor_max_tokens)
         print(f"NML Server on :{args.port}")
         print(f"  Tools: {', '.join(t['name'] for t in TOOLS)}")
         if args.model:
             print(f"  Model: {args.model}")
-        print(f"  Chat:  http://localhost:{args.port}/v1/chat/completions")
+        if args.advisor_llm:
+            print(f"  Advisor: {args.advisor_llm}")
+        print(f"  Chat:    http://localhost:{args.port}/v1/chat/completions")
+        print(f"  Advise:  http://localhost:{args.port}/advise")
         web.run_app(app, port=args.port, print=None)
     else:
         parser.print_help()

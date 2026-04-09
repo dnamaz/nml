@@ -3,111 +3,386 @@
     {
       "name": "Training Pipelines",
       "prompts": [
-        "Train a 2-layer neural network: forward pass with ReLU, compute cross-entropy loss, backpropagate, update weights",
-        "Train a CNN: convolution, pooling, ReLU activation, loss, backward pass through all layers, weight update",
-        "Config-driven training loop with weight decay and logging every 10 epochs",
-        "Train a transformer block: multi-head attention, layer norm, forward pass, backward pass",
-        "Train a network using TNET with 500 epochs and learning rate 0.001",
-        "Train a 3-layer MLP with batch normalization after each hidden layer and dropout rate 0.2",
-        "Train with BN and DROP: forward pass, batch normalize hidden activations, apply dropout, compute loss, backprop"
+        {
+          "label": "2-layer MLP with backprop",
+          "text": "Train a 2-layer neural network: forward pass with ReLU, compute cross-entropy loss, backpropagate, update weights",
+          "scenario": "Spam classifier — train on email features to predict spam vs. not-spam"
+        },
+        {
+          "label": "CNN training loop",
+          "text": "Train a CNN: convolution, pooling, ReLU activation, loss, backward pass through all layers, weight update",
+          "scenario": "Defect detection — train on factory images to flag faulty parts on an assembly line"
+        },
+        {
+          "label": "Config-driven training + decay",
+          "text": "Config-driven training loop with weight decay and logging every 10 epochs",
+          "scenario": "Predictive maintenance — schedule model retraining on sensor data with regularization to avoid overfitting"
+        },
+        {
+          "label": "Transformer block training",
+          "text": "Train a transformer block: multi-head attention, layer norm, forward pass, backward pass",
+          "scenario": "Chatbot fine-tuning — adapt a language model to company-specific support conversations"
+        },
+        {
+          "label": "TNET 500 epochs",
+          "text": "Train a network using TNET with 500 epochs and learning rate 0.001",
+          "scenario": "House price estimator — train on square footage, bedrooms, location to predict sale price"
+        },
+        {
+          "label": "3-layer MLP + BN + dropout",
+          "text": "Train a 3-layer MLP with batch normalization after each hidden layer and dropout rate 0.2",
+          "scenario": "Credit scoring — train a regularized model on applicant features where overfitting is costly"
+        },
+        {
+          "label": "BN + DROP forward-backward",
+          "text": "Train with BN and DROP: forward pass, batch normalize hidden activations, apply dropout, compute loss, backprop",
+          "scenario": "Medical diagnosis — train on patient lab results with strong regularization for reliable predictions"
+        }
       ]
     },
     {
       "name": "Inference",
       "prompts": [
-        "Run inference on input data through a trained model, apply softmax to get probabilities",
-        "Forward pass only: embedding lookup, attention, layer norm, output projection",
-        "Run INFER on input, apply softmax, return top prediction",
-        "Normalize input, run inference, return predictions without updating weights",
-        "Inference with batch normalization: load input, BN normalize, linear layer, softmax (DROP rate 0.0 to disable)"
+        {
+          "label": "Softmax classification",
+          "text": "Run inference on input data through a trained model, apply softmax to get probabilities",
+          "scenario": "Product recommendation — score candidate items and return ranked probabilities for a user"
+        },
+        {
+          "label": "Transformer forward pass",
+          "text": "Forward pass only: embedding lookup, attention, layer norm, output projection",
+          "scenario": "Search ranking — embed a user query through a transformer to find relevant documents"
+        },
+        {
+          "label": "INFER + top prediction",
+          "text": "Run INFER on input, apply softmax, return top prediction",
+          "scenario": "Real-time fraud detection — classify a payment transaction as legitimate or suspicious"
+        },
+        {
+          "label": "Normalize + infer",
+          "text": "Normalize input, run inference, return predictions without updating weights",
+          "scenario": "Weather forecasting — feed today's sensor readings through a frozen model to predict tomorrow"
+        },
+        {
+          "label": "Inference with BN",
+          "text": "Inference with batch normalization: load input, BN normalize, linear layer, softmax (DROP rate 0.0 to disable)",
+          "scenario": "Production ML serving — deploy a trained model with BN in eval mode (dropout off) for stable predictions"
+        }
       ]
     },
     {
       "name": "Backward Passes",
       "prompts": [
-        "Backpropagate through a softmax layer",
-        "Backpropagate through a convolution layer, get input gradient and kernel gradient",
-        "Full backward pass through a 3-layer network: ReLU, sigmoid, softmax",
-        "Compute input and weight gradients for a linear layer using MMULBK",
-        "Attention backward pass: compute Q, K, V gradients"
+        {
+          "label": "Softmax backward",
+          "text": "Backpropagate through a softmax layer",
+          "scenario": "Fine-tuning a classifier's final layer on a new set of categories"
+        },
+        {
+          "label": "Conv backward",
+          "text": "Backpropagate through a convolution layer, get input gradient and kernel gradient",
+          "scenario": "Transfer learning — update only the conv filters while keeping earlier layers frozen"
+        },
+        {
+          "label": "3-layer mixed backward",
+          "text": "Full backward pass through a 3-layer network: ReLU, sigmoid, softmax",
+          "scenario": "Debugging gradients — verify gradient flow through different activations in a custom architecture"
+        },
+        {
+          "label": "Linear layer MMULBK",
+          "text": "Compute input and weight gradients for a linear layer using MMULBK",
+          "scenario": "Custom optimizer research — manually compute gradients to test a novel weight update rule"
+        },
+        {
+          "label": "Attention backward",
+          "text": "Attention backward pass: compute Q, K, V gradients",
+          "scenario": "LoRA-style adaptation — backprop through attention to update low-rank projection matrices"
+        }
       ]
     },
     {
       "name": "Vision",
       "prompts": [
-        "CNN forward pass: zero-pad input, apply convolution, max pool, ReLU",
-        "Image classification: convolution, pooling, flatten, linear layer, softmax",
-        "Apply convolution with stride, then upscale output back to original size",
-        "Grouped convolution forward pass with bias addition",
-        "4D NCHW vision pipeline: load batch of images, CONV with 4D kernel, POOL, BN, ReLU, flatten, classify"
+        {
+          "label": "Pad + conv + pool + ReLU",
+          "text": "CNN forward pass: zero-pad input, apply convolution, max pool, ReLU",
+          "scenario": "Security camera — extract features from a video frame to detect motion or people"
+        },
+        {
+          "label": "Image classification pipeline",
+          "text": "Image classification: convolution, pooling, flatten, linear layer, softmax",
+          "scenario": "Plant disease detection — photograph a leaf and classify the disease from an image"
+        },
+        {
+          "label": "Conv + upscale",
+          "text": "Apply convolution with stride, then upscale output back to original size",
+          "scenario": "Image super-resolution — enhance a low-res satellite photo to a higher resolution"
+        },
+        {
+          "label": "Grouped convolution",
+          "text": "Grouped convolution forward pass with bias addition",
+          "scenario": "Mobile deployment — use depthwise-separable convolutions for efficient on-device object detection"
+        },
+        {
+          "label": "4D NCHW pipeline",
+          "text": "4D NCHW vision pipeline: load batch of images, CONV with 4D kernel, POOL, BN, ReLU, flatten, classify",
+          "scenario": "Autonomous driving — process a batch of camera frames through a full vision backbone for object detection"
+        }
       ]
     },
     {
       "name": "Transformers",
       "prompts": [
-        "Transformer encoder block: multi-head attention, residual connection, layer norm, feed-forward",
-        "Embedding lookup for token IDs, add positional encoding, apply attention",
-        "Self-attention forward pass with Q, K, V projections",
-        "Layer norm followed by GELU activation and linear projection"
+        {
+          "label": "Encoder block",
+          "text": "Transformer encoder block: multi-head attention, residual connection, layer norm, feed-forward",
+          "scenario": "Sentiment analysis — encode a product review into a fixed-length representation for classification"
+        },
+        {
+          "label": "Embedding + positional + attention",
+          "text": "Embedding lookup for token IDs, add positional encoding, apply attention",
+          "scenario": "Text generation — tokenize a prompt, add position info, and start the first attention pass"
+        },
+        {
+          "label": "Self-attention QKV",
+          "text": "Self-attention forward pass with Q, K, V projections",
+          "scenario": "Document summarization — let each word attend to every other word to identify key sentences"
+        },
+        {
+          "label": "LayerNorm + GELU + linear",
+          "text": "Layer norm followed by GELU activation and linear projection",
+          "scenario": "Feed-forward sublayer in a GPT-style decoder block for next-token prediction"
+        }
       ]
     },
     {
       "name": "Arithmetic & Control",
       "prompts": [
-        "Matrix multiply A and B, add bias, apply ReLU, store result",
-        "Loop 100 times: accumulate gradients, update weights every 10 steps",
-        "Compare loss to threshold, jump to early stopping if converged",
-        "Compute dot product, scale by learning rate, subtract from weights",
-        "Add two vectors element-wise using MADD, store the result",
-        "Scalar add a bias to every element using SADD, then scalar subtract a mean using SSUB"
+        {
+          "label": "MatMul + bias + ReLU",
+          "text": "Matrix multiply A and B, add bias, apply ReLU, store result",
+          "scenario": "Recommendation engine — multiply user embedding by item matrix to score all products"
+        },
+        {
+          "label": "Gradient accumulation loop",
+          "text": "Loop 100 times: accumulate gradients, update weights every 10 steps",
+          "scenario": "Training with limited memory — simulate a larger batch size by accumulating gradients across mini-batches"
+        },
+        {
+          "label": "Early stopping check",
+          "text": "Compare loss to threshold, jump to early stopping if converged",
+          "scenario": "Cloud cost control — stop training when loss plateaus to avoid wasting GPU hours"
+        },
+        {
+          "label": "Dot product + scale + subtract",
+          "text": "Compute dot product, scale by learning rate, subtract from weights",
+          "scenario": "Manual SGD step — apply a single gradient descent update to a weight vector"
+        },
+        {
+          "label": "Vector addition (MADD)",
+          "text": "Add two vectors element-wise using MADD, store the result",
+          "scenario": "Feature fusion — combine embeddings from two different data sources (text + image)"
+        },
+        {
+          "label": "Scalar bias + mean subtraction",
+          "text": "Scalar add a bias to every element using SADD, then scalar subtract a mean using SSUB",
+          "scenario": "Data preprocessing — center sensor readings by subtracting the mean and adding a calibration offset"
+        }
       ]
     },
     {
       "name": "Reduction & Signal",
       "prompts": [
-        "Reduce a tensor: sum all elements with RDUC mode 0, compute mean with mode 1",
-        "Clamp activations between -1 and 1 using CLMP",
-        "Conditional select: use WHER to pick values above threshold",
-        "Create a comparison mask with CMPR, then use WHER to zero out low-confidence predictions",
-        "Apply FFT to a signal, filter in frequency domain with FILT, then reconstruct"
+        {
+          "label": "Sum + mean reduction",
+          "text": "Reduce a tensor: sum all elements with RDUC mode 0, compute mean with mode 1",
+          "scenario": "Dashboard metrics — aggregate real-time sensor values into totals and averages for monitoring"
+        },
+        {
+          "label": "Clamp activations",
+          "text": "Clamp activations between -1 and 1 using CLMP",
+          "scenario": "Robotics control — bound motor commands to safe operating limits"
+        },
+        {
+          "label": "Conditional select (WHER)",
+          "text": "Conditional select: use WHER to pick values above threshold",
+          "scenario": "Alert system — filter sensor readings to keep only values that exceed a danger threshold"
+        },
+        {
+          "label": "CMPR mask + WHER filter",
+          "text": "Create a comparison mask with CMPR, then use WHER to zero out low-confidence predictions",
+          "scenario": "Autonomous vehicle — suppress weak detections below a confidence threshold before acting on them"
+        },
+        {
+          "label": "FFT + frequency filter",
+          "text": "Apply FFT to a signal, filter in frequency domain with FILT, then reconstruct",
+          "scenario": "Audio noise removal — remove background hum from a microphone recording before speech recognition"
+        }
       ]
     },
     {
       "name": "M2M & Fragments",
       "prompts": [
-        "Create a reusable FRAG for a linear layer (MMUL + MADD + RELU), call it with LINK",
-        "Sign a program with SIGN, verify with VRFY before execution",
-        "Gather embeddings from a lookup table using GATH, scatter results back with SCAT",
-        "Compute cosine distance between two vectors using PROJ and DIST",
-        "Add META annotations for model name, version, and author"
+        {
+          "label": "Reusable linear FRAG",
+          "text": "Create a reusable FRAG for a linear layer (MMUL + MADD + RELU), call it with LINK",
+          "scenario": "Modular model — define a shared linear block and reuse it across multiple layers without duplicating code"
+        },
+        {
+          "label": "Sign + verify program",
+          "text": "Sign a program with SIGN, verify with VRFY before execution",
+          "scenario": "Secure edge deployment — ensure an NML model on a remote device hasn't been tampered with"
+        },
+        {
+          "label": "GATH + SCAT embeddings",
+          "text": "Gather embeddings from a lookup table using GATH, scatter results back with SCAT",
+          "scenario": "Knowledge graph — look up entity embeddings by ID and scatter updated representations back after training"
+        },
+        {
+          "label": "Cosine distance (PROJ + DIST)",
+          "text": "Compute cosine distance between two vectors using PROJ and DIST",
+          "scenario": "Semantic search — rank documents by cosine similarity to a query embedding"
+        },
+        {
+          "label": "META annotations",
+          "text": "Add META annotations for model name, version, and author",
+          "scenario": "Model registry — tag a trained model with metadata for reproducibility and audit trails"
+        }
       ]
     },
     {
       "name": "v0.9 Opcodes",
       "prompts": [
-        "Set training log interval to every 10 epochs, then run config-driven training",
-        "Apply weight decay to all weight matrices before each training step",
-        "Run model inference on test input without updating weights, return softmax probabilities",
-        "Full v0.9 training pipeline: TRAIN opcode with config tensor, TLOG, WDECAY, INFER"
+        {
+          "label": "Training log interval",
+          "text": "Set training log interval to every 10 epochs, then run config-driven training",
+          "scenario": "Experiment tracking — monitor loss curves during overnight training runs to catch divergence early"
+        },
+        {
+          "label": "Weight decay",
+          "text": "Apply weight decay to all weight matrices before each training step",
+          "scenario": "Regularization — prevent a large language model from memorizing training data verbatim"
+        },
+        {
+          "label": "Frozen inference",
+          "text": "Run model inference on test input without updating weights, return softmax probabilities",
+          "scenario": "A/B testing — compare two model versions on the same input without modifying either"
+        },
+        {
+          "label": "Full v0.9 pipeline",
+          "text": "Full v0.9 training pipeline: TRAIN opcode with config tensor, TLOG, WDECAY, INFER",
+          "scenario": "End-to-end ML pipeline — train, log, regularize, and run inference in a single NML program"
+        }
       ]
     },
     {
       "name": "v0.10 Opcodes",
       "prompts": [
-        "Apply batch normalization (BN) to hidden layer activations with learned gamma and beta",
-        "Add dropout (DROP) with rate 0.3 after each hidden layer during training",
-        "Training pipeline with BN + DROP: forward pass, BN after MMUL+MADD, DROP before output, loss, backprop",
-        "Inference with BN but dropout disabled: BN R5 R5 R6 R7, DROP R5 R5 #0.0",
-        "N-layer TNET: train a 4-layer MLP using config tensor with shape [4,3]"
+        {
+          "label": "Batch normalization",
+          "text": "Apply batch normalization (BN) to hidden layer activations with learned gamma and beta",
+          "scenario": "Stabilize training — normalize activations to reduce internal covariate shift in a deep network"
+        },
+        {
+          "label": "Dropout regularization",
+          "text": "Add dropout (DROP) with rate 0.3 after each hidden layer during training",
+          "scenario": "Small dataset — prevent overfitting when training a model with limited labeled examples"
+        },
+        {
+          "label": "BN + DROP training pipeline",
+          "text": "Training pipeline with BN + DROP: forward pass, BN after MMUL+MADD, DROP before output, loss, backprop",
+          "scenario": "Kaggle competition — maximize generalization on a held-out test set with BN and dropout"
+        },
+        {
+          "label": "BN inference (dropout off)",
+          "text": "Inference with BN but dropout disabled: BN R5 R5 R6 R7, DROP R5 R5 #0.0",
+          "scenario": "Production serving — switch from training mode to eval mode by disabling dropout while keeping BN"
+        },
+        {
+          "label": "N-layer TNET config",
+          "text": "N-layer TNET: train a 4-layer MLP using config tensor with shape [4,3]",
+          "scenario": "AutoML experiment — quickly test different network depths by changing the config tensor size"
+        }
       ]
     },
     {
       "name": "General Purpose",
       "prompts": [
-        "Convert integer tensor to float with ITOF, perform computation, convert back with FTOI",
-        "Compute modulo with MOD for cyclic indexing",
-        "Bitwise NOT with BNOT for mask inversion",
-        "System call with SYS to print intermediate values during debugging"
+        {
+          "label": "ITOF / FTOI conversion",
+          "text": "Convert integer tensor to float with ITOF, perform computation, convert back with FTOI",
+          "scenario": "Quantized inference — load int8 weights, cast to float for computation, convert predictions back to int"
+        },
+        {
+          "label": "Modulo indexing",
+          "text": "Compute modulo with MOD for cyclic indexing",
+          "scenario": "Ring buffer — cycle through a fixed-size buffer of recent observations for a sliding-window model"
+        },
+        {
+          "label": "Bitwise NOT mask",
+          "text": "Bitwise NOT with BNOT for mask inversion",
+          "scenario": "Attention masking — invert a padding mask so masked positions are ignored during attention"
+        },
+        {
+          "label": "SYS debug print",
+          "text": "System call with SYS to print intermediate values during debugging",
+          "scenario": "Debugging NaN loss — print activations at each layer to find where numerical instability starts"
+        }
+      ]
+    },
+    {
+      "name": "Real-World Problems",
+      "prompts": [
+        {
+          "label": "Customer churn prediction",
+          "text": "I have 10,000 customer records with features like tenure, monthly charges, contract type, and payment method. I want to predict which customers will cancel their subscription next month.",
+          "scenario": "Advisor will recommend: binary classification, MLP with dropout for the tabular dataset"
+        },
+        {
+          "label": "House price estimation",
+          "text": "I have a dataset of 5,000 houses with square footage, number of bedrooms, age, and neighborhood. I need to predict the sale price.",
+          "scenario": "Advisor will recommend: regression, linear or neural network depending on non-linearity"
+        },
+        {
+          "label": "Manufacturing defect detection",
+          "text": "I have sensor readings from a factory production line — temperature, pressure, vibration, and speed. Normal readings are abundant but defects are rare (< 2% of samples). I need to flag anomalies in real-time.",
+          "scenario": "Advisor will recommend: anomaly detection, autoencoder or threshold-based approach"
+        },
+        {
+          "label": "Email spam filter",
+          "text": "I need to classify incoming emails as spam or not spam based on word frequencies. Speed matters more than perfect accuracy — I get 100,000 emails per day.",
+          "scenario": "Advisor will recommend: binary classification, Naive Bayes for speed with text features"
+        },
+        {
+          "label": "Plant disease from leaf photos",
+          "text": "I have 2,000 leaf photographs labeled with one of 5 diseases. I want to build a model that can identify the disease from a new photo.",
+          "scenario": "Advisor will recommend: multi-class classification, CNN for image input"
+        },
+        {
+          "label": "Customer segmentation",
+          "text": "I have purchase history for 50,000 customers — total spend, frequency, recency, and average order value. I want to find natural customer groups for targeted marketing. No labels exist.",
+          "scenario": "Advisor will recommend: clustering, K-Means for unsupervised grouping"
+        },
+        {
+          "label": "Loan default risk scoring",
+          "text": "A bank wants to score loan applicants on their default risk. They have historical data on 20,000 past loans with income, credit score, loan amount, employment length, and whether the borrower defaulted. Regulators require the model to be explainable.",
+          "scenario": "Advisor will recommend: binary classification, decision tree or logistic regression for interpretability"
+        },
+        {
+          "label": "Product review sentiment",
+          "text": "I have 10,000 product reviews and need to classify each as positive, neutral, or negative sentiment.",
+          "scenario": "Advisor will recommend: multi-class classification, transformer or embedding + MLP for text"
+        },
+        {
+          "label": "Energy demand forecasting",
+          "text": "I have 3 years of hourly electricity consumption data for a building. I need to predict the next 24 hours of energy demand.",
+          "scenario": "Advisor will recommend: time series, sliding window MLP or transformer"
+        },
+        {
+          "label": "Distributed fraud scoring",
+          "text": "Five bank branches each have local transaction data they cannot share. I need each branch to train a fraud detector locally and combine their results for a consensus score.",
+          "scenario": "Advisor will recommend: NML Collective, TNET per worker + VOTE consensus"
+        }
       ]
     }
   ]

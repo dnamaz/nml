@@ -18,7 +18,8 @@ param(
     [int]$ThinkPort = 8084,
     [int]$CodePort = 8085,
     [int]$ServerPort = 8082,
-    [switch]$UseOllama
+    [switch]$UseOllama,
+    [string]$AdvisorLLM = ""
 )
 
 # Intel oneAPI — initialize SYCL runtime for Arc Pro B50
@@ -137,12 +138,17 @@ $ServerScript = Join-Path $Root "nml\serve\nml_server.py"
 Write-Host "Starting NML Server on port $ServerPort..." -ForegroundColor Magenta
 Write-Host "  Proxying to code model on port $CodePort" -ForegroundColor DarkGray
 
-$serverJob = Start-Process -FilePath "python" -ArgumentList @(
+$serverArgs = @(
     $ServerScript,
     "--http",
     "--port", $ServerPort,
     "--model", "http://127.0.0.1:${CodePort}"
-) -PassThru -WindowStyle Minimized
+)
+if ($AdvisorLLM) {
+    $serverArgs += @("--advisor-llm", $AdvisorLLM)
+    Write-Host "  ML Advisor: $AdvisorLLM" -ForegroundColor Yellow
+}
+$serverJob = Start-Process -FilePath "python" -ArgumentList $serverArgs -PassThru -WindowStyle Minimized
 $jobs += $serverJob
 Write-Host "  Server PID: $($serverJob.Id)" -ForegroundColor DarkGray
 
@@ -155,6 +161,12 @@ Write-Host ""
 Write-Host "  Pipeline UI:    http://localhost:$ServerPort" -ForegroundColor Cyan
 Write-Host "  Think model:    http://localhost:$ThinkPort" -ForegroundColor Blue
 Write-Host "  Code model:     http://localhost:$CodePort" -ForegroundColor Green
+if ($AdvisorLLM) {
+    Write-Host "  ML Advisor:     $AdvisorLLM" -ForegroundColor Yellow
+} else {
+    Write-Host "  ML Advisor:     KB-only (use -AdvisorLLM URL for cloud LLM)" -ForegroundColor DarkGray
+}
+Write-Host "  Advise API:     POST http://localhost:$ServerPort/advise" -ForegroundColor Yellow
 Write-Host "  Validated gen:  POST http://localhost:$ServerPort/generate_validated" -ForegroundColor Magenta
 Write-Host ""
 Write-Host "Press Ctrl+C to stop all services." -ForegroundColor Yellow

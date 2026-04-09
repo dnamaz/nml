@@ -35,8 +35,14 @@ Do NOT use TNET, TNDEEP, or training opcodes unless the user specifically asks t
 
 Your plan MUST include:
 
-1. TENSOR NAMES — named tensors with shape and purpose.
-   Example: @input shape=1,4, @weights shape=4,1
+1. DATA FILE — every named tensor the program needs, in .nml.data format.
+   For each tensor explain what it holds and why.
+   Use exact @name shape=rows,cols format so it can be copied directly.
+   Example:
+   @input      shape=1,4   ; one sample, 4 features (temperature, pressure, vibration, speed)
+   @weights    shape=4,1   ; learned weights connecting 4 inputs to 1 output
+   @bias       shape=1,1   ; output bias (initialize to 0.0)
+   @target     shape=1,1   ; expected output for training (e.g., failure probability)
 
 2. REGISTER LAYOUT — which register holds what.
    Example: R0=input, R1=weights, R2=result
@@ -130,7 +136,12 @@ function highlightNML(text) {
   return text.split("\n").map((line, i) => {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith(";")) {
-      return <div key={i} style={{ color: "#6a737d", minHeight: "1.4em" }}>{line || " "}</div>;
+      let commentColor = "#6a737d";
+      if (trimmed.includes("✓")) commentColor = "#3fb950";
+      else if (trimmed.includes("✗")) commentColor = "#f85149";
+      else if (trimmed.startsWith("; ── Attempt")) commentColor = "#8b949e";
+      else if (trimmed === "; validating..." || trimmed.includes("retrying")) commentColor = "#e3b341";
+      return <div key={i} style={{ color: commentColor, minHeight: "1.4em", fontWeight: trimmed.startsWith("; ──") ? 600 : 400 }}>{line || " "}</div>;
     }
     const parts = line.split(/(\s+)/);
     return (
@@ -153,19 +164,197 @@ function highlightNML(text) {
 
 
 function extractThinkContent(text) {
-  // Full <think>...</think> block
   const full = text.match(/<think>([\s\S]*?)<\/think>/);
   if (full) return full[1].trim();
-  // Closing </think> only — take everything before it
   const closing = text.match(/^([\s\S]*?)<\/think>/);
   if (closing) return closing[1].trim();
   return text.trim();
 }
 
+function generateDataTemplate(adviseText, thinkText, promptText) {
+  const all = [adviseText || "", thinkText || "", promptText || ""].join("\n");
+  const tensors = [];
+  const seen = new Set();
+  const MAX_DIM = 100;
+
+  // Extract explicit @name shape=R,C lines from advisor/think output
+  const explicitRe = /@(\w+)\s+shape\s*=\s*(\d+)\s*,\s*(\d+)/g;
+  let m;
+  while ((m = explicitRe.exec(all)) !== null) {
+    if (!seen.has(m[1])) {
+      seen.add(m[1]);
+      tensors.push({ name: m[1], rows: Math.min(parseInt(m[2]), MAX_DIM), cols: Math.min(parseInt(m[3]), MAX_DIM) });
+    }
+  }
+
+  // Extract from table/description patterns like "R0 | Training data | (N, 29)"
+  const tableRe = /(?:R\d+|@(\w+))\s*[|:—–-]\s*([^|(\n]+?)\s*[|]\s*\(?(\d+)\s*,\s*(\d+)\)?/g;
+  while ((m = tableRe.exec(all)) !== null) {
+    const name = m[1] || m[2].trim().toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      tensors.push({ name, rows: Math.min(parseInt(m[3]), MAX_DIM), cols: Math.min(parseInt(m[4]), MAX_DIM), desc: m[2].trim() });
+    }
+  }
+
+  // Extract from prose like "shape=(6,3)" or "[100,29]" near a @name or keyword
+  const shapeRe = /(?:@(\w+)|(\w+(?:_\w+)*))\s*(?:shape|Shape)?\s*[=:]\s*[\[(](\d+)\s*,\s*(\d+)[\])]/g;
+  while ((m = shapeRe.exec(all)) !== null) {
+    const name = m[1] || m[2];
+    if (name && !seen.has(name) && !/^[Rr]\d/.test(name)) {
+      seen.add(name);
+      tensors.push({ name, rows: Math.min(parseInt(m[3]), MAX_DIM), cols: Math.min(parseInt(m[4]), MAX_DIM) });
+    }
+  }
+
+  if (tensors.length === 0) return null;
+
+  const lines = ["; .nml.data — generated from Advisor/Think output", ";"];
+
+  // Categorize tensors
+  const isWeight = (n) => /^[wb]\d|weight|bias|gamma|beta|kernel/i.test(n);
+  const isLabel = (n) => /label|target/i.test(n);
+  const isConfig = (n) => /config/i.test(n);
+
+  const inputs = tensors.filter(t => !isWeight(t.name) && !isLabel(t.name) && !isConfig(t.name));
+  const weights = tensors.filter(t => isWeight(t.name));
+  const labels = tensors.filter(t => isLabel(t.name));
+  const configs = tensors.filter(t => isConfig(t.name));
+
+  const genData = (rows, cols) => {
+    const count = rows * cols;
+    return Array.from({ length: count }, () => (Math.random() * 0.4 - 0.2).toFixed(2)).join(",");
+  };
+
+  const genZeros = (rows, cols) => {
+    return Array(rows * cols).fill("0.0").join(",");
+  };
+
+  if (inputs.length) {
+    lines.push("; ── Input Data ──");
+    for (const t of inputs) {
+      if (t.desc) lines.push(`; ${t.desc}`);
+      lines.push(`@${t.name}  shape=${t.rows},${t.cols}  dtype=f32  data=${genData(t.rows, t.cols)}`);
+    }
+  }
+  if (labels.length) {
+    lines.push("", "; ── Labels / Targets ──");
+    for (const t of labels) {
+      if (t.desc) lines.push(`; ${t.desc}`);
+      lines.push(`@${t.name}  shape=${t.rows},${t.cols}  dtype=f32  data=${genZeros(t.rows, t.cols)}`);
+    }
+  }
+  if (weights.length) {
+    lines.push("", "; ── Model Weights (initialize small random or zeros) ──");
+    for (const t of weights) {
+      if (t.desc) lines.push(`; ${t.desc}`);
+      const data = /^b\d|bias/i.test(t.name) ? genZeros(t.rows, t.cols) : genData(t.rows, t.cols);
+      lines.push(`@${t.name}  shape=${t.rows},${t.cols}  dtype=f32  data=${data}`);
+    }
+  }
+  if (configs.length) {
+    lines.push("", "; ── Config ──");
+    for (const t of configs) {
+      if (t.desc) lines.push(`; ${t.desc}`);
+      lines.push(`@${t.name}  shape=${t.rows},${t.cols}  dtype=f32  data=${genZeros(t.rows, t.cols)}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function generateDataFromCode(nmlCode, contextText) {
+  const tensorRefs = new Set();
+  const re = /(?:LD|ST)\s+R\d+\s+@(\w+)/g;
+  let m;
+  while ((m = re.exec(nmlCode)) !== null) tensorRefs.add(m[1]);
+  if (tensorRefs.size === 0) return null;
+
+  const MAX_DIM = 100; // cap dimensions so data is fully executable
+
+  // Build a shape lookup from advisor/think context
+  const shapeLookup = {};
+  if (contextText) {
+    const shapeRe = /@(\w+)\s+shape\s*=\s*(\d+)\s*,\s*(\d+)/g;
+    while ((m = shapeRe.exec(contextText)) !== null) {
+      shapeLookup[m[1]] = {
+        rows: Math.min(parseInt(m[2]), MAX_DIM),
+        cols: Math.min(parseInt(m[3]), MAX_DIM),
+      };
+    }
+    const proseRe = /(?:@(\w+)|(\w+(?:_\w+)*))\s*(?:shape|Shape)?\s*[=:]\s*[\[(](\d+)\s*,\s*(\d+)[\])]/g;
+    while ((m = proseRe.exec(contextText)) !== null) {
+      const name = m[1] || m[2];
+      if (name && !shapeLookup[name]) {
+        shapeLookup[name] = {
+          rows: Math.min(parseInt(m[3]), MAX_DIM),
+          cols: Math.min(parseInt(m[4]), MAX_DIM),
+        };
+      }
+    }
+  }
+
+  const isWeight = (n) => /^[wb]\d|weight|bias|gamma|beta|kernel/i.test(n);
+  const isLabel = (n) => /label|target|train_y/i.test(n);
+  const isConfig = (n) => /config/i.test(n);
+  const isOutput = (n) => /output|result|prediction|pred/i.test(n);
+
+  const genData = (rows, cols) => {
+    const count = rows * cols;
+    return Array.from({ length: count }, () => (Math.random() * 0.4 - 0.2).toFixed(2)).join(",");
+  };
+  const genZeros = (rows, cols) => {
+    return Array(rows * cols).fill("0.0").join(",");
+  };
+
+  const inputs = [], weights = [], labels = [], configs = [], outputs = [];
+  for (const name of tensorRefs) {
+    const shape = shapeLookup[name] || { rows: 4, cols: 4 };
+    const entry = { name, ...shape };
+    if (isOutput(name))      outputs.push(entry);
+    else if (isWeight(name)) weights.push(entry);
+    else if (isLabel(name))  labels.push(entry);
+    else if (isConfig(name)) configs.push(entry);
+    else                     inputs.push(entry);
+  }
+
+  const lines = ["; .nml.data — generated from NML code tensor references", ";"];
+
+  if (inputs.length) {
+    lines.push("; ── Input Data ──");
+    for (const t of inputs)
+      lines.push(`@${t.name}  shape=${t.rows},${t.cols}  dtype=f32  data=${genData(t.rows, t.cols)}`);
+  }
+  if (labels.length) {
+    lines.push("", "; ── Labels / Targets ──");
+    for (const t of labels)
+      lines.push(`@${t.name}  shape=${t.rows},${t.cols}  dtype=f32  data=${genZeros(t.rows, t.cols)}`);
+  }
+  if (weights.length) {
+    lines.push("", "; ── Model Weights ──");
+    for (const t of weights) {
+      const data = /^b\d|bias/i.test(t.name) ? genZeros(t.rows, t.cols) : genData(t.rows, t.cols);
+      lines.push(`@${t.name}  shape=${t.rows},${t.cols}  dtype=f32  data=${data}`);
+    }
+  }
+  if (configs.length) {
+    lines.push("", "; ── Config ──");
+    for (const t of configs)
+      lines.push(`@${t.name}  shape=${t.rows},${t.cols}  dtype=f32  data=${genZeros(t.rows, t.cols)}`);
+  }
+  if (outputs.length) {
+    lines.push("", "; ── Output (placeholder) ──");
+    for (const t of outputs)
+      lines.push(`@${t.name}  shape=${t.rows},${t.cols}  dtype=f32  data=${genZeros(t.rows, t.cols)}`);
+  }
+
+  return lines.join("\n");
+}
+
 // ── Panel component ───────────────────────────────────────────────────────────
 function Panel({ title, subtitle, color, content, isCode, loading, error, children }) {
-  const borderColor = color === "think" ? "#388bfd" : "#3fb950";
-  const labelColor  = color === "think" ? "#79b8ff" : "#56d364";
+  const borderColor = color === "think" ? "#388bfd" : color === "advise" ? "#d29922" : "#3fb950";
+  const labelColor  = color === "think" ? "#79b8ff" : color === "advise" ? "#e3b341" : "#56d364";
 
   return (
     <div style={{
@@ -199,13 +388,13 @@ function Panel({ title, subtitle, color, content, isCode, loading, error, childr
         fontSize: 13, lineHeight: 1.6, color: "#e6edf3",
         minHeight: 300, whiteSpace: "pre-wrap",
       }}>
-        {loading && (
+        {loading && !content && (
           <div style={{ color: "#8b949e", fontStyle: "italic" }}>Generating...</div>
         )}
         {error && (
           <div style={{ color: "#f85149" }}>{error}</div>
         )}
-        {!loading && !error && content && (
+        {content && (
           isCode ? highlightNML(content) : <span style={{ color: "#e6edf3" }}>{content}</span>
         )}
         {!loading && !error && !content && (
@@ -231,7 +420,7 @@ function PromptLibrary({ onSelect }) {
 
   return (
     <div style={{
-      width: 240, flexShrink: 0, background: "#161b22",
+      width: 280, flexShrink: 0, background: "#161b22",
       borderRight: "1px solid #30363d", overflowY: "auto",
       display: "flex", flexDirection: "column",
     }}>
@@ -262,24 +451,33 @@ function PromptLibrary({ onSelect }) {
             <span style={{ color: "#8b949e" }}>{expanded[cat.name] ? "▾" : "▸"}</span>
             {cat.name}
           </button>
-          {expanded[cat.name] && cat.prompts.map((p, i) => (
-            <button
-              key={i}
-              onClick={() => onSelect(p)}
-              style={{
-                width: "100%", textAlign: "left",
-                padding: "6px 14px 6px 26px",
-                background: "none", border: "none", cursor: "pointer",
-                color: "#8b949e", fontSize: 11, lineHeight: 1.4,
-                borderBottom: "1px solid #21262d",
-                transition: "color 0.15s, background 0.15s",
-              }}
-              onMouseEnter={e => { e.target.style.color="#e6edf3"; e.target.style.background="#21262d"; }}
-              onMouseLeave={e => { e.target.style.color="#8b949e"; e.target.style.background="none"; }}
-            >
-              {p}
-            </button>
-          ))}
+          {expanded[cat.name] && cat.prompts.map((p, i) => {
+            const isObj = typeof p === "object";
+            const label = isObj ? p.label : p;
+            const scenario = isObj ? p.scenario : null;
+            const text = isObj ? p.text : p;
+            return (
+              <button
+                key={i}
+                onClick={() => onSelect(text)}
+                style={{
+                  width: "100%", textAlign: "left",
+                  padding: "6px 14px 6px 26px",
+                  background: "none", border: "none", cursor: "pointer",
+                  color: "#8b949e", fontSize: 11, lineHeight: 1.4,
+                  borderBottom: "1px solid #21262d",
+                  transition: "background 0.15s",
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background="#21262d"; }}
+                onMouseLeave={e => { e.currentTarget.style.background="none"; }}
+              >
+                <div style={{ color: "#c9d1d9", fontWeight: 500 }}>{label}</div>
+                {scenario && (
+                  <div style={{ color: "#6e7681", fontSize: 10, marginTop: 2, lineHeight: 1.3 }}>{scenario}</div>
+                )}
+              </button>
+            );
+          })}
         </div>
       ))}
     </div>
@@ -289,6 +487,10 @@ function PromptLibrary({ onSelect }) {
 // ── Main app ──────────────────────────────────────────────────────────────────
 export default function NMLPipeline() {
   const [prompt, setPrompt]               = useState("");
+  const [adviseOut, setAdviseOut]         = useState("");
+  const [adviseLoading, setAdviseLoading] = useState(false);
+  const [adviseError, setAdviseError]     = useState("");
+  const [adviseMeta, setAdviseMeta]       = useState(null);
   const [thinkOut, setThinkOut]           = useState("");
   const [codeOut, setCodeOut]             = useState("");
   const [thinkLoading, setThinkLoading]   = useState(false);
@@ -328,6 +530,53 @@ export default function NMLPipeline() {
 @b1               shape=1,4  dtype=f32  data=0.0,0.0,0.0,0.0
 @w2               shape=4,1  dtype=f32  data=0.2,-0.1,0.3,-0.2
 @b2               shape=1,1  dtype=f32  data=0.0`;
+
+  const runAdvise = async (desc) => {
+    setAdviseLoading(true);
+    setAdviseError("");
+    setAdviseOut("");
+    setAdviseMeta(null);
+    try {
+      const r = await fetch(`http://localhost:${SERVER_PORT}/advise`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: desc }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      if (data.llm_error) {
+        setAdviseError(`LLM fallback: ${data.llm_error}`);
+      }
+      if (data.advice) {
+        setAdviseOut(data.advice);
+        setAdviseMeta({ source: data.source, model: data.model, types: data.problem_types_matched });
+      } else if (data.recommendation) {
+        const lines = [
+          `**Problem Type:** ${data.problem_type}`,
+          `**Recommended:** ${data.recommendation}`,
+          `**Why:** ${data.why}`,
+          `**NML Pattern:** ${data.nml_pattern}`,
+          `**Opcodes:** ${(data.nml_opcodes || []).join(", ")}`,
+          `**Lesson:** ${data.lesson_ref}`,
+        ];
+        if (data.sample) lines.push(`**Sample:** ${data.sample}`);
+        if (data.alternatives?.length) {
+          lines.push("", "**Alternatives:**");
+          data.alternatives.forEach(a => lines.push(`  • ${a.name} — ${a.when} (${a.complexity})`));
+        }
+        setAdviseOut(lines.join("\n"));
+        setAdviseMeta({ source: data.source, types: [data.problem_type] });
+      } else {
+        setAdviseOut(JSON.stringify(data, null, 2));
+      }
+      return data;
+    } catch (e) {
+      setAdviseError(`Error: ${e.message}`);
+      return null;
+    } finally {
+      setAdviseLoading(false);
+    }
+  };
 
   const callModel = async (base, system, userMsg, setOut, setLoading, setError, maxTokens = 800, model = undefined) => {
     setLoading(true);
@@ -410,27 +659,87 @@ export default function NMLPipeline() {
 
 
   const runValidated = async (codePrompt) => {
+    const MAX_RETRIES = 3;
+    const MAX_TOKENS = 600;
     setValidLoading(true);
     setValidStatus(null);
+    setCodeOut("");
+    setCodeError("");
+
+    let log = "";
+    const addLog = (line) => { log += line + "\n"; setCodeOut(log); };
+
+    const messages = [
+      { role: "system", content: CODE_SYSTEM },
+      { role: "user",   content: codePrompt },
+    ];
+
+    const history = [];
+
     try {
-      const r = await fetch(`http://localhost:${SERVER_PORT}/generate_validated`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: codePrompt,
-          max_retries: 3,
-          max_tokens: 600,
-        }),
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        // ── Generate ──
+        addLog(`; ── Attempt ${attempt}/${MAX_RETRIES} ── Generating...`);
+
+        const genR = await fetch(`${CODE_BASE}/chat/completions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages, max_tokens: MAX_TOKENS, stream: false }),
+        });
+        if (!genR.ok) throw new Error(`Code model HTTP ${genR.status}`);
+        const genData = await genR.json();
+        const rawText = genData.choices?.[0]?.message?.content || "";
+
+        let code = rawText.replace(/<think>[\s\S]*?<\/think>/g, "");
+        code = code.replace(/```[a-z]*\n?|```/g, "").trim();
+
+        log = log.replace(/; ── Attempt \d+\/\d+ ── Generating\.\.\.\n$/, "");
+        addLog(`; ── Attempt ${attempt}/${MAX_RETRIES} ──`);
+        addLog(code);
+
+        // ── Validate grammar ──
+        addLog(`; validating...`);
+
+        const valR = await fetch(`http://localhost:${SERVER_PORT}/validate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nml_program: code }),
+        });
+        if (!valR.ok) throw new Error(`Validate HTTP ${valR.status}`);
+        const valResult = await valR.json();
+
+        if (valResult.valid) {
+          log = log.replace(/; validating\.\.\.\n$/, "");
+          addLog(`; ✓ valid`);
+          setValidStatus({ valid: true, attempts: attempt, code, history });
+          setCodeOut(code);
+          return { valid: true, code, attempts: attempt };
+        }
+
+        const errorsText = (valResult.errors || [])
+          .map(e => e.message || JSON.stringify(e)).join("; ");
+
+        log = log.replace(/; validating\.\.\.\n$/, "");
+        addLog(`; ✗ ${errorsText}`);
+
+        history.push({ attempt, stage: "grammar", code, errors: errorsText });
+
+        if (attempt < MAX_RETRIES) {
+          addLog(`; retrying with error feedback...\n`);
+          messages.push({ role: "assistant", content: rawText });
+          messages.push({ role: "user", content:
+            `Your NML code had errors. Fix them.\n\nPrevious code:\n${code}\n\nErrors:\n${errorsText}\n\nOutput only the corrected NML code.`
+          });
+        }
+      }
+
+      const last = history[history.length - 1] || {};
+      setValidStatus({
+        valid: false, attempts: MAX_RETRIES, code: last.code || "",
+        stage: "grammar", grammar_errors: [last.errors || ""], history,
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const result = await r.json();
-      setValidStatus(result);
-      if (result.code) setCodeOut(result.code);
-      if (!result.valid && result.grammar_errors?.length)
-        setCodeError(`Validation failed: ${result.grammar_errors[0]}`);
-      if (!result.valid && result.runtime_errors?.length)
-        setCodeError(`Runtime error: ${result.runtime_errors[0]}`);
-      return result;
+      setCodeError(`Validation failed after ${MAX_RETRIES} attempts`);
+      return null;
     } catch (e) {
       setCodeError(`Validation error: ${e.message}`);
       return null;
@@ -446,20 +755,57 @@ export default function NMLPipeline() {
     setExecOut(null);
     setValidStatus(null);
 
-    const raw = await runThink(prompt);
+    // Stage 0: Advise — get ML algorithm recommendation
+    const adviceData = await runAdvise(prompt);
+    let adviceContext = "";
+    if (adviceData) {
+      if (adviceData.advice) {
+        adviceContext = adviceData.advice.slice(0, 600);
+      } else if (adviceData.recommendation) {
+        adviceContext = `Algorithm: ${adviceData.recommendation}. ${adviceData.why} NML pattern: ${adviceData.nml_pattern}`;
+      }
+    }
+
+    // Stage 1: Think — enrich with advisor context
+    const thinkPrompt = adviceContext
+      ? `${prompt}\n\nML Advisor recommendation:\n${adviceContext}`
+      : prompt;
+    const raw = await runThink(thinkPrompt);
     if (!raw) return;
 
+    // Stage 2: Code — validated generation
     const reasoning = extractThinkContent(raw);
     const codePrompt = `Generate NML assembly for: ${prompt}\n\nFollow this plan exactly — do not add extra operations:\n${reasoning.slice(0, 1000)}`;
+    const codeResult = await runValidated(codePrompt);
 
-    // Use validated generation — generates, validates, retries automatically
-    await runValidated(codePrompt);
+    // Stage 3: Auto-generate data template from code tensor references
+    if (codeResult?.valid && codeResult.code) {
+      const contextText = [adviseOut || "", raw || "", prompt].join("\n");
+      const tpl = generateDataFromCode(codeResult.code, contextText);
+      if (tpl) {
+        setDataInput(tpl);
+        setShowData(true);
+      }
+    }
+  };
+
+  const runAdvisePipeline = async () => {
+    if (!prompt.trim()) return;
+    await runAdvise(prompt);
   };
 
   const sendToCode = async () => {
     if (!thinkOut) return;
     const codePrompt = `Generate NML assembly for: ${prompt}\n\nFollow this plan exactly — do not add extra operations:\n${thinkOut.slice(0, 1000)}`;
-    await runValidated(codePrompt);
+    const codeResult = await runValidated(codePrompt);
+    if (codeResult?.valid && codeResult.code) {
+      const contextText = [adviseOut || "", thinkOut || "", prompt].join("\n");
+      const tpl = generateDataFromCode(codeResult.code, contextText);
+      if (tpl) {
+        setDataInput(tpl);
+        setShowData(true);
+      }
+    }
   };
 
   const handleKeyDown = (e) => {
@@ -502,7 +848,7 @@ export default function NMLPipeline() {
         }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: "#e6edf3" }}>NML Pipeline</div>
-            <div style={{ fontSize: 11, color: "#8b949e" }}>Think → Code → Execute &nbsp;·&nbsp; 89 opcodes &nbsp;·&nbsp; v0.10.0</div>
+            <div style={{ fontSize: 11, color: "#8b949e" }}>Advise → Think → Code → Execute &nbsp;·&nbsp; 89 opcodes &nbsp;·&nbsp; v0.10.0</div>
           </div>
           <button onClick={() => setShowVersions(v => !v)} style={{
             background: showVersions ? "#388bfd22" : "none",
@@ -564,93 +910,163 @@ export default function NMLPipeline() {
             }}
           />
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={runPipeline} disabled={!prompt.trim() || thinkLoading || codeLoading}
-              style={btnStyle("#388bfd", !prompt.trim() || thinkLoading || codeLoading)}>
+            <button onClick={runPipeline} disabled={!prompt.trim() || adviseLoading || thinkLoading || codeLoading}
+              style={btnStyle("#388bfd", !prompt.trim() || adviseLoading || thinkLoading || codeLoading)}>
               ▶ Run Pipeline
+            </button>
+            <button onClick={runAdvisePipeline} disabled={!prompt.trim() || adviseLoading}
+              style={btnStyle("#d29922", !prompt.trim() || adviseLoading)}>
+              Advise
             </button>
             <button onClick={() => runThink(prompt)} disabled={!prompt.trim() || thinkLoading}
               style={btnStyle("#1f6feb", !prompt.trim() || thinkLoading)}>
-              Think only
-            </button>
-            <button onClick={sendToCode} disabled={!thinkOut || codeLoading}
-              style={btnStyle("#2ea043", !thinkOut || codeLoading)}>
-              → Send to Code
-            </button>
-            <button onClick={() => codeOut && runExecute(codeOut)} disabled={!codeOut || execLoading}
-              style={btnStyle("#6e40c9", !codeOut || execLoading)}>
-              ⚡ Execute
+              Think
             </button>
             <button
-              onClick={() => setShowData(v => !v)}
-              style={{ ...smallBtn(showData), padding: "7px 12px", fontSize: 12 }}>
-              {showData ? "Hide Data" : "Data ▾"}
-            </button>
-            <button
-              onClick={() => { setThinkOut(""); setThinkRaw(""); setCodeOut(""); setThinkError(""); setCodeError(""); setExecOut(null); setExecError(""); setValidStatus(null); }}
+              onClick={() => { setAdviseOut(""); setAdviseError(""); setAdviseMeta(null); setThinkOut(""); setThinkRaw(""); setCodeOut(""); setThinkError(""); setCodeError(""); setExecOut(null); setExecError(""); setValidStatus(null); }}
               style={{ ...btnStyle("#21262d", false), color: "#8b949e", marginLeft: "auto" }}>
               Clear
             </button>
           </div>
 
-          {/* Data input */}
-          {showData && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 11, color: "#8b949e" }}>.nml.data — tensor definitions passed to Execute</span>
-                <button onClick={() => setShowDataHelp(v => !v)} style={smallBtn(showDataHelp)}>
-                  {showDataHelp ? "Hide format" : "Format help"}
-                </button>
-                <button onClick={() => setDataInput(DATA_TEMPLATE)} style={smallBtn(false)}>
-                  Load template
-                </button>
-              </div>
-              {showDataHelp && (
-                <pre style={{
-                  margin: 0, padding: "10px 12px", background: "#0d1117",
-                  border: "1px solid #21262d", borderRadius: 6,
-                  fontSize: 11, color: "#8b949e", overflowX: "auto",
-                }}>{DATA_TEMPLATE}</pre>
-              )}
-              <textarea
-                value={dataInput}
-                onChange={e => setDataInput(e.target.value)}
-                placeholder="@input shape=1,4 dtype=f32 data=0.5,0.3,0.8,0.1"
-                rows={4}
-                style={{
-                  width: "100%", background: "#0d1117", color: "#e6edf3",
-                  border: "1px solid #30363d", borderRadius: 6,
-                  padding: "8px 12px", fontSize: 12, fontFamily: "inherit",
-                  resize: "vertical", outline: "none", boxSizing: "border-box",
-                }}
-              />
-            </div>
-          )}
         </div>
 
         {/* Panels */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {/* Think + Code panels */}
+          {/* Advise + Think + Code panels */}
           <div style={{ flex: 1, display: "flex", gap: 12, padding: "12px 16px 6px", overflow: "hidden" }}>
-            <Panel title="Think Model" subtitle="nml-4b-think Q6 · Architecture Planning"
-              color="think" content={showThinkRaw ? thinkRaw : thinkOut}
-              isCode={false} loading={thinkLoading} error={thinkError}>
-              {thinkOut && (
-                <button onClick={() => setShowThinkRaw(v => !v)} style={smallBtn(showThinkRaw)}>
-                  {showThinkRaw ? "Show clean" : "Show raw"}
-                </button>
-              )}
+            <Panel
+              title="Advisor"
+              subtitle={adviseMeta
+                ? `${adviseMeta.source === "llm" ? adviseMeta.model || "Cloud LLM" : "Knowledge Base"} · ${(adviseMeta.types || []).join(", ")}`
+                : "Algorithm Selection · When & Why"
+              }
+              color="advise" content={adviseOut}
+              isCode={false} loading={adviseLoading} error={adviseError}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {adviseOut && (
+                  <button onClick={() => navigator.clipboard?.writeText(adviseOut)} style={smallBtn(false)}>
+                    Copy
+                  </button>
+                )}
+                {adviseOut && (
+                  <button onClick={() => {
+                    const thinkPrompt = adviseOut
+                      ? `${prompt}\n\nML Advisor recommendation:\n${adviseOut.slice(0, 600)}`
+                      : prompt;
+                    runThink(thinkPrompt);
+                  }} disabled={thinkLoading}
+                    style={{ ...smallBtn(false), color: thinkLoading ? "#8b949e" : "#79b8ff", borderColor: "#388bfd" }}>
+                    → Think
+                  </button>
+                )}
+              </div>
             </Panel>
 
-            <Panel title="Code Model"
+            <Panel title="Think" subtitle="nml-4b-think Q6 · Architecture Planning"
+              color="think" content={showThinkRaw ? thinkRaw : thinkOut}
+              isCode={false} loading={thinkLoading} error={thinkError}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {thinkOut && (
+                  <button onClick={() => navigator.clipboard?.writeText(thinkOut)} style={smallBtn(false)}>
+                    Copy
+                  </button>
+                )}
+                {thinkOut && (
+                  <button onClick={() => setShowThinkRaw(v => !v)} style={smallBtn(showThinkRaw)}>
+                    {showThinkRaw ? "Show clean" : "Show raw"}
+                  </button>
+                )}
+                {thinkOut && (
+                  <button onClick={() => {
+                    const tpl = generateDataTemplate(adviseOut, thinkOut, prompt);
+                    if (tpl) { setDataInput(tpl); setShowData(true); }
+                  }}
+                    style={{ ...smallBtn(false), color: "#e3b341", borderColor: "#d29922" }}>
+                    → Data
+                  </button>
+                )}
+                {thinkOut && (
+                  <button onClick={sendToCode} disabled={codeLoading}
+                    style={{ ...smallBtn(false), color: codeLoading ? "#8b949e" : "#56d364", borderColor: "#3fb950" }}>
+                    → Code
+                  </button>
+                )}
+              </div>
+            </Panel>
+
+            {/* Data + Code column */}
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, gap: 6 }}>
+              {/* Data input — collapsible above Code */}
+              <div style={{
+                background: "#161b22", borderRadius: 6,
+                border: "1px solid #30363d22", flexShrink: 0,
+              }}>
+                <button onClick={() => setShowData(v => !v)} style={{
+                  width: "100%", textAlign: "left", padding: "6px 12px",
+                  background: "none", border: "none", cursor: "pointer",
+                  color: "#8b949e", fontSize: 11, fontWeight: 600,
+                  display: "flex", alignItems: "center", gap: 6,
+                }}>
+                  <span>{showData ? "▾" : "▸"}</span>
+                  Data
+                  {dataInput && <span style={{ color: "#3fb950", fontSize: 9 }}>●</span>}
+                </button>
+                {showData && (
+                  <div style={{ padding: "0 10px 8px", display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {(adviseOut || thinkOut || codeOut) && (
+                        <button onClick={() => {
+                          const contextText = [adviseOut || "", thinkOut || "", prompt].join("\n");
+                          const tpl = codeOut
+                            ? (generateDataFromCode(codeOut, contextText) || generateDataTemplate(adviseOut, thinkOut, prompt))
+                            : generateDataTemplate(adviseOut, thinkOut, prompt);
+                          if (tpl) { setDataInput(tpl); }
+                          else { alert("No tensor shapes found. Run the pipeline or Think first."); }
+                        }} style={{ ...smallBtn(false), color: "#e3b341", borderColor: "#d29922" }}>
+                          Generate
+                        </button>
+                      )}
+                      <button onClick={() => setShowDataHelp(v => !v)} style={smallBtn(showDataHelp)}>
+                        {showDataHelp ? "Hide format" : "Format"}
+                      </button>
+                      <button onClick={() => setDataInput(DATA_TEMPLATE)} style={smallBtn(false)}>
+                        Template
+                      </button>
+                    </div>
+                    {showDataHelp && (
+                      <pre style={{
+                        margin: 0, padding: "8px 10px", background: "#0d1117",
+                        border: "1px solid #21262d", borderRadius: 4,
+                        fontSize: 10, color: "#8b949e", overflowX: "auto", maxHeight: 120,
+                      }}>{DATA_TEMPLATE}</pre>
+                    )}
+                    <textarea
+                      value={dataInput}
+                      onChange={e => setDataInput(e.target.value)}
+                      placeholder="@input shape=1,4 dtype=f32 data=0.5,0.3,0.8,0.1"
+                      rows={3}
+                      style={{
+                        width: "100%", background: "#0d1117", color: "#e6edf3",
+                        border: "1px solid #30363d", borderRadius: 4,
+                        padding: "6px 10px", fontSize: 11, fontFamily: "inherit",
+                        resize: "vertical", outline: "none", boxSizing: "border-box",
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+
+            <Panel title="Code"
               subtitle={
                 validStatus
-                  ? `nml-1.5b · ${validStatus.valid ? "Validated" : "Failed"} · ${validStatus.attempts} attempt${validStatus.attempts > 1 ? "s" : ""}`
+                  ? `nml-1.5b · ${validStatus.valid ? "Validated ✓" : "Failed ✗"} · ${validStatus.attempts} attempt${validStatus.attempts > 1 ? "s" : ""}`
                   : validLoading
-                  ? "nml-1.5b · Validating..."
+                  ? "nml-1.5b · Generate → Validate → Retry..."
                   : "nml-1.5b-instruct-v0.10.0 · NML Assembly"
               }
               color="code" content={codeOut}
-              isCode={true} loading={codeLoading || validLoading} error={codeError}>
+              isCode={true} loading={codeLoading && !validLoading} error={codeError}>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 {/* Validation badge */}
                 {validStatus && (
@@ -677,6 +1093,7 @@ export default function NMLPipeline() {
                 )}
               </div>
             </Panel>
+            </div>
           </div>
 
           {/* Execution output */}
