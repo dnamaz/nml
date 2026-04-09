@@ -26,7 +26,7 @@ PORT_CODE=8086
 
 # ── Model paths ─────────────────────────────────────────────────────────
 THINK_MODEL="$ROOT/nml-model-training/models/nml-think-v2-merged/nml-think-v2-Q8_0.gguf"
-CODE_MODEL="$ROOT/nml-model-training/models/nml-1.5b-instruct-v0.10.0-f16.gguf"
+CODE_MODEL="$ROOT/nml-model-training/output/nml-1.5b-v0.11.0/nml-1.5b-instruct-v0.10.0-20260406-f16.gguf"
 
 # ── Defaults ────────────────────────────────────────────────────────────
 LLAMA_SERVER="llama-server"

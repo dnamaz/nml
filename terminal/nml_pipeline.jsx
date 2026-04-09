@@ -716,8 +716,16 @@ export default function NMLPipeline() {
           return { valid: true, code, attempts: attempt };
         }
 
-        const errorsText = (valResult.errors || [])
-          .map(e => e.message || JSON.stringify(e)).join("; ");
+        const errors = valResult.errors || [];
+        const errorsText = errors.map(e => e.message || JSON.stringify(e)).join("; ");
+
+        // Build structured error feedback for the LLM
+        const structuredFeedback = errors.map(e => {
+          let line = `Line ${e.line}: [${e.type || e.errorType}] ${e.message}`;
+          if (e.source) line += `\n  Source: ${e.source}`;
+          if (e.fix) line += `\n  Fix:    ${e.fix}`;
+          return line;
+        }).join("\n");
 
         log = log.replace(/; validating\.\.\.\n$/, "");
         addLog(`; ✗ ${errorsText}`);
@@ -728,7 +736,7 @@ export default function NMLPipeline() {
           addLog(`; retrying with error feedback...\n`);
           messages.push({ role: "assistant", content: rawText });
           messages.push({ role: "user", content:
-            `Your NML code had errors. Fix them.\n\nPrevious code:\n${code}\n\nErrors:\n${errorsText}\n\nOutput only the corrected NML code.`
+            `Your NML code had errors. Fix them.\n\nPrevious code:\n${code}\n\nErrors:\n${structuredFeedback}\n\nFix ONLY the errors listed above using the correct operand schemas shown. Output only the corrected NML code.`
           });
         }
       }

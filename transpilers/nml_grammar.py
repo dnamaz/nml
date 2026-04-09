@@ -23,6 +23,8 @@ class GrammarError:
     line: int
     error_type: str
     message: str
+    source: str = ""       # the offending source line
+    fix: str = ""          # actionable fix hint (schema, example, or suggestion)
 
 
 @dataclass
@@ -30,6 +32,8 @@ class GrammarWarning:
     line: int
     warning_type: str
     message: str
+    source: str = ""
+    fix: str = ""
 
 
 @dataclass
@@ -45,8 +49,18 @@ class GrammarReport:
     def to_dict(self) -> dict:
         return {
             "valid": self.valid,
-            "errors": [{"line": e.line, "type": e.error_type, "message": e.message} for e in self.errors],
-            "warnings": [{"line": w.line, "type": w.warning_type, "message": w.message} for w in self.warnings],
+            "errors": [
+                {"line": e.line, "type": e.error_type, "message": e.message,
+                 **({"source": e.source} if e.source else {}),
+                 **({"fix": e.fix} if e.fix else {})}
+                for e in self.errors
+            ],
+            "warnings": [
+                {"line": w.line, "type": w.warning_type, "message": w.message,
+                 **({"source": w.source} if w.source else {}),
+                 **({"fix": w.fix} if w.fix else {})}
+                for w in self.warnings
+            ],
             "instruction_count": self.instruction_count,
             "registers_used": sorted(self.registers_used),
             "memory_inputs": self.memory_inputs,
@@ -317,6 +331,89 @@ _STRUCTURAL_OPCODES = {"META", "PTCH", "SIGN"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Operand schemas for fix hints
+# ═══════════════════════════════════════════════════════════════════════════
+
+_OPERAND_SCHEMAS: dict[str, str] = {
+    "LD": "Rd @memory|Rs|#imm", "ST": "Rs @memory", "MOV": "Rd Rs|#imm|@memory", "ALLC": "Rd #[N]",
+    "MMUL": "Rd Rs1 Rs2", "MADD": "Rd Rs1 Rs2", "MSUB": "Rd Rs1 Rs2",
+    "EMUL": "Rd Rs1 Rs2", "EDIV": "Rd Rs1 Rs2",
+    "SDOT": "Rd Rs1 Rs2", "SCLR": "Rd Rs #imm", "SDIV": "Rd Rs1 Rs2|#imm",
+    "SADD": "Rd Rs Rs2|#imm", "SSUB": "Rd Rs Rs2|#imm",
+    "LEAF": "Rd #imm|@memory", "TACC": "Rd Rs [Rs2]",
+    "RELU": "Rd Rs", "SIGM": "Rd Rs", "TANH": "Rd Rs", "SOFT": "Rd Rs", "GELU": "Rd Rs",
+    "RSHP": "Rd Rs [#shape]", "TRNS": "Rd [Rs]", "SPLT": "Rd Rs [#idx] [#count]", "MERG": "Rd Rs1 [Rs2] [Rs3]",
+    "CMPF": "Rflag Rs [#threshold] [Rs2]", "CMP": "Rflag Rs", "CMPI": "Rflag Rs|#imm [#imm]",
+    "JMPT": "#offset", "JMPF": "#offset", "JUMP": "#offset",
+    "LOOP": "[Rs] [#count]", "ENDP": "",
+    "CALL": "#offset [Rs]", "RET": "", "SYNC": "", "HALT": "", "TRAP": "[#code]",
+    "CONV": "Rd Rs Rkernel [#stride] [#pad]", "POOL": "Rd Rs [#size] [#stride]",
+    "UPSC": "Rd Rs [#factor]", "PADZ": "Rd Rs [#amount]",
+    "ATTN": "Rd Rq Rk [Rv]", "NORM": "Rd Rs [Rgamma] [Rbeta]",
+    "EMBD": "Rd Rs [Rtable]", "RDUC": "Rd Rs [#op] [#axis]",
+    "WHER": "Rd Rmask Rs1 [Rs2]", "CLMP": "Rd Rs #min [#max]",
+    "CMPR": "Rd Rs1 Rs2 [#op]", "FFT": "Rd Rs [#inverse]", "FILT": "Rd Rs Rkernel [#mode]",
+    "FRAG": "name", "ENDF": "", "LINK": "@module",
+    "VRFY": "@prog @sig", "VOTE": "Rd Rs [#strategy] [#threshold]",
+    "PROJ": "Rd Rs Rweight", "DIST": "Rd Rs1 Rs2 [#metric]",
+    "GATH": "Rd Rs Ridx", "SCAT": "Rd Rs Ridx",
+    "SYS": "Rd #code", "MOD": "Rd Rs1 Rs2",
+    "ITOF": "Rd Rs", "FTOI": "Rd Rs", "BNOT": "Rd Rs",
+    "BKWD": "Rd Rs1 Rs2 [Rs3]", "WUPD": "Rd Rgrad Rlr [Rmomentum]",
+    "LOSS": "Rd Rpred Rtarget [#type]", "TNET": "Rconfig #epochs [#lr] ...",
+    "RELUBK": "Rd Rs Rgrad", "SIGMBK": "Rd Rs Rgrad", "TANHBK": "Rd Rs Rgrad",
+    "GELUBK": "Rd Rs Rgrad", "SOFTBK": "Rd Rs Rgrad",
+    "MMULBK": "RdA RdB Rs1 Rs2 Rgrad", "CONVBK": "RdI RdK Rs Rkernel Rgrad",
+    "POOLBK": "Rd Rs Rgrad [#size] [#stride]",
+    "NORMBK": "Rd Rs Rgrad", "ATTNBK": "RdQ RdK Rs Rgrad [Rv]",
+    "TNDEEP": "Rconfig #epochs [#lr] ...",
+    "TLOG": "[#level]", "TRAIN": "Rconfig [#epochs] [#lr]", "INFER": "[Rs] [Rd]", "WDECAY": "Rweights #lambda",
+    "BN": "Rd Rs [Rgamma] [Rbeta]", "DROP": "Rd Rs [#rate]",
+}
+
+
+def _levenshtein(a: str, b: str) -> int:
+    """Compute Levenshtein edit distance between two strings."""
+    m, n = len(a), len(b)
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev = dp[0]
+        dp[0] = i
+        for j in range(1, n + 1):
+            temp = dp[j]
+            dp[j] = prev if a[i - 1] == b[j - 1] else 1 + min(dp[j], dp[j - 1], prev)
+            prev = temp
+    return dp[n]
+
+
+def _suggest_opcode(unknown: str) -> str | None:
+    """Find the closest known opcode to an unknown string."""
+    upper = unknown.upper()
+    best, best_dist = None, float("inf")
+    for op in _CLASSIC_OPCODES:
+        d = _levenshtein(upper, op)
+        if d < best_dist:
+            best, best_dist = op, d
+    for v in _VERBOSE_TO_CANONICAL:
+        d = _levenshtein(upper, v)
+        if d < best_dist:
+            best, best_dist = v, d
+    max_dist = 2 if len(upper) <= 4 else 3
+    return best if best_dist <= max_dist else None
+
+
+def _get_schema(canonical: str) -> str | None:
+    """Get the operand schema string for a canonical opcode."""
+    return _OPERAND_SCHEMAS.get(canonical)
+
+
+def _schema_fix(canonical: str) -> str:
+    """Build a fix hint from the operand schema."""
+    schema = _get_schema(canonical)
+    return f"Correct usage: {canonical} {schema}" if schema else ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Operand classifiers
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -371,7 +468,7 @@ def _resolve_opcode(raw: str) -> str | None:
 # Operand-type validation per opcode category
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _validate_operands(canonical: str, opcode_raw: str, operands: list[str], line_no: int) -> list[GrammarError]:
+def _validate_operands(canonical: str, opcode_raw: str, operands: list[str], line_no: int, source_line: str = "") -> list[GrammarError]:
     """Type-check operands for a resolved canonical opcode."""
     errs: list[GrammarError] = []
 
@@ -518,6 +615,14 @@ def _validate_operands(canonical: str, opcode_raw: str, operands: list[str], lin
                 errs.append(GrammarError(line_no, "invalid_register",
                     f"Operand {i+1} of {opcode_raw} must be a register, got '{op}'"))
 
+    # Attach source line and fix hint to all operand errors
+    fix = _schema_fix(canonical)
+    for err in errs:
+        if not err.source:
+            err.source = source_line
+        if not err.fix:
+            err.fix = fix
+
     return errs
 
 
@@ -556,12 +661,25 @@ def validate_grammar(nml_program: str) -> GrammarReport:
         opcode_raw = tokens[0]
         operands = tokens[1:]
 
+        source_line = lines[line_no - 1].rstrip() if line_no <= len(lines) else ""
+
         canonical = _resolve_opcode(opcode_raw)
         if canonical is None:
+            suggestion = _suggest_opcode(opcode_raw)
+            if suggestion:
+                resolved = _OPCODE_TO_CANONICAL.get(suggestion, suggestion)
+                schema = _get_schema(resolved)
+                fix = f"Did you mean '{suggestion}'?"
+                if schema:
+                    fix += f" Usage: {suggestion} {schema}"
+            else:
+                fix = "See NML spec for valid opcodes"
             errors.append(GrammarError(
                 line=line_no,
                 error_type="invalid_opcode",
                 message=f"Unknown opcode '{opcode_raw}'",
+                source=source_line,
+                fix=fix,
             ))
             continue
 
@@ -581,6 +699,8 @@ def validate_grammar(nml_program: str) -> GrammarReport:
                     line=line_no,
                     error_type="unmatched_endf",
                     message="ENDF without matching FRAG",
+                    source=source_line,
+                    fix="Add a FRAG <name> instruction before this ENDF, or remove this ENDF",
                 ))
 
         # --- operand count ---
@@ -591,6 +711,8 @@ def validate_grammar(nml_program: str) -> GrammarReport:
                 line=line_no,
                 error_type="wrong_operand_count",
                 message=f"{opcode_raw} expects {expected} operands, got {len(operands)}",
+                source=source_line,
+                fix=_schema_fix(canonical),
             ))
             continue
 
@@ -602,7 +724,7 @@ def validate_grammar(nml_program: str) -> GrammarReport:
 
         # --- type-check operands ---
         if operands:
-            errs = _validate_operands(canonical, opcode_raw, operands, line_no)
+            errs = _validate_operands(canonical, opcode_raw, operands, line_no, source_line)
             errors.extend(errs)
 
         # --- track memory inputs / outputs ---
@@ -632,16 +754,21 @@ def validate_grammar(nml_program: str) -> GrammarReport:
                                 f"targets instruction {target+1}, "
                                 f"out of range 1..{total_instructions}"
                             ),
+                            source=source_line,
+                            fix=f"Use an offset between {-idx} and {total_instructions - 1 - idx} (relative to current instruction {idx+1})",
                         ))
                 except ValueError:
                     pass  # already reported by _validate_operands
 
     # --- unclosed fragments ---
     for frag_line, frag_name in fragment_stack:
+        frag_src = lines[frag_line - 1].rstrip() if frag_line <= len(lines) else ""
         warnings.append(GrammarWarning(
             line=frag_line,
             warning_type="unclosed_fragment",
             message=f"Fragment '{frag_name}' opened but never closed with ENDF",
+            source=frag_src,
+            fix="Add ENDF after the fragment body to close this block",
         ))
 
     # --- check program contains HALT ---
@@ -651,17 +778,22 @@ def validate_grammar(nml_program: str) -> GrammarReport:
             for _, tokens in instruction_lines
         )
         if not has_halt:
+            last_line_no = instruction_lines[-1][0]
             last_opcode = instruction_lines[-1][1][0]
+            last_src = lines[last_line_no - 1].rstrip() if last_line_no <= len(lines) else ""
             errors.append(GrammarError(
-                line=instruction_lines[-1][0],
+                line=last_line_no,
                 error_type="missing_halt",
                 message=f"Program does not contain HALT (last opcode: '{last_opcode}')",
+                source=last_src,
+                fix="Add HALT as the last instruction of the program",
             ))
     else:
         errors.append(GrammarError(
             line=0,
             error_type="missing_halt",
             message="Empty program — no instructions found",
+            fix="Write at least one instruction and end with HALT",
         ))
 
     # --- warnings ---
@@ -670,6 +802,7 @@ def validate_grammar(nml_program: str) -> GrammarReport:
             line=0,
             warning_type="no_output",
             message="Program has no store instructions — no outputs written",
+            fix="Add ST <register> @<name> to write results to named memory",
         ))
 
     return GrammarReport(
@@ -776,11 +909,17 @@ def main():
             print(f"\n  Errors ({len(report.errors)}):")
             for err in report.errors:
                 print(f"    L{err.line:>4}  [{err.error_type}] {err.message}")
+                if err.source:
+                    print(f"           Source: {err.source}")
+                if err.fix:
+                    print(f"           Fix:    {err.fix}")
 
         if report.warnings:
             print(f"\n  Warnings ({len(report.warnings)}):")
             for warn in report.warnings:
                 print(f"    L{warn.line:>4}  [{warn.warning_type}] {warn.message}")
+                if warn.fix:
+                    print(f"           Fix:    {warn.fix}")
 
         print()
 

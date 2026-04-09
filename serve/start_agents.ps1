@@ -5,7 +5,7 @@
 #
 # Models:
 #   Think: nml-think-v2 Q8_0 (architecture planning)
-#   Code:  nml-1.5b-instruct-v0.10.0 F16 (NML assembly generation)
+#   Code:  nml-1.5b-instruct-v0.11.0 F16 (NML assembly generation)
 #
 # Usage:
 #   .\start_agents.ps1                    # defaults (SYCL on Intel Arc Pro B50)
@@ -19,7 +19,8 @@ param(
     [int]$CodePort = 8085,
     [int]$ServerPort = 8082,
     [switch]$UseOllama,
-    [string]$AdvisorLLM = ""
+    [string]$AdvisorLLM = "",
+    [string]$AdvisorModel = "claude-opus-4-6"
 )
 
 # Intel oneAPI — initialize SYCL runtime for Arc Pro B50
@@ -45,11 +46,11 @@ $LlamaDir = Split-Path -Parent $LlamaPath
 
 # ── Model paths ──────────────────────────────────────────────────────────
 $ThinkModel = Join-Path $Root "nml-model-training\models\nml-think-v2-merged\nml-think-v2-Q8_0.gguf"
-$CodeModel  = Join-Path $Root "nml\domain\output\model\nml-1.5b-instruct-v0.10.0-f16.gguf"
+$CodeModel  = Join-Path $Root "nml-model-training\output\nml-1.5b-v0.11.0\nml-1.5b-instruct-v0.10.0-20260406-f16.gguf"
 
-# Fallback: check Q4_K_M version
+# Fallback: check original v0.10.0 location
 if (-not (Test-Path $CodeModel)) {
-    $CodeModel = Join-Path $Root "nml-model-training\output\nml-1.5b-v0.11.0\nml-1.5b-instruct-v0.10.0-20260406-q4_k_m.gguf"
+    $CodeModel = Join-Path $Root "nml\domain\output\model\nml-1.5b-instruct-v0.10.0-f16.gguf"
 }
 
 # ── Validation ───────────────────────────────────────────────────────────
@@ -146,7 +147,10 @@ $serverArgs = @(
 )
 if ($AdvisorLLM) {
     $serverArgs += @("--advisor-llm", $AdvisorLLM)
-    Write-Host "  ML Advisor: $AdvisorLLM" -ForegroundColor Yellow
+    if ($AdvisorModel) {
+        $serverArgs += @("--advisor-model", $AdvisorModel)
+    }
+    Write-Host "  ML Advisor: $AdvisorLLM ($AdvisorModel)" -ForegroundColor Yellow
 }
 $serverJob = Start-Process -FilePath "python" -ArgumentList $serverArgs -PassThru -WindowStyle Minimized
 $jobs += $serverJob
@@ -162,7 +166,7 @@ Write-Host "  Pipeline UI:    http://localhost:$ServerPort" -ForegroundColor Cya
 Write-Host "  Think model:    http://localhost:$ThinkPort" -ForegroundColor Blue
 Write-Host "  Code model:     http://localhost:$CodePort" -ForegroundColor Green
 if ($AdvisorLLM) {
-    Write-Host "  ML Advisor:     $AdvisorLLM" -ForegroundColor Yellow
+    Write-Host "  ML Advisor:     $AdvisorLLM ($AdvisorModel)" -ForegroundColor Yellow
 } else {
     Write-Host "  ML Advisor:     KB-only (use -AdvisorLLM URL for cloud LLM)" -ForegroundColor DarkGray
 }
