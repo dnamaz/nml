@@ -14,12 +14,12 @@
 
 param(
     [string]$Device = "SYCL0",
-    [string]$LlamaPath = "C:\llama.cpp\sycl\llama-server.exe",
+    [string]$LlamaPath = "G:\LLMs\llama-sycl\llama-server.exe",
     [int]$ThinkPort = 8084,
     [int]$CodePort = 8085,
     [int]$ServerPort = 8082,
     [switch]$UseOllama,
-    [string]$AdvisorLLM = "",
+    [string]$AdvisorLLM = "https://api.anthropic.com",
     [string]$AdvisorModel = "claude-opus-4-6"
 )
 
@@ -40,13 +40,23 @@ if (Test-Path $oneAPISetVars) {
     Write-Host "  Expected: $oneAPISetVars" -ForegroundColor Yellow
 }
 
+# ── Anthropic API key check ─────────────────────────────────────────────
+if ($AdvisorLLM -match "anthropic") {
+    if (-not $env:ANTHROPIC_API_KEY) {
+        Write-Host "ERROR: ANTHROPIC_API_KEY environment variable is not set." -ForegroundColor Red
+        Write-Host "  The advisor LLM ($AdvisorLLM) requires an Anthropic API key." -ForegroundColor Yellow
+        Write-Host "  Set it with: `$env:ANTHROPIC_API_KEY = 'sk-ant-...'" -ForegroundColor Yellow
+        exit 1
+    }
+}
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $LlamaDir = Split-Path -Parent $LlamaPath
 
 # ── Model paths ──────────────────────────────────────────────────────────
 $ThinkModel = Join-Path $Root "nml-model-training\models\nml-think-v2-merged\nml-think-v2-Q8_0.gguf"
-$CodeModel  = Join-Path $Root "nml-model-training\output\nml-1.5b-v0.11.0\nml-1.5b-instruct-v0.10.0-20260406-f16.gguf"
+$CodeModel  = Join-Path $Root "nml-model-training\output\nml-1.5b-v0.14.0\model-f16.gguf"
 
 # Fallback: check original v0.10.0 location
 if (-not (Test-Path $CodeModel)) {
@@ -143,7 +153,8 @@ $serverArgs = @(
     $ServerScript,
     "--http",
     "--port", $ServerPort,
-    "--model", "http://127.0.0.1:${CodePort}"
+    "--model", "http://127.0.0.1:${CodePort}",
+    "--think-model", "http://127.0.0.1:${ThinkPort}"
 )
 if ($AdvisorLLM) {
     $serverArgs += @("--advisor-llm", $AdvisorLLM)

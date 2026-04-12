@@ -15,13 +15,10 @@ function _getThinkPort() {
 }
 const SERVER_PORT = _getPort();
 const API_BASE    = `http://localhost:${SERVER_PORT}/v1`;
-// Think model: use dedicated port if available, fallback to server proxy
+// Think model: proxied through NML server to avoid CORS issues
 const THINK_PORT  = _getThinkPort();
-const THINK_BASE  = `http://localhost:${THINK_PORT}/v1`;
+const THINK_BASE  = `http://localhost:${SERVER_PORT}/v1/think`;
 const CODE_BASE   = API_BASE;
-
-// Auto-detect: if think port is same as server port, use server for both
-const THINK_ENDPOINT = THINK_PORT === SERVER_PORT ? API_BASE : THINK_BASE;
 
 const THINK_SYSTEM = `You are an NML v0.10.0 (Neural Machine Language) architecture planner.
 NML is an 89-opcode tensor register machine with 32 registers (R0-RV).
@@ -30,8 +27,8 @@ Translate the user's request into the SIMPLEST possible NML program. Do not add 
 CRITICAL: Match complexity to the request.
 - "add two tensors" → 3-4 instructions (LD, MADD, ST, HALT)
 - "dot product and scale" → 4-5 instructions (LD, SDOT, SCLR, ST, HALT)
-- "train a network" → use TNET (only when training is explicitly requested)
-Do NOT use TNET, TNDEEP, or training opcodes unless the user specifically asks to train.
+- "train a network" → use TRAIN+INFER (only when training is explicitly requested)
+Do NOT use TRAIN, INFER, or training opcodes unless the user specifically asks to train.
 
 Your plan MUST include:
 
@@ -63,11 +60,30 @@ Opcode quick reference:
   SDOT: dot product (3 registers)
   RELU/SIGM/TANH/GELU/SOFT: activations (2 registers)
   CLMP: clamp (Rd Rs #min #max)
-  TNET: training (Rconfig #epochs) — R0=data, R1=config[n_layers,3], R9=labels
+  TRAIN: config-driven training (TRAIN RU [@input @labels]) — RV=arch, RU=config[epochs,lr,optimizer,print_every,patience,min_delta]
+  INFER: forward pass only (INFER Rd R_input) — uses RV arch + R1-R6 weights from TRAIN
   LOSS: loss function (Rd Rpred Rlabel #type)
   BKWD: backward pass | WUPD: weight update (Rw Rgrad Rlr)
   CONV/POOL/ATTN/NORM/EMBD: vision/transformer ops
   HALT: must be last instruction
+
+Data type constraints:
+- Most opcodes operate on f32 (float) tensors
+- MOD requires INTEGER values (casts to int internally) — do NOT use with floats
+- ITOF converts int→float, FTOI converts float→int
+- EMBD Rindex values must be integers (token IDs)
+- LOSS #type: 0=MSE, 1=MAE, 2=cross-entropy
+- TRAIN/INFER: RV arch descriptor [n_layers, h1, act1, h2, act2, ...]. Activation: 0=relu, 1=sigmoid, 2=tanh
+- TRAIN config (RU): [epochs, lr, optimizer(0=SGD,1=Adam), print_every, patience, min_delta]
+
+Shape constraints:
+- MMUL: [M,K]×[K,N]→[M,N] — inner dims must match
+- CONV 2D: input[H,W] kernel[KH,KW]. 4D: input[N,C,H,W] kernel[Co,Ci,KH,KW]
+- ATTN: Q[S,D] K[S,D] must match. V[S,Dv] optional
+- LOSS: pred and label must have same shape [N,O]
+- TRAIN: RV=[n_layers, h1, act1, h2, act2, ...], R1-R6=weight/bias pairs, R0=input, R9=labels
+- SOFT: softmax over last dim, rows sum to 1
+- BN: data[N,F], gamma[F], beta[F]
 
 Rules:
 - MMUL, MADD, MSUB take 3 registers — never immediates
@@ -85,7 +101,7 @@ Activation: RELU Rd Rs | SIGM Rd Rs | TANH Rd Rs | GELU Rd Rs | SOFT Rd Rs
 Vision:    CONV Rd Rs Rkernel #stride #pad | POOL Rd Rs #size #stride | UPSC Rd Rs #factor | PADZ Rd Rs #amount
 Transformer: ATTN Rd Rq Rk Rv | NORM Rd Rs Rgamma Rbeta | EMBD Rd Rtable Rindex
 Reduction: RDUC Rd Rs #dim #mode | CLMP Rd Rs #min #max | WHER Rd Rcond Rs1 Rs2 | CMPR Rd Rs #op #thresh
-Training:  TNET Rconfig #epochs | LOSS Rd Rpred Rlabel #type | BKWD Rgrad Ract Rloss
+Training:  TRAIN RU [@data @labels] | INFER Rd R_input | LOSS Rd Rpred Rlabel #type | BKWD Rgrad Ract Rloss
            WUPD Rw Rgrad Rlr | BN Rd Rs Rgamma Rbeta | DROP Rd Rs #rate | WDECAY Rd #lambda
 Backward:  RELUBK/SIGMBK/TANHBK/GELUBK/SOFTBK Rd Rgrad Rin (3 ops)
            MMULBK Rd_di Rd_dw Rgrad Rin Rw | CONVBK Rd_di Rd_dk Rgrad Rin Rk (5 ops)
@@ -94,9 +110,20 @@ General:   SYS Rd #code | FILL Rd #rows #cols #val | CMP Rs1 Rs2 | CMPI Rd Rs #i
 Signal:    FFT Rd Rs Rtwiddle | FILT Rd Rs Rkernel
 Tree:      LEAF Rd #val | CMPF Rd Rs #feat #thresh
 
+Data type constraints:
+- Most opcodes operate on f32 (float) tensors
+- MOD requires INTEGER values — do NOT use with floats
+- ITOF converts int→float, FTOI converts float→int
+- EMBD Rindex values must be integers
+
+Shape constraints:
+- MMUL: [M,K]×[K,N]→[M,N] — inner dims must match
+- CONV 4D: input[N,C,H,W] kernel[Co,Ci,KH,KW] (Ci must match C)
+- ATTN: Q[S,D] K[S,D] must match
+- LOSS: pred and label must have same shape
+- TRAIN: RV=[n_layers,h1,act1,h2,act2,...], RU=[epochs,lr,optimizer,print_every,patience,min_delta], R0=data, R9=labels
+
 Rules:
-- MMUL needs compatible shapes: [M,K] × [K,N] → [M,N]
-- TNET register layout: R0=data, R1=config[n_layers,3], R9=labels. Config rows=[in,out,activation(0=relu)]
 - Always end with HALT
 - Use @named tensors with LD/ST for data file slots`;
 
@@ -129,7 +156,7 @@ const NML_VERSIONS = [
   { ver: "v0.7",   total: 82, opcodes: "BKWD WUPD LOSS TNET RELUBK SIGMBK TANHBK GELUBK SOFTBK MMULBK CONVBK POOLBK NORMBK ATTNBK TNDEEP", note: "NML-TR training + 11 backward opcodes" },
   { ver: "v0.8",   total: 85, opcodes: "SADD SSUB TACC", note: "Scalar add/sub, tree accumulate" },
   { ver: "v0.9",   total: 85, opcodes: "TLOG TRAIN INFER WDECAY", note: "Config-driven training, AdamW, forward-only inference" },
-  { ver: "v0.10",  total: 89, opcodes: "BN DROP", note: "Batch normalization, inverted dropout, N-layer TNET" },
+  { ver: "v0.10",  total: 89, opcodes: "BN DROP", note: "Batch normalization, inverted dropout. TNET/TNDEEP now redirect to TRAIN internally" },
 ];
 
 function highlightNML(text) {
@@ -520,16 +547,14 @@ export default function NMLPipeline() {
 @b1       shape=1,8   dtype=f32  data=0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
 @target   shape=1,3   dtype=f32  data=0.0,1.0,0.0
 
-; --- Training example (TNET) ---
+; --- Training example (TRAIN+INFER) ---
 ; N=4 samples, K=2 features → training_data shape=4,2
 ; training_labels shape=4,1  (regression target)
-; @w1 shape=2,4  @b1 shape=1,4  @w2 shape=4,1  @b2 shape=1,1
+; Architecture: 2 layers (hidden=4 ReLU, output=1 linear)
+; RV = [2, 4, 0, 1, 4]  →  ALLC RV [5] 2,4,0,1,4
+; RU = [1000, 0.01, 1, 0, 0, 0]  →  ALLC RU [6] 1000,0.01,1,0,0,0
 @training_data    shape=4,2  dtype=f32  data=0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8
-@training_labels  shape=4,1  dtype=f32  data=0.3,0.7,1.1,1.5
-@w1               shape=2,4  dtype=f32  data=0.1,-0.2,0.3,-0.1,0.2,-0.3,0.1,-0.2
-@b1               shape=1,4  dtype=f32  data=0.0,0.0,0.0,0.0
-@w2               shape=4,1  dtype=f32  data=0.2,-0.1,0.3,-0.2
-@b2               shape=1,1  dtype=f32  data=0.0`;
+@training_labels  shape=4,1  dtype=f32  data=0.3,0.7,1.1,1.5`;
 
   const runAdvise = async (desc) => {
     setAdviseLoading(true);
@@ -720,12 +745,51 @@ export default function NMLPipeline() {
         const errorsText = errors.map(e => e.message || JSON.stringify(e)).join("; ");
 
         // Build structured error feedback for the LLM
+        // Extract the failing opcodes so we can include their correct schemas
+        const failingOps = new Set();
         const structuredFeedback = errors.map(e => {
           let line = `Line ${e.line}: [${e.type || e.errorType}] ${e.message}`;
-          if (e.source) line += `\n  Source: ${e.source}`;
+          if (e.source) {
+            line += `\n  Source: ${e.source}`;
+            const op = e.source.trim().split(/\s+/)[0]?.toUpperCase();
+            if (op && NML_OPCODES.has(op)) failingOps.add(op);
+          }
           if (e.fix) line += `\n  Fix:    ${e.fix}`;
           return line;
         }).join("\n");
+
+        // Build a mini opcode reference for just the failing opcodes
+        const OPCODE_SCHEMAS = {
+          SOFT: "SOFT Rd Rs  (2 registers: dest, source — softmax over last dim)",
+          RELU: "RELU Rd Rs  (2 registers)", SIGM: "SIGM Rd Rs  (2 registers)",
+          TANH: "TANH Rd Rs  (2 registers)", GELU: "GELU Rd Rs  (2 registers)",
+          MMUL: "MMUL Rd Rs1 Rs2  (3 registers, NO immediates)",
+          MADD: "MADD Rd Rs1 Rs2  (3 registers)", MSUB: "MSUB Rd Rs1 Rs2  (3 registers)",
+          EMUL: "EMUL Rd Rs1 Rs2  (3 registers)", EDIV: "EDIV Rd Rs1 Rs2  (3 registers)",
+          SADD: "SADD Rd Rs #imm  (2 regs + 1 immediate)", SSUB: "SSUB Rd Rs #imm",
+          SCLR: "SCLR Rd Rs #imm", SDIV: "SDIV Rd Rs #imm",
+          SDOT: "SDOT Rd Rs1 Rs2  (3 registers)",
+          CONV: "CONV Rd Rs Rkernel [#stride] [#pad]", POOL: "POOL Rd Rs [#size] [#stride]",
+          ATTN: "ATTN Rd Rq Rk [Rv]  (3-4 registers)",
+          NORM: "NORM Rd Rs Rgamma Rbeta  (4 registers)",
+          LOSS: "LOSS Rd Rpred Rlabel [#type]  (3 regs + optional imm)",
+          BKWD: "BKWD Rgrad Ract Rloss  (3 registers)",
+          WUPD: "WUPD Rw Rgrad Rlr  (3 registers)",
+          TRAIN: "TRAIN RU [@data @labels]  (1 reg + optional @refs)",
+          INFER: "INFER Rd [R_input]  (1-2 registers)",
+          SOFTBK: "SOFTBK Rd Rgrad Rin  (3 registers)",
+          RELUBK: "RELUBK Rd Rgrad Rin  (3 registers)",
+          BN: "BN Rd Rs [Rgamma] [Rbeta]  (2-4 registers)",
+          DROP: "DROP Rd Rs [#rate]  (2 regs + optional imm)",
+          CLMP: "CLMP Rd Rs #min #max  (2 regs + 2 immediates)",
+          CMPI: "CMPI Rd Rs #imm  (2 regs + 1 immediate)",
+          CMP: "CMP Rd Rs  (2 registers)",
+          RDUC: "RDUC Rd Rs [#dim] [#mode]  (2 regs + optional imms)",
+        };
+        const schemaHints = [...failingOps]
+          .filter(op => OPCODE_SCHEMAS[op])
+          .map(op => `  ${OPCODE_SCHEMAS[op]}`)
+          .join("\n");
 
         log = log.replace(/; validating\.\.\.\n$/, "");
         addLog(`; ✗ ${errorsText}`);
@@ -735,8 +799,11 @@ export default function NMLPipeline() {
         if (attempt < MAX_RETRIES) {
           addLog(`; retrying with error feedback...\n`);
           messages.push({ role: "assistant", content: rawText });
+          const schemaSection = schemaHints
+            ? `\n\nCorrect operand schemas for failing opcodes:\n${schemaHints}\n`
+            : "";
           messages.push({ role: "user", content:
-            `Your NML code had errors. Fix them.\n\nPrevious code:\n${code}\n\nErrors:\n${structuredFeedback}\n\nFix ONLY the errors listed above using the correct operand schemas shown. Output only the corrected NML code.`
+            `Your NML code had errors. Fix them.\n\nPrevious code:\n${code}\n\nErrors:\n${structuredFeedback}${schemaSection}\nFix ONLY the errors listed above. Output only the corrected NML code.`
           });
         }
       }
@@ -838,20 +905,24 @@ export default function NMLPipeline() {
     color: active ? "#79b8ff" : "#8b949e", fontSize: 11, cursor: "pointer", padding: "2px 8px",
   });
 
+  // Drawer state: null = all closed, "advise" or "think" = that drawer open
+  const [openDrawer, setOpenDrawer] = useState(null);
+  const toggleDrawer = (key) => setOpenDrawer(prev => prev === key ? null : key);
+
   return (
     <div style={{
       display: "flex", height: "100vh", background: "#0d1117",
       fontFamily: "ui-monospace, monospace", color: "#e6edf3", overflow: "hidden",
     }}>
-      {/* Sidebar */}
+      {/* Left sidebar: Prompt Library */}
       <PromptLibrary onSelect={handleSelect} />
 
-      {/* Main */}
+      {/* Main area */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
         {/* Top bar */}
         <div style={{
-          padding: "12px 20px", borderBottom: "1px solid #30363d",
+          padding: "10px 20px", borderBottom: "1px solid #30363d",
           background: "#161b22", display: "flex", alignItems: "center", gap: 12,
         }}>
           <div style={{ flex: 1 }}>
@@ -900,27 +971,27 @@ export default function NMLPipeline() {
 
         {/* Prompt input */}
         <div style={{
-          padding: "14px 20px", borderBottom: "1px solid #30363d",
-          background: "#161b22", display: "flex", flexDirection: "column", gap: 10,
+          padding: "12px 20px", borderBottom: "1px solid #30363d",
+          background: "#161b22", display: "flex", flexDirection: "column", gap: 8,
         }}>
           <textarea
             ref={textareaRef}
             value={prompt}
             onChange={e => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Describe what you want to build in NML... (⌘↵ to run pipeline)"
-            rows={3}
+            placeholder="Describe what you want to build in NML... (Ctrl+Enter to run pipeline)"
+            rows={2}
             style={{
               width: "100%", background: "#0d1117", color: "#e6edf3",
               border: "1px solid #30363d", borderRadius: 6,
-              padding: "10px 12px", fontSize: 13, fontFamily: "inherit",
+              padding: "8px 12px", fontSize: 13, fontFamily: "inherit",
               resize: "none", outline: "none", boxSizing: "border-box",
             }}
           />
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={runPipeline} disabled={!prompt.trim() || adviseLoading || thinkLoading || codeLoading}
               style={btnStyle("#388bfd", !prompt.trim() || adviseLoading || thinkLoading || codeLoading)}>
-              ▶ Run Pipeline
+              ▶ Pipeline
             </button>
             <button onClick={runAdvisePipeline} disabled={!prompt.trim() || adviseLoading}
               style={btnStyle("#d29922", !prompt.trim() || adviseLoading)}>
@@ -931,212 +1002,266 @@ export default function NMLPipeline() {
               Think
             </button>
             <button
-              onClick={() => { setAdviseOut(""); setAdviseError(""); setAdviseMeta(null); setThinkOut(""); setThinkRaw(""); setCodeOut(""); setThinkError(""); setCodeError(""); setExecOut(null); setExecError(""); setValidStatus(null); }}
+              onClick={() => { setAdviseOut(""); setAdviseError(""); setAdviseMeta(null); setThinkOut(""); setThinkRaw(""); setCodeOut(""); setThinkError(""); setCodeError(""); setExecOut(null); setExecError(""); setValidStatus(null); setDataInput(""); }}
               style={{ ...btnStyle("#21262d", false), color: "#8b949e", marginLeft: "auto" }}>
               Clear
             </button>
           </div>
-
         </div>
 
-        {/* Panels */}
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {/* Advise + Think + Code panels */}
-          <div style={{ flex: 1, display: "flex", gap: 12, padding: "12px 16px 6px", overflow: "hidden" }}>
-            <Panel
-              title="Advisor"
-              subtitle={adviseMeta
-                ? `${adviseMeta.source === "llm" ? adviseMeta.model || "Cloud LLM" : "Knowledge Base"} · ${(adviseMeta.types || []).join(", ")}`
-                : "Algorithm Selection · When & Why"
-              }
-              color="advise" content={adviseOut}
-              isCode={false} loading={adviseLoading} error={adviseError}>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                {adviseOut && (
-                  <button onClick={() => navigator.clipboard?.writeText(adviseOut)} style={smallBtn(false)}>
-                    Copy
-                  </button>
-                )}
-                {adviseOut && (
-                  <button onClick={() => {
-                    const thinkPrompt = adviseOut
-                      ? `${prompt}\n\nML Advisor recommendation:\n${adviseOut.slice(0, 600)}`
-                      : prompt;
-                    runThink(thinkPrompt);
-                  }} disabled={thinkLoading}
-                    style={{ ...smallBtn(false), color: thinkLoading ? "#8b949e" : "#79b8ff", borderColor: "#388bfd" }}>
-                    → Think
-                  </button>
-                )}
-              </div>
-            </Panel>
+        {/* Main content: vertical drawer tabs | drawer content | code+data+exec */}
+        <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
 
-            <Panel title="Think" subtitle="nml-4b-think Q6 · Architecture Planning"
-              color="think" content={showThinkRaw ? thinkRaw : thinkOut}
-              isCode={false} loading={thinkLoading} error={thinkError}>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                {thinkOut && (
-                  <button onClick={() => navigator.clipboard?.writeText(thinkOut)} style={smallBtn(false)}>
-                    Copy
-                  </button>
-                )}
-                {thinkOut && (
-                  <button onClick={() => setShowThinkRaw(v => !v)} style={smallBtn(showThinkRaw)}>
-                    {showThinkRaw ? "Show clean" : "Show raw"}
-                  </button>
-                )}
-                {thinkOut && (
-                  <button onClick={() => {
-                    const tpl = generateDataTemplate(adviseOut, thinkOut, prompt);
-                    if (tpl) { setDataInput(tpl); setShowData(true); }
-                  }}
-                    style={{ ...smallBtn(false), color: "#e3b341", borderColor: "#d29922" }}>
-                    → Data
-                  </button>
-                )}
-                {thinkOut && (
-                  <button onClick={sendToCode} disabled={codeLoading}
-                    style={{ ...smallBtn(false), color: codeLoading ? "#8b949e" : "#56d364", borderColor: "#3fb950" }}>
-                    → Code
-                  </button>
-                )}
-              </div>
-            </Panel>
-
-            {/* Data + Code column */}
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, gap: 6 }}>
-              {/* Data input — collapsible above Code */}
-              <div style={{
-                background: "#161b22", borderRadius: 6,
-                border: "1px solid #30363d22", flexShrink: 0,
+          {/* Vertical drawer tab strip */}
+          <div style={{
+            display: "flex", flexDirection: "column", background: "#161b22",
+            borderRight: "1px solid #30363d", flexShrink: 0,
+          }}>
+            {[
+              { key: "advise", label: "Advisor", color: "#d29922", dot: adviseLoading ? "#e3b341" : adviseError ? "#f85149" : adviseOut ? "#d29922" : "#30363d" },
+              { key: "think",  label: "Think",   color: "#388bfd", dot: thinkLoading ? "#e3b341" : thinkError ? "#f85149" : thinkOut ? "#388bfd" : "#30363d" },
+            ].map(tab => (
+              <button key={tab.key} onClick={() => toggleDrawer(tab.key)} style={{
+                writingMode: "vertical-rl", textOrientation: "mixed",
+                padding: "14px 8px", background: openDrawer === tab.key ? "#0d1117" : "none",
+                border: "none", borderRight: openDrawer === tab.key ? `2px solid ${tab.color}` : "2px solid transparent",
+                cursor: "pointer", color: openDrawer === tab.key ? tab.color : "#8b949e",
+                fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 8,
+                transition: "all 0.15s",
               }}>
-                <button onClick={() => setShowData(v => !v)} style={{
-                  width: "100%", textAlign: "left", padding: "6px 12px",
-                  background: "none", border: "none", cursor: "pointer",
-                  color: "#8b949e", fontSize: 11, fontWeight: 600,
-                  display: "flex", alignItems: "center", gap: 6,
-                }}>
-                  <span>{showData ? "▾" : "▸"}</span>
-                  Data
-                  {dataInput && <span style={{ color: "#3fb950", fontSize: 9 }}>●</span>}
-                </button>
-                {showData && (
-                  <div style={{ padding: "0 10px 8px", display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {(adviseOut || thinkOut || codeOut) && (
-                        <button onClick={() => {
-                          const contextText = [adviseOut || "", thinkOut || "", prompt].join("\n");
-                          const tpl = codeOut
-                            ? (generateDataFromCode(codeOut, contextText) || generateDataTemplate(adviseOut, thinkOut, prompt))
-                            : generateDataTemplate(adviseOut, thinkOut, prompt);
-                          if (tpl) { setDataInput(tpl); }
-                          else { alert("No tensor shapes found. Run the pipeline or Think first."); }
-                        }} style={{ ...smallBtn(false), color: "#e3b341", borderColor: "#d29922" }}>
-                          Generate
-                        </button>
-                      )}
-                      <button onClick={() => setShowDataHelp(v => !v)} style={smallBtn(showDataHelp)}>
-                        {showDataHelp ? "Hide format" : "Format"}
-                      </button>
-                      <button onClick={() => setDataInput(DATA_TEMPLATE)} style={smallBtn(false)}>
-                        Template
-                      </button>
-                    </div>
-                    {showDataHelp && (
-                      <pre style={{
-                        margin: 0, padding: "8px 10px", background: "#0d1117",
-                        border: "1px solid #21262d", borderRadius: 4,
-                        fontSize: 10, color: "#8b949e", overflowX: "auto", maxHeight: 120,
-                      }}>{DATA_TEMPLATE}</pre>
-                    )}
-                    <textarea
-                      value={dataInput}
-                      onChange={e => setDataInput(e.target.value)}
-                      placeholder="@input shape=1,4 dtype=f32 data=0.5,0.3,0.8,0.1"
-                      rows={3}
-                      style={{
-                        width: "100%", background: "#0d1117", color: "#e6edf3",
-                        border: "1px solid #30363d", borderRadius: 4,
-                        padding: "6px 10px", fontSize: 11, fontFamily: "inherit",
-                        resize: "vertical", outline: "none", boxSizing: "border-box",
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-
-            <Panel title="Code"
-              subtitle={
-                validStatus
-                  ? `nml-1.5b · ${validStatus.valid ? "Validated ✓" : "Failed ✗"} · ${validStatus.attempts} attempt${validStatus.attempts > 1 ? "s" : ""}`
-                  : validLoading
-                  ? "nml-1.5b · Generate → Validate → Retry..."
-                  : "nml-1.5b-instruct-v0.10.0 · NML Assembly"
-              }
-              color="code" content={codeOut}
-              isCode={true} loading={codeLoading && !validLoading} error={codeError}>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                {/* Validation badge */}
-                {validStatus && (
-                  <span style={{
-                    fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4,
-                    background: validStatus.valid ? "#2ea04322" : "#f8514922",
-                    color: validStatus.valid ? "#3fb950" : "#f85149",
-                    border: `1px solid ${validStatus.valid ? "#2ea04366" : "#f8514966"}`,
-                  }}>
-                    {validStatus.valid ? "VALID" : "INVALID"}
-                    {validStatus.attempts > 1 && ` (retry ${validStatus.attempts - 1})`}
-                  </span>
-                )}
-                {codeOut && (
-                  <button onClick={() => navigator.clipboard?.writeText(codeOut)} style={smallBtn(false)}>
-                    Copy
-                  </button>
-                )}
-                {codeOut && (
-                  <button onClick={() => runExecute(codeOut)} disabled={execLoading}
-                    style={{ ...smallBtn(false), color: execLoading ? "#8b949e" : "#b392f0", borderColor: "#6e40c9" }}>
-                    {execLoading ? "Running..." : "Execute"}
-                  </button>
-                )}
-              </div>
-            </Panel>
-            </div>
+                <div style={{
+                  width: 7, height: 7, borderRadius: "50%", background: tab.dot,
+                  boxShadow: (tab.key === "advise" ? adviseLoading : thinkLoading) ? "0 0 6px #e3b341" : "none",
+                }} />
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          {/* Execution output */}
-          {execOut !== null && (
+          {/* Drawer content panel (slides open when a tab is active) */}
+          {openDrawer && (
             <div style={{
-              height: 180, margin: "0 16px 12px", flexShrink: 0,
-              border: `1px solid ${execError ? "#f8514933" : "#6e40c933"}`,
-              borderRadius: 8, overflow: "hidden", background: "#0d1117",
+              width: 400, flexShrink: 0, background: "#0d1117",
+              borderRight: "1px solid #30363d", display: "flex", flexDirection: "column",
+              overflow: "hidden",
             }}>
+              {/* Drawer header */}
               <div style={{
-                padding: "8px 14px", background: "#161b22",
-                borderBottom: `1px solid ${execError ? "#f8514933" : "#6e40c933"}`,
+                padding: "10px 14px", background: "#161b22",
+                borderBottom: `1px solid ${openDrawer === "advise" ? "#d2992233" : "#388bfd33"}`,
                 display: "flex", alignItems: "center", gap: 8,
               }}>
                 <div style={{
-                  width: 7, height: 7, borderRadius: "50%",
-                  background: execLoading ? "#e3b341" : execError ? "#f85149" : "#3fb950",
+                  width: 8, height: 8, borderRadius: "50%",
+                  background: openDrawer === "advise"
+                    ? (adviseLoading ? "#e3b341" : adviseError ? "#f85149" : "#d29922")
+                    : (thinkLoading ? "#e3b341" : thinkError ? "#f85149" : "#388bfd"),
                 }} />
-                <span style={{ fontSize: 12, fontWeight: 700, color: execError ? "#f85149" : "#3fb950" }}>
-                  Execution Output
-                </span>
-                <button onClick={() => setExecOut(null)}
-                  style={{ marginLeft: "auto", background: "none", border: "none", color: "#8b949e", cursor: "pointer", fontSize: 14 }}>
-                  ×
-                </button>
+                <div style={{ flex: 1 }}>
+                  <div style={{
+                    color: openDrawer === "advise" ? "#e3b341" : "#79b8ff",
+                    fontWeight: 700, fontSize: 13,
+                  }}>
+                    {openDrawer === "advise" ? "Advisor" : "Think"}
+                  </div>
+                  <div style={{ color: "#8b949e", fontSize: 11 }}>
+                    {openDrawer === "advise"
+                      ? (adviseMeta ? `${adviseMeta.source === "llm" ? adviseMeta.model || "Cloud LLM" : "KB"} · ${(adviseMeta.types || []).join(", ")}` : "Algorithm Selection")
+                      : "nml-4b-think · Architecture Planning"
+                    }
+                  </div>
+                </div>
+                {/* Action buttons */}
+                <div style={{ display: "flex", gap: 6 }}>
+                  {openDrawer === "advise" && adviseOut && (
+                    <>
+                      <button onClick={() => navigator.clipboard?.writeText(adviseOut)} style={smallBtn(false)}>Copy</button>
+                      <button onClick={() => {
+                        const thinkPrompt = `${prompt}\n\nML Advisor recommendation:\n${adviseOut.slice(0, 600)}`;
+                        runThink(thinkPrompt);
+                        setOpenDrawer("think");
+                      }} disabled={thinkLoading}
+                        style={{ ...smallBtn(false), color: "#79b8ff", borderColor: "#388bfd" }}>
+                        → Think
+                      </button>
+                    </>
+                  )}
+                  {openDrawer === "think" && thinkOut && (
+                    <>
+                      <button onClick={() => navigator.clipboard?.writeText(thinkOut)} style={smallBtn(false)}>Copy</button>
+                      <button onClick={() => setShowThinkRaw(v => !v)} style={smallBtn(showThinkRaw)}>
+                        {showThinkRaw ? "Clean" : "Raw"}
+                      </button>
+                      <button onClick={() => { sendToCode(); setOpenDrawer(null); }} disabled={codeLoading}
+                        style={{ ...smallBtn(false), color: "#56d364", borderColor: "#3fb950" }}>
+                        → Code
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
+              {/* Drawer body */}
               <div style={{
-                padding: 12, overflowY: "auto", height: "calc(100% - 35px)",
-                fontFamily: "monospace", fontSize: 12, color: execError ? "#f85149" : "#e6edf3",
-                whiteSpace: "pre-wrap",
+                flex: 1, overflowY: "auto", padding: 14, fontFamily: "monospace",
+                fontSize: 12, lineHeight: 1.6, color: "#e6edf3", whiteSpace: "pre-wrap",
               }}>
-                {execLoading ? <span style={{ color: "#8b949e" }}>Executing...</span> : (execOut || execError)}
+                {openDrawer === "advise" && (
+                  <>
+                    {adviseLoading && !adviseOut && <span style={{ color: "#8b949e", fontStyle: "italic" }}>Generating...</span>}
+                    {adviseError && <span style={{ color: "#f85149" }}>{adviseError}</span>}
+                    {adviseOut && <span>{adviseOut}</span>}
+                    {!adviseLoading && !adviseError && !adviseOut && <span style={{ color: "#30363d" }}>Run Advise to get algorithm recommendations...</span>}
+                  </>
+                )}
+                {openDrawer === "think" && (
+                  <>
+                    {thinkLoading && !thinkOut && <span style={{ color: "#8b949e", fontStyle: "italic" }}>Generating...</span>}
+                    {thinkError && <span style={{ color: "#f85149" }}>{thinkError}</span>}
+                    {(showThinkRaw ? thinkRaw : thinkOut) && <span>{showThinkRaw ? thinkRaw : thinkOut}</span>}
+                    {!thinkLoading && !thinkError && !thinkOut && <span style={{ color: "#30363d" }}>Run Think to plan the architecture...</span>}
+                  </>
+                )}
               </div>
             </div>
           )}
+
+          {/* Code + Data side by side, Execution below */}
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+            {/* Top row: Code (left) + Data (right) */}
+            <div style={{ flex: 1, display: "flex", gap: 0, padding: "12px 16px 6px", overflow: "hidden" }}>
+              {/* Code panel */}
+              <Panel title="Code"
+                subtitle={
+                  validStatus
+                    ? `nml-1.5b · ${validStatus.valid ? "Validated" : "Failed"} · ${validStatus.attempts} attempt${validStatus.attempts > 1 ? "s" : ""}`
+                    : validLoading
+                    ? "nml-1.5b · Generate → Validate → Retry..."
+                    : "nml-1.5b-instruct · NML Assembly"
+                }
+                color="code" content={codeOut}
+                isCode={true} loading={codeLoading && !validLoading} error={codeError}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  {validStatus && (
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4,
+                      background: validStatus.valid ? "#2ea04322" : "#f8514922",
+                      color: validStatus.valid ? "#3fb950" : "#f85149",
+                      border: `1px solid ${validStatus.valid ? "#2ea04366" : "#f8514966"}`,
+                    }}>
+                      {validStatus.valid ? "VALID" : "INVALID"}
+                      {validStatus.attempts > 1 && ` (${validStatus.attempts - 1})`}
+                    </span>
+                  )}
+                  {codeOut && (
+                    <button onClick={() => navigator.clipboard?.writeText(codeOut)} style={smallBtn(false)}>Copy</button>
+                  )}
+                  {codeOut && (
+                    <button onClick={() => runExecute(codeOut)} disabled={execLoading}
+                      style={{ ...smallBtn(false), color: execLoading ? "#8b949e" : "#b392f0", borderColor: "#6e40c9" }}>
+                      {execLoading ? "Running..." : "Execute"}
+                    </button>
+                  )}
+                </div>
+              </Panel>
+
+              {/* Data panel (right side) */}
+              <div style={{
+                width: 360, flexShrink: 0, marginLeft: 10,
+                display: "flex", flexDirection: "column",
+                border: "1px solid #3fb95033", borderRadius: 8,
+                overflow: "hidden", background: "#0d1117",
+              }}>
+                {/* Data header */}
+                <div style={{
+                  padding: "10px 14px", borderBottom: "1px solid #3fb95033",
+                  background: "#161b22", display: "flex", alignItems: "center", gap: 8,
+                }}>
+                  <div style={{
+                    width: 8, height: 8, borderRadius: "50%",
+                    background: dataInput ? "#3fb950" : "#30363d",
+                  }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ color: "#56d364", fontWeight: 700, fontSize: 13 }}>Data</div>
+                    <div style={{ color: "#8b949e", fontSize: 11 }}>.nml.data tensors</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {(adviseOut || thinkOut || codeOut) && (
+                      <button onClick={() => {
+                        const contextText = [adviseOut || "", thinkOut || "", prompt].join("\n");
+                        const tpl = codeOut
+                          ? (generateDataFromCode(codeOut, contextText) || generateDataTemplate(adviseOut, thinkOut, prompt))
+                          : generateDataTemplate(adviseOut, thinkOut, prompt);
+                        if (tpl) { setDataInput(tpl); }
+                        else { alert("No tensor shapes found. Run the pipeline or Think first."); }
+                      }} style={{ ...smallBtn(false), color: "#e3b341", borderColor: "#d29922" }}>
+                        Generate
+                      </button>
+                    )}
+                    <button onClick={() => setShowDataHelp(v => !v)} style={smallBtn(showDataHelp)}>
+                      {showDataHelp ? "Hide" : "Format"}
+                    </button>
+                    <button onClick={() => setDataInput(DATA_TEMPLATE)} style={smallBtn(false)}>
+                      Template
+                    </button>
+                  </div>
+                </div>
+                {/* Data format help */}
+                {showDataHelp && (
+                  <pre style={{
+                    margin: 0, padding: "8px 10px", background: "#161b22",
+                    borderBottom: "1px solid #21262d",
+                    fontSize: 10, color: "#8b949e", overflowX: "auto", maxHeight: 100,
+                  }}>{DATA_TEMPLATE}</pre>
+                )}
+                {/* Data editor */}
+                <textarea
+                  value={dataInput}
+                  onChange={e => setDataInput(e.target.value)}
+                  placeholder={"@input  shape=1,4  dtype=f32  data=0.5,0.3,0.8,0.1\n@w1     shape=4,8  dtype=f32  data=0.1,0.2,..."}
+                  style={{
+                    flex: 1, width: "100%", background: "#0d1117", color: "#e6edf3",
+                    border: "none", padding: "10px 14px", fontSize: 12,
+                    fontFamily: "ui-monospace, monospace", lineHeight: 1.6,
+                    resize: "none", outline: "none", boxSizing: "border-box",
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Execution output */}
+            {execOut !== null && (
+              <div style={{
+                height: 180, margin: "0 16px 12px", flexShrink: 0,
+                border: `1px solid ${execError ? "#f8514933" : "#6e40c933"}`,
+                borderRadius: 8, overflow: "hidden", background: "#0d1117",
+              }}>
+                <div style={{
+                  padding: "8px 14px", background: "#161b22",
+                  borderBottom: `1px solid ${execError ? "#f8514933" : "#6e40c933"}`,
+                  display: "flex", alignItems: "center", gap: 8,
+                }}>
+                  <div style={{
+                    width: 7, height: 7, borderRadius: "50%",
+                    background: execLoading ? "#e3b341" : execError ? "#f85149" : "#3fb950",
+                  }} />
+                  <span style={{ fontSize: 12, fontWeight: 700, color: execError ? "#f85149" : "#3fb950" }}>
+                    Execution Output
+                  </span>
+                  <button onClick={() => setExecOut(null)}
+                    style={{ marginLeft: "auto", background: "none", border: "none", color: "#8b949e", cursor: "pointer", fontSize: 14 }}>
+                    ×
+                  </button>
+                </div>
+                <div style={{
+                  padding: 12, overflowY: "auto", height: "calc(100% - 35px)",
+                  fontFamily: "monospace", fontSize: 12, color: execError ? "#f85149" : "#e6edf3",
+                  whiteSpace: "pre-wrap",
+                }}>
+                  {execLoading ? <span style={{ color: "#8b949e" }}>Executing...</span> : (execOut || execError)}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

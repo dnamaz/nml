@@ -2,8 +2,8 @@
 """
 Generate ~3K real-world ML application training pairs.
 
-Each program is a complete end-to-end pipeline: train with TNET, run inference
-with a forward pass, and make a binary decision via CMPI threshold. Covers
+Each program is a complete end-to-end pipeline: train with TRAIN, run inference
+with INFER, and make a binary decision via CMPI threshold. Covers
 6 application domains with varied architectures and tri-syntax coverage.
 
 ~30% of outputs include a matching .nml.data file.
@@ -47,9 +47,9 @@ DOMAINS = [
         "pos_meaning": "fraud",
         "neg_meaning": "legitimate",
         "prompts": [
-            "Write NML for credit card fraud detection: train on labeled transactions with TNET, classify a new transaction, flag if fraud score >= {thresh}.",
+            "Write NML for credit card fraud detection: train on labeled transactions with TRAIN, classify a new transaction, flag if fraud score >= {thresh}.",
             "NML fraud detector: {n_feat} features ({feat_str}), {arch} architecture, train {epochs} epochs, threshold at {thresh}.",
-            "Write NML to detect fraudulent transactions. Train with TNET, run inference, output binary decision.",
+            "Write NML to detect fraudulent transactions. Train with TRAIN, run inference with INFER, output binary decision.",
         ],
     },
     {
@@ -66,7 +66,7 @@ DOMAINS = [
         "prompts": [
             "Write NML for medical risk prediction: train on patient data, score a new patient, flag if risk >= {thresh}.",
             "NML health risk model: {n_feat} vitals ({feat_str}), {arch} network, {epochs} epochs, threshold {thresh}.",
-            "Write NML to predict patient risk from vitals. Use TNET training and CMPI threshold decision.",
+            "Write NML to predict patient risk from vitals. Use TRAIN opcode and CMPI threshold decision.",
         ],
     },
     {
@@ -82,8 +82,8 @@ DOMAINS = [
         "neg_meaning": "will stay",
         "prompts": [
             "Write NML for customer churn prediction: train on historical data, predict churn probability, flag if >= {thresh}.",
-            "NML churn model: {n_feat} features ({feat_str}), {arch} architecture, TNET {epochs} epochs.",
-            "Write NML to predict customer churn. Train with TNET, sigmoid output, binary decision at {thresh}.",
+            "NML churn model: {n_feat} features ({feat_str}), {arch} architecture, TRAIN {epochs} epochs.",
+            "Write NML to predict customer churn. Train with TRAIN, sigmoid output, binary decision at {thresh}.",
         ],
     },
     {
@@ -100,7 +100,7 @@ DOMAINS = [
         "prompts": [
             "Write NML for predictive maintenance: train on sensor data, predict failure probability, alert if >= {thresh}.",
             "NML maintenance model: {n_feat} sensors ({feat_str}), {arch} network, {epochs} epochs, alert threshold {thresh}.",
-            "Write NML to predict equipment failure from sensor readings. Use TNET and threshold decision.",
+            "Write NML to predict equipment failure from sensor readings. Use TRAIN and threshold decision.",
         ],
     },
     {
@@ -117,7 +117,7 @@ DOMAINS = [
         "prompts": [
             "Write NML for spam classification: train on labeled messages, score a new message, block if spam score >= {thresh}.",
             "NML spam filter: {n_feat} features ({feat_str}), {arch} architecture, train {epochs} epochs.",
-            "Write NML to classify messages as spam or not. Train with TNET, sigmoid output, CMPI decision.",
+            "Write NML to classify messages as spam or not. Train with TRAIN, sigmoid output, CMPI decision.",
         ],
     },
     {
@@ -133,8 +133,8 @@ DOMAINS = [
         "neg_meaning": "approve",
         "prompts": [
             "Write NML for credit scoring: train on applicant history, predict default probability, deny if >= {thresh}.",
-            "NML credit risk model: {n_feat} features ({feat_str}), {arch} network, TNET {epochs} epochs, threshold {thresh}.",
-            "Write NML to score loan applicants. Train with TNET, infer on new applicant, approve or deny.",
+            "NML credit risk model: {n_feat} features ({feat_str}), {arch} network, TRAIN {epochs} epochs, threshold {thresh}.",
+            "Write NML to score loan applicants. Train with TRAIN, infer on new applicant with INFER, approve or deny.",
         ],
     },
 ]
@@ -149,22 +149,21 @@ ARCHITECTURES = [
 def _gen_program_lines(domain, arch, epochs, lr, thresh, activation="RELU"):
     """Generate the NML instruction lines for a train+infer+decide pipeline."""
     d = domain
+    n_feat = len(d["features"])
+    hidden = arch["hidden"]
+    # activation code: 0=ReLU, 1=Sigmoid, 2=Tanh
+    act_code = {"RELU": 0, "SIGM": 1, "TANH": 2}.get(activation, 0)
     lines = [
-        _fmt("LD", "R1", "@w1"),
-        _fmt("LD", "R2", "@b1"),
-        _fmt("LD", "R3", "@w2"),
-        _fmt("LD", "R4", "@b2"),
+        f"; Architecture: {n_feat}->{hidden}->1",
+        _fmt("ALLC", "RV", f"[5]", f"2,{hidden},{act_code},1,1"),
+        _fmt("ALLC", "RU", "[6]", f"{epochs},{lr},1,0,0,0"),
         _fmt("LD", "R0", f"@{d['input_label']}"),
         _fmt("LD", "R9", f"@{d['target_label']}"),
-        _fmt("TNET", f"#{epochs}", f"#{lr}", "#0"),
+        _fmt("TRAIN", "RU"),
         _fmt("ST", "R8", "@training_loss"),
         _fmt("LD", "R0", f"@{d['new_input_label']}"),
-        _fmt("MMUL", "R5", "R0", "R1"),
-        _fmt("MADD", "R5", "R5", "R2"),
-        _fmt(activation, "R5", "R5"),
-        _fmt("MMUL", "R6", "R5", "R3"),
-        _fmt("MADD", "R6", "R6", "R4"),
-        _fmt("SIGM", "RA", "R6"),
+        _fmt("INFER", "RA", "R0"),
+        _fmt("SIGM", "RA", "RA"),
         _fmt("ST", "RA", f"@{d['score_label']}"),
         _fmt("CMPI", "RE", "RA", f"#{thresh}"),
         _fmt("JMPF", "#2"),
@@ -243,7 +242,7 @@ def gen_domain_pairs(domain, count=500):
 
 
 def gen_infer_only(count=300):
-    """Generate inference-only programs (no TNET, pre-trained weights)."""
+    """Generate inference-only programs (pre-trained weights, INFER opcode)."""
     pairs = []
     for _ in range(count):
         syntax = pick_syntax()
@@ -251,19 +250,20 @@ def gen_infer_only(count=300):
         arch = random.choice(ARCHITECTURES)
         thresh = round(random.choice([0.3, 0.4, 0.5, 0.5, 0.6, 0.7]), 1)
         activation = random.choice(["RELU", "RELU", "TANH"])
+        n_feat = len(d["features"])
+        hidden = arch["hidden"]
+        act_code = {"RELU": 0, "SIGM": 1, "TANH": 2}.get(activation, 0)
 
         lines = [
+            f"; Load pre-trained weights and architecture",
+            _fmt("ALLC", "RV", "[5]", f"2,{hidden},{act_code},1,1"),
             _fmt("LD", "R1", "@w1"),
             _fmt("LD", "R2", "@b1"),
             _fmt("LD", "R3", "@w2"),
             _fmt("LD", "R4", "@b2"),
             _fmt("LD", "R0", f"@{d['new_input_label']}"),
-            _fmt("MMUL", "R5", "R0", "R1"),
-            _fmt("MADD", "R5", "R5", "R2"),
-            _fmt(activation, "R5", "R5"),
-            _fmt("MMUL", "R6", "R5", "R3"),
-            _fmt("MADD", "R6", "R6", "R4"),
-            _fmt("SIGM", "RA", "R6"),
+            _fmt("INFER", "RA", "R0"),
+            _fmt("SIGM", "RA", "RA"),
             _fmt("ST", "RA", f"@{d['score_label']}"),
             _fmt("CMPI", "RE", "RA", f"#{thresh}"),
             _fmt("JMPF", "#2"),
@@ -295,32 +295,28 @@ def gen_fragment_variant(count=200):
         lr = random.choice([0.001, 0.01, 0.05])
         thresh = round(random.choice([0.4, 0.5, 0.5, 0.6]), 1)
 
+        n_feat = len(d["features"])
+        hidden = arch["hidden"]
         lines = [
             _fmt("META", "@name", f'"{d["prog_name"]}"'),
             _fmt("META", "@mode", '"adaptive"'),
             "",
             _fmt("FRAG", "setup"),
-            _fmt("LD", "R1", "@w1"),
-            _fmt("LD", "R2", "@b1"),
-            _fmt("LD", "R3", "@w2"),
-            _fmt("LD", "R4", "@b2"),
+            _fmt("ALLC", "RV", "[5]", f"2,{hidden},0,1,1"),
             "ENDF",
             "",
             _fmt("FRAG", "train"),
             _fmt("LD", "R0", f"@{d['input_label']}"),
             _fmt("LD", "R9", f"@{d['target_label']}"),
-            _fmt("TNET", f"#{epochs}", f"#{lr}", "#0"),
+            _fmt("ALLC", "RU", "[6]", f"{epochs},{lr},1,0,0,0"),
+            _fmt("TRAIN", "RU"),
             _fmt("ST", "R8", "@training_loss"),
             "ENDF",
             "",
             _fmt("FRAG", "infer"),
             _fmt("LD", "R0", f"@{d['new_input_label']}"),
-            _fmt("MMUL", "R5", "R0", "R1"),
-            _fmt("MADD", "R5", "R5", "R2"),
-            _fmt("RELU", "R5", "R5"),
-            _fmt("MMUL", "R6", "R5", "R3"),
-            _fmt("MADD", "R6", "R6", "R4"),
-            _fmt("SIGM", "RA", "R6"),
+            _fmt("INFER", "RA", "R0"),
+            _fmt("SIGM", "RA", "RA"),
             _fmt("ST", "RA", f"@{d['score_label']}"),
             "ENDF",
             "",

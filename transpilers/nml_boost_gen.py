@@ -615,7 +615,7 @@ def gen_SCTR(count):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 from nml_equalize_gen import (
-    gen_BKWD, gen_WUPD, gen_LOSS, gen_TNET,
+    gen_BKWD, gen_WUPD, gen_LOSS,
     gen_PTCH, gen_CMPR, gen_SYNC, gen_TRAP, gen_BNOT,
     gen_PADZ, gen_RSHP, gen_PROJ, gen_UPSC, gen_TRNS,
     gen_WHER, gen_SIGN, gen_VRFY, gen_ITOF, gen_CLMP,
@@ -629,6 +629,42 @@ from nml_equalize_gen import (
     gen_SDOT, gen_MERG, gen_META,
     gen_SPLT, gen_CMP, gen_GELU,
 )
+
+
+def gen_TRAIN(count):
+    """Generate TRAIN opcode examples (replaces legacy TNET)."""
+    pairs = []
+    prompts = [
+        "Write NML to train a neural network using TRAIN for {e} epochs at lr {lr}",
+        "Use TRAIN to train a {topo} network end-to-end",
+        "Write NML that uses ALLC+TRAIN to learn from training data",
+        "Train a network with TRAIN for {e} epochs using {opt} optimizer",
+        "Write NML with config-driven training using TRAIN",
+    ]
+    topos = ["2-4-1", "2-8-1", "1-16-1", "3-8-1", "4-16-1", "1-64-1"]
+    for _ in range(count):
+        syntax = pick_syntax()
+        epochs = random.choice([100, 200, 500, 1000, 2000, 5000])
+        lr = random.choice([0.001, 0.005, 0.01, 0.05, 0.1, 0.5])
+        optimizer = random.choice([0, 1])
+        opt_name = "SGD" if optimizer == 0 else "Adam"
+        topo = random.choice(topos)
+        q = random.choice(prompts).format(e=epochs, lr=lr, topo=topo, opt=opt_name) + syntax_tag(syntax)
+        lines = [
+            _fmt("LD", "R0", "@training_inputs"),
+            _fmt("LD", "R9", "@training_targets"),
+            _fmt("LD", "R1", "@w1"), _fmt("LD", "R2", "@b1"),
+            _fmt("LD", "R3", "@w2"), _fmt("LD", "R4", "@b2"),
+            _fmt("ALLC", "RU", f"[6]", f"{epochs},{lr},{optimizer},0,0,0"),
+            _fmt("TRAIN", "RU", "@training_inputs", "@training_targets"),
+            _fmt("INFER", "RA", "R0"),
+            _fmt("ST", "RA", "@predictions"),
+            _fmt("ST", "R1", "@trained_w1"),
+            _fmt("ST", "R3", "@trained_w2"),
+            "HALT",
+        ]
+        pairs.append(_pair(q, apply_syntax(lines, syntax)))
+    return pairs
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -840,7 +876,7 @@ ALL_GENERATORS = {
     "PTCH": gen_PTCH, "SIGN": gen_SIGN, "VRFY": gen_VRFY, "VOTE": gen_VOTE,
     "PROJ": gen_PROJ, "DIST": gen_DIST, "GATH": gen_GATH, "SCAT": gen_SCAT, "SCTR": gen_SCTR,
     # Training (4)
-    "BKWD": gen_BKWD, "WUPD": gen_WUPD, "LOSS": gen_LOSS, "TNET": gen_TNET,
+    "BKWD": gen_BKWD, "WUPD": gen_WUPD, "LOSS": gen_LOSS, "TRAIN": gen_TRAIN,
     # General (5)
     "SYS": gen_SYS, "MOD": gen_MOD, "ITOF": gen_ITOF, "FTOI": gen_FTOI, "BNOT": gen_BNOT,
 }

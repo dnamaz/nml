@@ -30,11 +30,11 @@ NML is a minimal machine language designed for AI workloads. It supports neural 
 | RJ | LearningRate | Learning rate scalar |
 | RK–RV | Training/Hive | Training workspace and hive collective registers (12) |
 
-## Instruction Set (37 Core + 14 Extensions + 12 M2M + 5 General + 23 Training = 91 Total)
+## Instruction Set (35 Core + 14 Extensions + 12 M2M + 5 General + 21 Training = 89 Total)
 
-Training breakdown: 4 core ops (BKWD, WUPD, LOSS, TNET) + 1 deep trainer (TNDEEP) + 11 backward passes (RELU_BK through ATTN_BK) + 1 loss backward (LOSS_BK) + 4 config-driven (TLOG, TRAIN, INFER, WDECAY) + 2 normalization/regularization (BN, DROP)
+Note: SADD and SSUB are counted within Arithmetic (10 opcodes). Training breakdown: 4 core ops (BKWD, WUPD, LOSS, TNET) + 1 deep trainer (TNDEEP) + 10 backward passes (RELU_BK through ATTN_BK) + 4 config-driven (TLOG, TRAIN, INFER, WDECAY) + 2 normalization/regularization (BN, DROP)
 
-### Arithmetic (8 instructions)
+### Arithmetic (10 instructions)
 ```
 MMUL  Rd Rs1 Rs2     — Matrix multiply: Rd = Rs1 @ Rs2
 MADD  Rd Rs1 Rs2     — Element-wise add: Rd = Rs1 + Rs2
@@ -156,7 +156,7 @@ TNET   R_config #epochs           — N-layer MLP training; config tensor shape 
 TNDEEP R_config #epochs           — Deep N-layer training with momentum and gradient clipping
 BN     Rd Rs Rgamma Rbeta         — Batch normalization with learnable scale (γ) and shift (β)
 DROP   Rd Rs #rate                — Inverted dropout at rate; pass #0.0 at inference to disable
-WDECAY Rd Rs #lambda              — L2 weight decay (AdamW): Rd = Rs * (1 - lambda)
+WDECAY Rd #lambda                 — L2 weight decay (in-place): Rd[i] *= (1 - lambda)
 
 ; Backward passes (use underscore-form; MMULBK aliases are accepted)
 RELU_BK  Rd Rs Rgrad              — ReLU backward
@@ -173,12 +173,15 @@ LOSS_BK  Rd Rs Rtarget [#mode]    — Loss backward (same modes as LOSS)
 
 ; Config-driven training
 TLOG   Rs [#interval]             — Log scalar value from Rs every N steps
-TRAIN  R_config                   — Execute config-driven training run (arch + hyperparams in tensor)
-INFER  Rd R_config Rs             — Forward-only inference using trained config
+TRAIN  R_config [@data [@labels]]  — Config-driven training (default input=R0, target=R9)
+INFER  [Rd] [Rs]                  — Forward-only inference (default output=RA, input=R0)
 ```
 
-TNET / TNDEEP config tensor shape `[L,3]` where each row is `[input_size, hidden_size, output_size]`.
+TNET / TNDEEP config tensor shape `[L,3]` where each row is `[input_size, hidden_size, activation]`.
 Supports 1–8 layers. R0 = input, R9 = targets at call time.
+TNDEEP / TRAIN require RV (register 31) to contain the architecture descriptor.
+TRAIN R_config: 6-element tensor `[epochs, lr, optimizer, print_every, patience, min_delta]`.
+Optimizer codes: 0=SGD, 1=Adam, 2=AdamW. Patience=0 disables early stopping.
 
 BN / DROP are Phase 3 additions (v0.10.0):
 - BN: symbolic `⊞`, verbose `BATCH_NORM`
@@ -218,7 +221,7 @@ Example:
 | Registers | 32 | No | — |
 | Max tensor elements | 16,777,216 (16M) | Yes (v0.6.2+) | `-DNML_MAX_TENSOR_SIZE=N` — embedded/RPi targets use 65,536 |
 | Max instructions | 8,192 | Yes (v0.6.2+) | `-DNML_MAX_INSTRUCTIONS=N` |
-| Max memory slots | 64 | Yes (v0.6.2+) | `-DNML_MAX_MEMORY_SLOTS=N` |
+| Max memory slots | 256 | Yes (v0.6.2+) | `-DNML_MAX_MEMORY_SLOTS=N` |
 | Max loop depth | 8 | Yes (v0.6.2+) | `-DNML_MAX_LOOP_DEPTH=N` |
 | Max call depth | 32 | Yes (v0.6.2+) | `-DNML_MAX_CALL_DEPTH=N` |
 | Max cycles | 1,000,000 | Yes | `--max-cycles N` |
@@ -374,7 +377,7 @@ NML supports a dual-syntax system: every opcode and register has both a classic 
 | `ST` | `↑` | U+2191 | Memory |
 | `MOV` | `←` | U+2190 | Memory |
 | `ALLC` | `□` | U+25A1 | Memory |
-| `RSHP` | `⊞` | U+229E | Data Flow |
+| `RSHP` | `⊟` | U+229F | Data Flow |
 | `TRNS` | `⊤` | U+22A4 | Data Flow |
 | `SPLT` | `⊢` | U+22A2 | Data Flow |
 | `MERG` | `⊣` | U+22A3 | Data Flow |

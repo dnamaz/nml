@@ -61,7 +61,7 @@ SYM = {
     "VOTE":"⚖","PROJ":"⟐","DIST":"⟂",
     "GATH":"⊃","SCAT":"⊂",
     "SYS":"⚙","MOD":"%","ITOF":"⊶","FTOI":"⊷","BNOT":"¬",
-    "BKWD":"∇","WUPD":"⟳","LOSS":"△","TNET":"⥁",
+    "BKWD":"∇","WUPD":"⟳","LOSS":"△","TRAIN":"⥁","INFER":"⥂",
 }
 
 VERBOSE = {
@@ -79,7 +79,7 @@ VERBOSE = {
     "SYS":"SYSTEM","MOD":"MODULO","ITOF":"INT_TO_FLOAT",
     "FTOI":"FLOAT_TO_INT","BNOT":"BITWISE_NOT",
     "BKWD":"BACKPROPAGATE","WUPD":"WEIGHT_UPDATE",
-    "LOSS":"COMPUTE_LOSS","TNET":"TRAIN_NETWORK",
+    "LOSS":"COMPUTE_LOSS","TRAIN":"TRAIN_NETWORK","INFER":"INFER_FORWARD",
 }
 
 INPUT_NAMES = [
@@ -285,7 +285,8 @@ OPCODE_INFO = {
     "BKWD": ("Backpropagation: compute gradient of loss w.r.t. Rs into Rd", "NML-TR", "Rd Rs Rtarget"),
     "WUPD": ("Weight update: Rd = Rs - lr * Rgrad", "NML-TR", "Rd Rs Rgrad"),
     "LOSS": ("Loss computation: mode 0=MSE, 1=cross-entropy, 2=MAE", "NML-TR", "Rd Rs Rtarget"),
-    "TNET": ("Self-training loop: train network for N epochs at learning rate", "NML-TR", "#epochs #lr"),
+    "TRAIN": ("Train network using config in RU: ALLC RU [6] epochs,lr,opt,0,0,0 then TRAIN RU", "NML-TR", "Rconfig"),
+    "INFER": ("Forward inference pass through trained network", "NML-TR", "Rd Rs"),
 }
 
 def gen_opcode_reference(count=5000):
@@ -504,14 +505,22 @@ def _make_opcode_example(op):
         return [_fmt("LD","R0","@predictions"), _fmt("LD","R9","@targets"),
                 _fmt("LOSS","RG","R0","R9",mode),
                 _fmt("ST","RG",f"@{o}"), "HALT"]
-    if op == "TNET":
+    if op == "TRAIN":
         epochs = random.choice([100,500,1000,2000])
         lr = random.choice(["0.01","0.001","0.1","0.005"])
         return [_fmt("LD","R0",f"@{i}"), _fmt("LD","R9","@targets"),
                 _fmt("LD","R1","@w1"), _fmt("LD","R2","@b1"),
                 _fmt("LD","R3","@w2"), _fmt("LD","R4","@b2"),
-                _fmt("TNET",f"#{epochs}",f"#{lr}"),
-                _fmt("ST","RA",f"@{o}"), "HALT"]
+                _fmt("ALLC","RU",f"#[6]",f"{epochs},{lr},0,0,0,0"),
+                _fmt("TRAIN","RU"),
+                _fmt("INFER","R8","R0"),
+                _fmt("ST","R8",f"@{o}"), "HALT"]
+    if op == "INFER":
+        return [_fmt("LD","R0",f"@{i}"),
+                _fmt("LD","R1","@w1"), _fmt("LD","R2","@b1"),
+                _fmt("LD","R3","@w2"), _fmt("LD","R4","@b2"),
+                _fmt("INFER","R8","R0"),
+                _fmt("ST","R8",f"@{o}"), "HALT"]
     if op == "SPLT":
         return [_fmt("LD","R0",f"@{i}"),
                 _fmt("SPLT","R1","R2","R0","#0"),
@@ -594,7 +603,8 @@ def _opcode_task(op):
         "BKWD": "compute gradients via backpropagation",
         "WUPD": "update weights using gradients",
         "LOSS": "compute the loss between predictions and targets",
-        "TNET": "train a neural network end-to-end",
+        "TRAIN": "train a neural network end-to-end",
+        "INFER": "run forward inference through a trained network",
     }
     return tasks.get(op, f"use {op}")
 
@@ -1623,12 +1633,14 @@ def gen_training(count=5000):
         epochs = random.choice([100,200,500,1000,2000,5000])
         lr = random.choice([0.001, 0.005, 0.01, 0.05, 0.1, 0.5])
         topo_name, _, _ = random.choice(topologies)
-        q = f"Write NML to train a {topo_name} network using TNET for {epochs} epochs at lr {lr}{syntax_tag(syntax)}"
+        q = f"Write NML to train a {topo_name} network using TRAIN+INFER for {epochs} epochs at lr {lr}{syntax_tag(syntax)}"
         lines = [_fmt("LD","R0","@training_inputs"), _fmt("LD","R9","@training_targets"),
                  _fmt("LD","R1","@w1"), _fmt("LD","R2","@b1"),
                  _fmt("LD","R3","@w2"), _fmt("LD","R4","@b2"),
-                 _fmt("TNET",f"#{epochs}",f"#{lr}"),
-                 _fmt("ST","RA",f"@{o}"),
+                 _fmt("ALLC","RU",f"#[6]",f"{epochs},{lr},0,0,0,0"),
+                 _fmt("TRAIN","RU"),
+                 _fmt("INFER","R8","R0"),
+                 _fmt("ST","R8",f"@{o}"),
                  _fmt("ST","R1","@trained_w1"), _fmt("ST","R2","@trained_b1"),
                  _fmt("ST","R3","@trained_w2"), _fmt("ST","R4","@trained_b2"),
                  "HALT"]
@@ -1667,17 +1679,15 @@ def gen_training(count=5000):
         syntax = pick_syntax(); o = _out()
         epochs = random.choice([500,1000,2000])
         lr = random.choice([0.01, 0.05, 0.1])
-        q = f"Write NML to train a network with TNET then run inference on new data{syntax_tag(syntax)}"
+        q = f"Write NML to train a network with TRAIN then run inference on new data{syntax_tag(syntax)}"
         lines = [_fmt("LD","R0","@training_inputs"), _fmt("LD","R9","@training_targets"),
                  _fmt("LD","R1","@w1"), _fmt("LD","R2","@b1"),
                  _fmt("LD","R3","@w2"), _fmt("LD","R4","@b2"),
-                 _fmt("TNET",f"#{epochs}",f"#{lr}"),
+                 _fmt("ALLC","RU",f"#[6]",f"{epochs},{lr},0,0,0,0"),
+                 _fmt("TRAIN","RU"),
                  _fmt("LD","R0","@new_input"),
-                 _fmt("MMUL","R5","R0","R1"), _fmt("MADD","R5","R5","R2"),
-                 _fmt("RELU","R5","R5"),
-                 _fmt("MMUL","R6","R5","R3"), _fmt("MADD","R6","R6","R4"),
-                 _fmt("SIGM","R6","R6"),
-                 _fmt("ST","R6",f"@{o}"), "HALT"]
+                 _fmt("INFER","R8","R0"),
+                 _fmt("ST","R8",f"@{o}"), "HALT"]
         return _pair(q, apply_syntax(lines, syntax))
 
     def _gradient_registers():

@@ -95,7 +95,7 @@ PROMPTS = [
     "Write NML for max pool backward using POOLBK.",
     "Write NML for layer norm backward using NORMBK.",
     "Write NML for attention backward using ATTNBK to get dQ, dK, dV.",
-    "Write NML to train a 2-layer network using TNDEEP with Adam.",
+    "Write NML to train a 2-layer network using TRAIN with Adam.",
     "Write NML for a training loop: forward, LOSS, RELUBK, MMULBK, WUPD.",
     "Write NML for CNN training with CONVBK, RELUBK, POOLBK backward pass.",
     # Symbolic
@@ -122,6 +122,201 @@ def score_candidate(code, runtime_path):
     if exec_result["success"]:
         return 2, "pass"
     return 1, f"exec_fail: {exec_result['stderr'][:100]}"
+
+
+def generate_train_vs_tnet_dpo_pairs():
+    """Generate static DPO pairs: TRAIN+INFER as chosen, legacy TNET/TNDEEP as rejected.
+
+    Teaches the model to prefer the modern ALLC+TRAIN+INFER pattern over the
+    deprecated TNET/TNDEEP single-opcode shortcuts.
+    """
+    pairs = []
+
+    # --- Pair 1: Basic training ---
+    pairs.append({
+        "prompt": "Write NML to train a neural network for 1000 epochs with lr=0.01 and Adam optimizer.",
+        "chosen": (
+            "LD    R0 @training_inputs\n"
+            "LD    R9 @training_targets\n"
+            "LD    R1 @w1\nLD    R2 @b1\n"
+            "LD    R3 @w2\nLD    R4 @b2\n"
+            "ALLC  RU [6] 1000,0.01,1,0,0,0\n"
+            "TRAIN RU @training_inputs @training_targets\n"
+            "INFER RA R0\n"
+            "ST    RA @predictions\n"
+            "HALT"
+        ),
+        "rejected": (
+            "LD    R0 @training_inputs\n"
+            "LD    R9 @training_targets\n"
+            "LD    R1 @w1\nLD    R2 @b1\n"
+            "LD    R3 @w2\nLD    R4 @b2\n"
+            "TNET  #1000 #0.01\n"
+            "ST    RA @predictions\n"
+            "HALT"
+        ),
+    })
+
+    # --- Pair 2: Deep network training ---
+    pairs.append({
+        "prompt": "Write NML to train a 2-layer dense network with Adam for 2000 epochs at lr=0.005.",
+        "chosen": (
+            "LD    R0 @data\n"
+            "LD    R9 @labels\n"
+            "LD    R1 @w1\nLD    R2 @b1\n"
+            "LD    R3 @w2\nLD    R4 @b2\n"
+            "ALLC  RU [6] 2000,0.005,1,0,0,0\n"
+            "TRAIN RU @data @labels\n"
+            "ST    R8 @final_loss\n"
+            "HALT"
+        ),
+        "rejected": (
+            "LD    R0 @data\n"
+            "LD    R9 @labels\n"
+            "LD    R1 @w1\nLD    R2 @b1\n"
+            "LD    R3 @w2\nLD    R4 @b2\n"
+            "TNDEEP #2000 #0.005 #1 @data @labels\n"
+            "HALT"
+        ),
+    })
+
+    # --- Pair 3: Training + inference ---
+    pairs.append({
+        "prompt": "Write NML for fraud detection: train on transaction data, then classify new transactions.",
+        "chosen": (
+            "LD    R0 @transactions\n"
+            "LD    R9 @fraud_labels\n"
+            "LD    R1 @w1\nLD    R2 @b1\n"
+            "LD    R3 @w2\nLD    R4 @b2\n"
+            "ALLC  RU [6] 5000,0.01,1,0,0,0\n"
+            "TRAIN RU @transactions @fraud_labels\n"
+            "LD    R0 @new_transaction\n"
+            "INFER RA R0\n"
+            "CMPI  RE RA #0.5\n"
+            "ST    RE @fraud_flag\n"
+            "HALT"
+        ),
+        "rejected": (
+            "LD    R0 @transactions\n"
+            "LD    R9 @fraud_labels\n"
+            "LD    R1 @w1\nLD    R2 @b1\n"
+            "LD    R3 @w2\nLD    R4 @b2\n"
+            "TNET  #5000 #0.01\n"
+            "CMPI  RE RA #0.5\n"
+            "ST    RE @fraud_flag\n"
+            "HALT"
+        ),
+    })
+
+    # --- Pair 4: SGD training ---
+    pairs.append({
+        "prompt": "Write NML to train a small network with SGD for 500 epochs.",
+        "chosen": (
+            "LD    R0 @inputs\n"
+            "LD    R9 @targets\n"
+            "LD    R1 @w1\nLD    R2 @b1\n"
+            "ALLC  RU [6] 500,0.01,0,0,0,0\n"
+            "TRAIN RU @inputs @targets\n"
+            "INFER RA R0\n"
+            "ST    RA @output\n"
+            "HALT"
+        ),
+        "rejected": (
+            "LD    R0 @inputs\n"
+            "LD    R9 @targets\n"
+            "LD    R1 @w1\nLD    R2 @b1\n"
+            "TNET  #500 #0.01\n"
+            "ST    RA @output\n"
+            "HALT"
+        ),
+    })
+
+    # --- Pair 5: Training with early stopping config ---
+    pairs.append({
+        "prompt": "Write NML to train a network with early stopping (patience=100, min_delta=0.001).",
+        "chosen": (
+            "LD    R0 @train_x\n"
+            "LD    R9 @train_y\n"
+            "LD    R1 @w1\nLD    R2 @b1\n"
+            "LD    R3 @w2\nLD    R4 @b2\n"
+            "ALLC  RU [6] 5000,0.01,1,0,100,0.001\n"
+            "TRAIN RU @train_x @train_y\n"
+            "ST    R8 @loss\n"
+            "HALT"
+        ),
+        "rejected": (
+            "LD    R0 @train_x\n"
+            "LD    R9 @train_y\n"
+            "LD    R1 @w1\nLD    R2 @b1\n"
+            "LD    R3 @w2\nLD    R4 @b2\n"
+            "TNDEEP #5000 #0.01 #1 @train_x @train_y\n"
+            "HALT"
+        ),
+    })
+
+    # --- Pair 6: Batch inference after training ---
+    pairs.append({
+        "prompt": "Write NML to train on data, then run batch inference on 32 test samples.",
+        "chosen": (
+            "ALLC  RU [6] 1000,0.01,1,0,0,0\n"
+            "TRAIN RU @train_x @train_y\n"
+            "LD    R0 @test_data\n"
+            "LOOP  #32\n"
+            "INFER RA R0\n"
+            "ST    RA @predictions\n"
+            "ENDP\n"
+            "HALT"
+        ),
+        "rejected": (
+            "TNET  #1000 #0.01\n"
+            "LD    R0 @test_data\n"
+            "LOOP  #32\n"
+            "MMUL  RA R0 R1\n"
+            "MADD  RA RA R2\n"
+            "SIGM  RA RA\n"
+            "ST    RA @predictions\n"
+            "ENDP\n"
+            "HALT"
+        ),
+    })
+
+    # --- Pair 7: Training with weight decay ---
+    pairs.append({
+        "prompt": "Write NML to train a network with L2 regularization.",
+        "chosen": (
+            "ALLC  RU [6] 2000,0.01,1,0,0,0\n"
+            "TRAIN RU @data @labels\n"
+            "WDECAY R1 #0.0001\n"
+            "WDECAY R3 #0.0001\n"
+            "INFER RA R0\n"
+            "ST    RA @result\n"
+            "HALT"
+        ),
+        "rejected": (
+            "TNET  #2000 #0.01\n"
+            "ST    RA @result\n"
+            "HALT"
+        ),
+    })
+
+    # --- Pair 8: Training with logging ---
+    pairs.append({
+        "prompt": "Write NML to train with verbose logging every 50 epochs.",
+        "chosen": (
+            "TLOG  #50\n"
+            "ALLC  RU [6] 1000,0.01,1,0,0,0\n"
+            "TRAIN RU @data @labels\n"
+            "ST    R8 @loss\n"
+            "HALT"
+        ),
+        "rejected": (
+            "TLOG  #50\n"
+            "TNDEEP #1000 #0.01 #1\n"
+            "HALT"
+        ),
+    })
+
+    return pairs
 
 
 def main():
@@ -229,6 +424,12 @@ def main():
     print(f"    Both failed:       {stats['both_fail']} (no preference signal)")
     print(f"    No variance:       {stats['no_variance']}")
     print(f"{'─' * 60}")
+
+    # Add static TRAIN-vs-TNET/TNDEEP preference pairs
+    static_dpo = generate_train_vs_tnet_dpo_pairs()
+    pairs.extend(static_dpo)
+    stats["pairs_generated"] += len(static_dpo)
+    print(f"    Static TRAIN>TNET: {len(static_dpo)} pairs added")
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)

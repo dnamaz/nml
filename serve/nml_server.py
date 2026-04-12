@@ -384,46 +384,19 @@ def advisor_build_context(description: str) -> str:
     matches = advisor_match_problem(description)
 
     parts = [
-        "You are an ML Advisor for the NML (Neural Machine Language) platform.",
-        "NML is an 89-opcode tensor register machine. The runtime is a small C binary;",
-        "programs and data are separate files with no inherent size limit.",
-        "Your job: given a real-world problem description, recommend the best ML algorithm,",
-        "explain WHY it fits, describe the data pipeline, and show how to implement it in NML.",
+        "You are an ML Advisor for NML, an 89-opcode tensor register machine.",
+        "Given a problem description, respond concisely with these 4 sections:",
         "",
-        "Your response MUST include these sections in order:",
+        "1. PROBLEM TYPE — classify (regression, classification, anomaly detection, etc.)",
         "",
-        "1. PROBLEM TYPE — classify the problem (regression, binary classification, etc.)",
+        "2. ALGORITHM & WHY — recommended algorithm, 1-2 sentences on why it fits",
         "",
-        "2. WHAT YOU'RE DOING AND WHY",
-        "   Explain in plain language: what is the goal, what goes in, what comes out.",
-        "   Example: 'You are training a model to learn what normal credit card transactions",
-        "   look like, so that when a new transaction arrives, the model can score how",
-        "   different it is from normal — a high score means likely fraud.'",
+        "3. DATA REQUIREMENTS — for each tensor: name, shape, what each dimension means.",
+        "   Group into: inputs, weights, labels/targets. Keep it brief.",
         "",
-        "3. DATA REQUIREMENTS",
-        "   For each tensor the model needs, explain:",
-        "   - What real-world data it represents (not just '@w1 shape=4,8')",
-        "   - Why this data is needed for the algorithm",
-        "   - Shape and what each dimension means (rows = samples, cols = features, etc.)",
-        "   - Example values with units where applicable",
-        "   Group into: INPUT DATA (what the user provides), MODEL WEIGHTS (initialized by",
-        "   the system), and LABELS/TARGETS (for supervised training).",
-        "   Show the complete .nml.data file with inline comments explaining every tensor.",
+        "4. NML APPROACH — key opcodes, register layout, data flow. No full program.",
         "",
-        "4. RECOMMENDED ALGORITHM — name and 1-sentence why",
-        "",
-        "5. WHY THIS FITS — 2-3 sentences on why this algorithm matches the constraints",
-        "",
-        "6. ALTERNATIVES — 1-2 other options with trade-offs",
-        "",
-        "7. NML IMPLEMENTATION — specific opcodes, register layout, tensor shapes.",
-        "   Show the data flow: which tensor loads into which register, what operations",
-        "   transform it, and where the output lands.",
-        "",
-        "8. LESSON REFERENCE — which ML Journey lesson covers this",
-        "",
-        "The output feeds into a Think model that plans the NML architecture, and a user",
-        "who needs to prepare their .nml.data file. Be concrete about dimensions and data.",
+        "Be concrete about shapes and opcodes. Skip narrative — this feeds a Think model.",
     ]
 
     if matches:
@@ -474,7 +447,7 @@ def advisor_build_context(description: str) -> str:
         parts.append("")
         parts.append("=== DATA GUIDE ===")
         parts.append(f"  Format: {dg.get('format', '')}")
-        parts.append(f"  TNET shortcut: {dg.get('tnet_shortcut', '')}")
+        parts.append(f"  TRAIN shortcut: {dg.get('train_shortcut', dg.get('tnet_shortcut', ''))}")
         cats = dg.get("tensor_categories", {})
         for cat_name, cat_info in cats.items():
             parts.append(f"  {cat_name}: {cat_info.get('purpose', '')}")
@@ -527,7 +500,7 @@ def advisor_local_only(description: str) -> dict:
 # HTTP Server (for terminal UI + LLM chat)
 # ═══════════════════════════════════════════
 
-def create_http_app(model_path: str = None, advisor_llm: str = None, advisor_model: str = None, advisor_max_tokens: int = 4096):
+def create_http_app(model_path: str = None, advisor_llm: str = None, advisor_model: str = None, advisor_max_tokens: int = 4096, think_model: str = None):
     """Create an aiohttp app with MCP tool endpoints + optional LLM chat."""
     from aiohttp import web
 
@@ -577,6 +550,11 @@ def create_http_app(model_path: str = None, advisor_llm: str = None, advisor_mod
                 print(f"WARNING: mlx_lm not available (not macOS?). Use --model http://host:port to proxy to an external LLM server.")
             except Exception as e:
                 print(f"WARNING: Could not load model: {e}")
+
+    think_backend_url = None
+    if think_model:
+        think_backend_url = think_model.rstrip("/")
+        print(f"Think model (proxy): {think_backend_url}")
 
     ADVISOR_SHORTHANDS = {
         "anthropic": "https://api.anthropic.com",
@@ -980,15 +958,29 @@ def create_http_app(model_path: str = None, advisor_llm: str = None, advisor_mod
             "Vision:    CONV Rd Rs Rkernel #stride #pad | POOL Rd Rs #size #stride | UPSC Rd Rs #factor\n"
             "Transformer: ATTN Rd Rq Rk Rv | NORM Rd Rs Rgamma Rbeta | EMBD Rd Rtable Rindex\n"
             "Reduction: RDUC Rd Rs #dim #mode | CLMP Rd Rs #min #max | WHER Rd Rcond Rs1 Rs2\n"
-            "Training:  TNET Rconfig #epochs | LOSS Rd Rpred Rlabel #type | BKWD Rgrad Ract Rloss\n"
+            "Training:  TRAIN RU [@data @labels] | INFER Rd Rs | LOSS Rd Rpred Rlabel #type | BKWD Rgrad Ract Rloss\n"
             "           WUPD Rw Rgrad Rlr | BN Rd Rs Rgamma Rbeta | DROP Rd Rs #rate\n"
             "Backward:  RELUBK/SIGMBK/TANHBK/GELUBK/SOFTBK Rd Rgrad Rin (3 ops)\n"
             "           MMULBK Rd_di Rd_dw Rgrad Rin Rw | CONVBK Rd_di Rd_dk Rgrad Rin Rk (5 ops)\n"
             "Control:   HALT | JUMP #off | JMPT #off | JMPF #off | LOOP Rs|#n | ENDP | CALL #off | RET\n"
-            "General:   SYS Rd #code | CMP Rs1 Rs2 | CMPI Rd Rs #imm\n"
-            "Rules: MMUL needs [M,K]×[K,N]. Always end with HALT."
+            "General:   SYS Rd #code | MOD Rd Rs1 Rs2 | CMP Rs1 Rs2 | CMPI Rd Rs #imm\n"
+            "           ITOF Rd Rs | FTOI Rd Rs | BNOT Rd Rs\n"
+            "Rules: MMUL needs [M,K]×[K,N]. MOD requires integer values (not floats). Always end with HALT."
             + data_slots_hint
         )
+
+        # Add opcode constraints to system prompt
+        try:
+            sys.path.insert(0, str(PROJECT_ROOT / "lsp" / "nml_lsp"))
+            from opcode_db import constraints_prompt as _constraints_prompt
+            # Extract opcode names from the prompt to include relevant constraints
+            import re as _re
+            _prompt_opcodes = _re.findall(r'\b([A-Z]{2,6}(?:BK)?)\b', prompt.upper())
+            _cp = _constraints_prompt(_prompt_opcodes)
+            if _cp:
+                system_msg += "\n\n" + _cp
+        except ImportError:
+            pass
 
         # Load opcode schemas for error correction
         opcode_schemas = ""
@@ -1012,7 +1004,10 @@ def create_http_app(model_path: str = None, advisor_llm: str = None, advisor_mod
                 lines = ["\nCorrect operand signatures:"]
                 for op in sorted(ops):
                     info = OPCODES[op]
-                    lines.append(f"  {op} {info.operand_schema} — {info.description[:60]}")
+                    sig = f"  {op} {info.operand_schema} — {info.description[:60]}"
+                    if info.constraints:
+                        sig += f"\n    Constraints: {info.constraints}"
+                    lines.append(sig)
                 # If any backward op, show all backward ops
                 if any(op.endswith("BK") for op in ops):
                     lines.append("\nAll backward ops:")
@@ -1021,22 +1016,30 @@ def create_http_app(model_path: str = None, advisor_llm: str = None, advisor_mod
                         if op in OPCODES:
                             info = OPCODES[op]
                             lines.append(f"  {op} {info.operand_schema}")
-                # TNET/TNDEEP usage example
-                if "TNET" in ops or "TNDEEP" in ops or "n_layers" in errors_text:
+                # TRAIN/TNET/TNDEEP usage example
+                if "TRAIN" in ops or "TNET" in ops or "TNDEEP" in ops or "n_layers" in errors_text:
                     lines.append(
-                        "\nTNET usage (config-driven N-layer MLP):"
+                        "\nTRAIN usage (config-driven training with early stopping):"
+                        "\n  RV (R31) = architecture descriptor [n_layers, h1, act1, h2, act2, ...]"
+                        "\n       activation: 0=ReLU, 1=sigmoid, 2=tanh"
+                        "\n  RU (R20) = config [epochs, lr, optimizer(0=SGD,1=Adam), print_every, patience, min_delta]"
                         "\n  R0 = training data [samples, features]"
                         "\n  R9 = labels [samples, outputs]"
-                        "\n  R1 = arch config [n_layers, 3] where each row = [in_size, out_size, activation]"
-                        "\n       activation: 0=ReLU, 1=sigmoid, 2=tanh, 3=GELU, 4=linear"
-                        "\n  TNET R1 #epochs"
+                        "\n  R1-R6 = weight/bias pairs (auto-initialized by TRAIN)"
+                        "\n  TRAIN RU [@data @labels]"
+                        "\n  INFER Rd Rs  — forward-only prediction after training"
                         "\n"
-                        "\nExample (2-layer: 2->4->1, 500 epochs):"
-                        "\n  FILL  R0 #4 #2 #0.0    ; training data placeholder [4,2]"
-                        "\n  FILL  R9 #4 #1 #0.0    ; labels placeholder [4,1]"
-                        "\n  CONST R1 #2 #3 0 2,4,0,4,1,0  ; config [2,3]: layer1=[2,4,relu] layer2=[4,1,relu]"
-                        "\n  TNET  R1 #500           ; train 500 epochs"
-                        "\n  HALT")
+                        "\nExample (2-layer: 4->8->1, 500 epochs, Adam, early stopping):"
+                        "\n  LD    R0 @training_data      ; [N,4] input features"
+                        "\n  LD    R9 @training_labels     ; [N,1] target labels"
+                        "\n  FILL  RV #5 #1 #0.0          ; arch: [2, 8, 0, 1, 1] = 2 layers, 8-relu, 1-sigmoid"
+                        "\n  FILL  RU #6 #1 #0.0          ; config: [500, 0.001, 1, 10, 50, 1e-6]"
+                        "\n  TRAIN RU [@training_data @training_labels]"
+                        "\n  INFER RA R0                   ; predict on training data"
+                        "\n  ST    RA @predictions"
+                        "\n  HALT"
+                        "\n"
+                        "\nNote: TNET is a legacy wrapper that redirects to TRAIN internally. Prefer TRAIN directly.")
                 return "\n".join(lines)
         except ImportError:
             _get_help = lambda _: ""
@@ -1149,16 +1152,50 @@ def create_http_app(model_path: str = None, advisor_llm: str = None, advisor_mod
             "history": attempts,
         })
 
+    async def handle_think(request):
+        """Proxy think model requests to the think llama-server."""
+        if not think_backend_url:
+            return _json({"error": "No think model configured. Start with --think-model http://host:port"}, 503)
+        from aiohttp import ClientSession
+        body = await request.json()
+        try:
+            async with ClientSession() as session:
+                async with session.post(
+                    f"{think_backend_url}/v1/chat/completions",
+                    json=body,
+                ) as upstream:
+                    data = await upstream.json()
+                    return _json(data)
+        except Exception as e:
+            return _json({"error": f"Think model error: {e}"}, 502)
+
+    async def handle_opcode_constraints(request):
+        """Return shape/type constraints for given opcodes.
+
+        POST /opcode_constraints
+        Body: {"opcodes": ["MMUL", "MOD", "TNET"]}
+        """
+        body = await request.json()
+        opcode_names = body.get("opcodes", [])
+        try:
+            sys.path.insert(0, str(PROJECT_ROOT / "lsp" / "nml_lsp"))
+            from opcode_db import get_constraints
+            return _json(get_constraints(opcode_names))
+        except ImportError:
+            return _json({"error": "opcode_db not available"}, 500)
+
     app = web.Application()
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_post("/v1/chat/completions", handle_chat)
+    app.router.add_post("/v1/think/chat/completions", handle_think)
     app.router.add_post("/validate", handle_validate)
     app.router.add_post("/execute", handle_execute)
     app.router.add_post("/generate_validated", handle_generate_validated)
     app.router.add_post("/format", handle_format)
     app.router.add_post("/spec", handle_spec)
     app.router.add_post("/advise", handle_advise)
+    app.router.add_post("/opcode_constraints", handle_opcode_constraints)
     app.router.add_post("/agent/register", handle_agent_register)
     app.router.add_get("/agent/list", handle_agent_list)
     app.router.add_post("/distribute", handle_distribute)
@@ -1196,6 +1233,8 @@ Examples:
                         help="HTTP port (default: 8082)")
     parser.add_argument("--model", type=str, default=None,
                         help="Path to MLX model for chat completions")
+    parser.add_argument("--think-model", type=str, default=None,
+                        help="URL for think model llama-server (e.g. http://127.0.0.1:8084)")
     parser.add_argument("--advisor-llm", type=str, default=None,
                         help="URL for ML Advisor high-reasoning model "
                              "(e.g. https://api.anthropic.com or https://openrouter.ai/api)")
@@ -1214,7 +1253,8 @@ Examples:
         from aiohttp import web
         app = create_http_app(model_path=args.model, advisor_llm=args.advisor_llm,
                               advisor_model=args.advisor_model,
-                              advisor_max_tokens=args.advisor_max_tokens)
+                              advisor_max_tokens=args.advisor_max_tokens,
+                              think_model=args.think_model)
         print(f"NML Server on :{args.port}")
         print(f"  Tools: {', '.join(t['name'] for t in TOOLS)}")
         if args.model:

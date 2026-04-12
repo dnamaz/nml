@@ -95,7 +95,7 @@ def gen_nn_with_data(count=4000):
 
 
 def gen_training_with_data(count=3000):
-    """TNET training programs with matching data files."""
+    """TRAIN+INFER training programs with matching data files."""
     pairs = []
     for _ in range(count):
         syntax = pick_syntax()
@@ -117,15 +117,17 @@ def gen_training_with_data(count=3000):
         w2_data = _rand_data(hid_size)
         b2_data = _rand_data(1, -0.1, 0.1)
 
-        q = f"Write NML TNET training program with data file for {n_samples} samples, {inp_size} features" + syntax_tag(syntax)
+        q = f"Write NML TRAIN+INFER training program with data file for {n_samples} samples, {inp_size} features" + syntax_tag(syntax)
 
         program_lines = [
             _fmt("LD", "R0", "@training_inputs"),
             _fmt("LD", "R9", "@training_targets"),
             _fmt("LD", "R1", "@w1"), _fmt("LD", "R2", "@b1"),
             _fmt("LD", "R3", "@w2"), _fmt("LD", "R4", "@b2"),
-            _fmt("TNET", f"#{epochs}", f"#{lr}"),
-            _fmt("ST", "RA", "@predictions"),
+            _fmt("ALLC", "RU", f"#[6]", f"{epochs},{lr},0,0,0,0"),
+            _fmt("TRAIN", "RU"),
+            _fmt("INFER", "R8", "R0"),
+            _fmt("ST", "R8", "@predictions"),
             _fmt("ST", "R1", "@trained_w1"),
             _fmt("ST", "R3", "@trained_w2"),
             "HALT",
@@ -682,7 +684,7 @@ def main():
 
     categories = [
         ("NN + data",            gen_nn_with_data, 3000),
-        ("TNET + data",          gen_training_with_data, 2000),
+        ("TRAIN+INFER + data",   gen_training_with_data, 2000),
         ("Data file only",       gen_data_file_only, 2000),
         ("Simple ops + data",    gen_simple_with_data, 2000),
         ("Activations + data",   gen_activation_with_data, 1500),

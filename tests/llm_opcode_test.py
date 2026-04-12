@@ -145,10 +145,10 @@ OPCODE_PROMPTS = [
     },
     {
         "id": "training",
-        "opcodes": ["BKWD", "WUPD", "LOSS", "TNET"],
+        "opcodes": ["BKWD", "WUPD", "LOSS", "TRAIN", "INFER"],
         "prompts": [
             "Write NML for a training loop: forward pass with MMUL/RELU, compute LOSS, backpropagate with BKWD, update weights with WUPD. Include the .nml.data file with weights, input, and target.",
-            "Write NML to train a neural network using the TNET opcode with 1000 epochs and learning rate 0.01. Include the .nml.data file with w1, b1, w2, b2, input, and target.",
+            "Write NML to train a neural network using the TRAIN opcode with 1000 epochs and learning rate 0.01, then run INFER for predictions. Include the .nml.data file with input and target.",
         ],
     },
     {
@@ -196,7 +196,7 @@ ALL_OPCODES = {
     "FFT", "FILT",
     "META", "FRAG", "ENDF", "LINK", "PTCH", "SIGN", "VRFY",
     "VOTE", "PROJ", "DIST", "GATH", "SCAT", "SCTR",
-    "BKWD", "WUPD", "LOSS", "TNET",
+    "BKWD", "WUPD", "LOSS", "TNET", "TNDEEP", "TRAIN", "INFER",
 }
 
 

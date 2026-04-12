@@ -270,15 +270,18 @@ def gen_tlog():
     for _ in range(200):
         n   = random.choice(intervals)
         ctx = random.choice(contexts).format(n=n)
-        # TLOG then TNET
+        # TLOG then ALLC+TRAIN+INFER
         epochs = rand_epochs()
         lr     = rand_lr()
-        loss   = random.choice([0, 1, 2])
-        loss_name = {0: "MSE", 1: "cross-entropy", 2: "MAE"}[loss]
+        opt    = random.choice([0, 1])
+        opt_name = {0: "SGD", 1: "Adam"}[opt]
         pairs.append(pair(
-            f"{ctx}. Train a 2-layer network with {loss_name} loss.",
-            f"LD R0 @input\nLD R1 @w1\nLD R2 @b1\nLD R3 @w2\nLD R4 @b2\nLD R9 @labels\n"
-            f"TLOG #{n}\nTNET #{epochs} #{lr} #{loss}\nST RA @result\nHALT"
+            f"{ctx}. Train a 2-layer network with {opt_name} optimizer.",
+            f"LD RV @arch_desc\nLD R0 @input\nLD R9 @labels\n"
+            f"LD R1 @w1\nLD R2 @b1\nLD R3 @w2\nLD R4 @b2\n"
+            f"ALLC RU [6] {epochs},{lr},{opt},0,0,0\n"
+            f"TLOG #{n}\nTRAIN RU\n"
+            f"INFER R8 R0\nST R8 @result\nHALT"
         ))
         # TLOG then TRAIN (config-driven)
         pairs.append(pair(
@@ -754,16 +757,19 @@ def gen_backward_ops():
 
 
 # ═══════════════════════════════════════════════════════════════
-# 15. TNDEEP — deep N-layer training
+# 15. TRAIN_DEEP — deep N-layer training via ALLC+TRAIN+INFER
 # ═══════════════════════════════════════════════════════════════
 
-def gen_tndeep():
+def gen_train_deep():
     pairs = []
+    opt_names = {0: "SGD", 1: "Adam"}
     descs = [
-        "Train a deep MLP using TNDEEP.",
-        "Deep network training with TNDEEP opcode.",
-        "Multi-layer deep training using NML TNDEEP.",
-        "Train a deep neural network with TNDEEP and weight decay.",
+        "Train a deep MLP using TRAIN.",
+        "Deep network training with ALLC and TRAIN opcodes.",
+        "Multi-layer deep training using NML TRAIN.",
+        "Train a deep neural network with TRAIN and weight decay.",
+        "Fit a deep network using config-driven TRAIN.",
+        "Use ALLC+TRAIN to train a deep architecture.",
     ]
     for _ in range(200):
         inp  = rand_input()
@@ -771,10 +777,15 @@ def gen_tndeep():
         lbl  = rand_labels()
         lr   = rand_lr()
         ep   = rand_epochs()
+        opt  = random.choice([0, 1])
         desc = random.choice(descs)
-        pairs.append(pair(desc,
-            f"LD R0 @{inp}\nLD R1 @{arch}\nLD R9 @{lbl}\n"
-            f"TNDEEP R1 #{ep}\nST R1 @trained_model\nHALT"))
+        pairs.append(pair(
+            f"{desc} Epochs={ep}, lr={lr}, optimizer={opt_names[opt]}.",
+            f"; RV = architecture descriptor [n_layers, h1, act1, h2, act2, ...]\n"
+            f"LD RV @{arch}\nLD R0 @{inp}\nLD R9 @{lbl}\n"
+            f"ALLC RU [6] {ep},{lr},{opt},0,0,0\n"
+            f"TRAIN RU\n"
+            f"INFER R8 R0\nST R8 @predictions\nHALT"))
     return pairs
 
 
@@ -838,7 +849,7 @@ def main():
         ("REDUCTION",   gen_reduction_ops),
         ("SIGNAL",      gen_signal_ops),
         ("BACKWARD",    gen_backward_ops),
-        ("TNDEEP",      gen_tndeep),
+        ("TRAIN_DEEP",  gen_train_deep),
         ("M2M",         gen_m2m_ops),
         ("NML_G",       gen_nmlg_ops),
     ]

@@ -31,7 +31,7 @@ CODE_MODEL="$ROOT/nml-model-training/output/nml-1.5b-v0.11.0/nml-1.5b-instruct-v
 # ── Defaults ────────────────────────────────────────────────────────────
 LLAMA_SERVER="llama-server"
 NO_THINK=false
-ADVISOR_LLM=""
+ADVISOR_LLM="https://api.anthropic.com"
 ADVISOR_MODEL=""
 
 # ── Parse arguments ─────────────────────────────────────────────────────
@@ -67,6 +67,16 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+# ── Anthropic API key check ─────────────────────────────────────────────
+if echo "$ADVISOR_LLM" | grep -qi "anthropic"; then
+    if [ -z "$ANTHROPIC_API_KEY" ]; then
+        echo "ERROR: ANTHROPIC_API_KEY environment variable is not set."
+        echo "  The advisor LLM ($ADVISOR_LLM) requires an Anthropic API key."
+        echo "  Set it with: export ANTHROPIC_API_KEY='sk-ant-...'"
+        exit 1
+    fi
+fi
 
 # ── Validation ──────────────────────────────────────────────────────────
 if ! $NO_THINK; then
@@ -120,6 +130,7 @@ if ! $NO_THINK; then
             --port "$PORT_THINK" \
             --host 127.0.0.1 \
             -ngl 99 \
+            --cors '*' \
             > "$LOG_DIR/think_llama.log" 2>&1 &
         PIDS+=($!)
         echo "  Think model PID: $!"
@@ -140,6 +151,7 @@ if [ -f "$CODE_MODEL" ]; then
         --port "$PORT_CODE" \
         --host 127.0.0.1 \
         -ngl 99 \
+        --cors '*' \
         > "$LOG_DIR/code_llama.log" 2>&1 &
     PIDS+=($!)
     echo "  Code model PID: $!"
@@ -159,7 +171,9 @@ if [ -n "$ADVISOR_MODEL" ]; then
 fi
 echo "  Starting NML Server on :$PORT_SERVER (proxy to code model on :$PORT_CODE)..."
 python3 -u "$PROJECT_ROOT/serve/nml_server.py" --http --port "$PORT_SERVER" \
-    --model "http://127.0.0.1:$PORT_CODE" $ADVISOR_FLAG \
+    --model "http://127.0.0.1:$PORT_CODE" \
+    --think-model "http://127.0.0.1:$PORT_THINK" \
+    $ADVISOR_FLAG \
     > "$LOG_DIR/server.log" 2>&1 &
 PIDS+=($!)
 echo "  Server PID: $!"

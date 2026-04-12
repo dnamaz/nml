@@ -6,7 +6,7 @@ gets wrong or never generates. Run after llm_opcode_test.py identifies gaps.
 Output: domain/output/training/nml_gap_fix_pairs.jsonl
 
 Categories:
-  1. TNET (correct 3-immediate syntax)
+  1. TRAIN+INFER (training config via ALLC RU, then TRAIN RU / INFER R8 R0)
   2. BKWD/WUPD/LOSS (manual training loops)
   3. CMPF (exactly 4 operands)
   4. Under-represented: BNOT, DOT, FRAG/LINK, SCAT/SCTR, SIGN/VRFY, TRAP
@@ -50,7 +50,7 @@ LOSS_NAMES = {0: "MSE", 1: "cross-entropy", 2: "MAE"}
 SYNTAXES = ["classic", "symbolic", "verbose"]
 
 # ═══════════════════════════════════════════════════════════════
-# 1. TNET — self-training loop
+# 1. TRAIN+INFER — self-training loop
 # ═══════════════════════════════════════════════════════════════
 
 def gen_tnet():
@@ -62,10 +62,10 @@ def gen_tnet():
         loss_name = LOSS_NAMES[loss]
 
         prompts = [
-            f"Write NML to train a neural network using TNET for {epochs} epochs with learning rate {lr}.",
-            f"Write NML using TNET to self-train on input/target data. Use {loss_name} loss, {epochs} epochs, lr={lr}.",
-            f"NML program: load weights w1,b1,w2,b2, input, target, then train with TNET #{epochs} #{lr} #{loss}.",
-            f"Write NML for self-training: load 2-layer weights, input in R0, target in R9, use TNET.",
+            f"Write NML to train a neural network using TRAIN+INFER for {epochs} epochs with learning rate {lr}.",
+            f"Write NML using TRAIN+INFER to self-train on input/target data. Use {loss_name} loss, {epochs} epochs, lr={lr}.",
+            f"NML program: load weights w1,b1,w2,b2, input, target, then train with ALLC RU / TRAIN RU / INFER.",
+            f"Write NML for self-training: load 2-layer weights, input in R0, target in R9, use TRAIN+INFER.",
         ]
         prompt = random.choice(prompts)
 
@@ -75,8 +75,10 @@ LD    R3 @w2
 LD    R4 @b2
 LD    R0 @input
 LD    R9 @target
-TNET  #{epochs} #{lr} #{loss}
-ST    RA @result
+ALLC  RU #[6] {epochs},{lr},{loss},0,0,0
+TRAIN RU
+INFER R8 R0
+ST    R8 @result
 HALT"""
         pairs.append(pair(prompt, code))
 
@@ -90,12 +92,14 @@ HALT"""
 ↓  ν  @b2
 ↓  ι  @input
 ↓  ς  @target
-⥁  #{epochs} #{lr} #{loss}
-↑  α  @result
+□  RU  #[6]  {epochs},{lr},{loss},0,0,0
+⥁  RU
+⥂  R8  ι
+↑  R8  @result
 ◼"""
         prompt = random.choice([
-            f"Write symbolic NML to train with TNET for {epochs} epochs.",
-            f"Symbolic NML: self-train a network using ⥁ with lr={lr}.",
+            f"Write symbolic NML to train with TRAIN+INFER for {epochs} epochs.",
+            f"Symbolic NML: self-train a network using ⥁ (TRAIN) + ⥂ (INFER) with lr={lr}.",
         ])
         pairs.append(pair(prompt, code))
 
@@ -109,10 +113,12 @@ LOAD  R3  @w2
 LOAD  R4  @b2
 LOAD  R0  @input
 LOAD  R9  @target
-TNET  #{epochs}  #{lr}  #{loss}
-STORE  ACCUMULATOR  @result
+ALLOCATE  RU  #[6]  {epochs},{lr},{loss},0,0,0
+TRAIN_NETWORK  RU
+INFER_FORWARD  R8  R0
+STORE  R8  @result
 STOP"""
-        prompt = f"Write verbose NML to train a network with TNET for {epochs} epochs."
+        prompt = f"Write verbose NML to train a network with TRAIN+INFER for {epochs} epochs."
         pairs.append(pair(prompt, code))
 
     return pairs
@@ -657,7 +663,7 @@ def main():
     all_pairs = []
 
     generators = [
-        ("TNET", gen_tnet),
+        ("TRAIN+INFER", gen_tnet),
         ("BKWD/WUPD/LOSS", gen_training_manual),
         ("CMPF", gen_cmpf),
         ("BNOT", gen_bnot),

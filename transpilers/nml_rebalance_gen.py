@@ -249,14 +249,14 @@ class NMLRebalanceGenerator:
                 ]
             })
 
-        # Pattern 2: TLOG with TNDEEP
+        # Pattern 2: TLOG with TRAIN
         for i in range(count // 2):
             interval = random.choice([10, 50, 100])
 
             examples.append({
                 "messages": [
-                    {"role": "user", "content": "Verbose training with logging, use TNDEEP"},
-                    {"role": "assistant", "content": f"TLOG  #{interval}\nTNDEEP #1000 #0.01 #1\nHALT"}
+                    {"role": "user", "content": "Verbose training with logging, use TRAIN"},
+                    {"role": "assistant", "content": f"TLOG  #{interval}\nALLC  RU [6] 1000,0.01,1,0,0,0\nTRAIN RU @data @labels\nHALT"}
                 ]
             })
 

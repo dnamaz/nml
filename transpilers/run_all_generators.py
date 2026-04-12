@@ -47,6 +47,9 @@ GENERATORS = [
     ("transpilers/nml_jump_fix_gen.py",          "nml_jump_fix_pairs.jsonl",        None),
     ("transpilers/nml_tnet_fix_gen.py",          "nml_tnet_fix_pairs.jsonl",        None),
     ("transpilers/nml_gap_training_gen.py",      "nml_gap_fix_pairs.jsonl",         None),
+    ("transpilers/nml_coverage_fix_gen.py",     "nml_coverage_fix_pairs.jsonl",    None),
+    ("transpilers/nml_sadd_ssub_gen.py",        "nml_sadd_ssub_pairs.jsonl",       None),
+    ("transpilers/nml_dpo_gen.py",              "nml_dpo_pairs.jsonl",             None),
 ]
 
 # Hardcoded-output scripts write here; driver moves them into raw/

@@ -80,8 +80,8 @@ NML is a minimal deterministic machine language for AI workloads with 32 tensor 
 
 ## Key registers
 R0=ι(input), R8(loss), R9=ς(labels), RA=α(accumulator), RD=δ(counter),
-RE=φ(flag/condition), RV(arch descriptor for TNDEEP).
-R1-R6: weight/bias pairs for TNDEEP (R1=w1, R2=b1, ..., R6=b3).
+RE=φ(flag/condition), RV(arch descriptor for TRAIN/INFER).
+R1-R6: weight/bias pairs for TRAIN/INFER (R1=w1, R2=b1, ..., R6=b3).
 
 ## Core opcodes
 Memory:     LD Rd @name | ST Rs @name | MOV Rd Rs | ALLC Rd #[r,c] | LEAF Rd #val
@@ -94,8 +94,8 @@ Subroutine: CALL label | RET
 System:     SYNC | HALT | TRAP [#code]
 Extensions: CONV POOL UPSC PADZ | ATTN NORM EMBD | RDUC WHER CLMP CMPR | FFT FILT
 M2M:        META FRAG ENDF LINK PTCH SIGN VRFY VOTE PROJ DIST GATH SCAT
-Training:   BKWD WUPD LOSS TNET TNDEEP | RELUBK SIGMBK TANHBK GELUBK SOFTBK MMULBK CONVBK POOLBK NORMBK ATTNBK
-Config:     TLOG TRAIN INFER WDECAY
+Training:   BKWD WUPD LOSS TRAIN INFER | RELUBK SIGMBK TANHBK GELUBK SOFTBK MMULBK CONVBK POOLBK NORMBK ATTNBK
+Config:     TLOG WDECAY | Legacy aliases: TNET TNDEEP (redirect to TRAIN)
 General:    SYS Rs Rd | MOD Rd Ra Rb | ITOF Rd Rs | FTOI Rd Rs | BNOT Rd Rs
 
 ## Data file format

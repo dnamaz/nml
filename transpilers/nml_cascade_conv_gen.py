@@ -2,7 +2,7 @@
 """
 Generate ~10K cascade ↔ tensor conversion pairs.
 
-Teaches the model that cascade CMPF/JMPT/LEAF programs and TNET-based
+Teaches the model that cascade CMPF/JMPT/LEAF programs and TRAIN+INFER-based
 tensor network programs compute the same function. Covers progressive,
 flat-rate, fixed, and blended bracket structures.
 
@@ -30,7 +30,7 @@ def _rand_brackets(n=3):
 
 
 def gen_cascade_to_tensor(count=3500):
-    """Convert cascade CMPF/JMPT/LEAF to equivalent TNET."""
+    """Convert cascade CMPF/JMPT/LEAF to equivalent TRAIN+INFER."""
     pairs = []
     for _ in range(count):
         syntax = pick_syntax()
@@ -56,25 +56,22 @@ def gen_cascade_to_tensor(count=3500):
             _fmt("LD", "R9", "@targets"),
             _fmt("LD", "R1", "@w1"), _fmt("LD", "R2", "@b1"),
             _fmt("LD", "R3", "@w2"), _fmt("LD", "R4", "@b2"),
-            _fmt("TNET", "#2000", "#0.01"),
+            _fmt("ALLC", "RU", "#[6]", "2000,0.01,0,0,0,0"),
+            _fmt("TRAIN", "RU"),
             _fmt("LD", "R0", "@input"),
-            _fmt("MMUL", "R5", "R0", "R1"),
-            _fmt("MADD", "R5", "R5", "R2"),
-            _fmt("RELU", "R5", "R5"),
-            _fmt("MMUL", "R6", "R5", "R3"),
-            _fmt("MADD", "R6", "R6", "R4"),
-            _fmt("ST", "R6", "@result"),
+            _fmt("INFER", "R8", "R0"),
+            _fmt("ST", "R8", "@result"),
             "HALT",
         ]
         tensor_code = "\n".join(apply_syntax(tensor_lines, syntax))
 
-        q = f"Convert this cascade program to a TNET-based tensor network:\n{cascade_code}" + syntax_tag(syntax)
+        q = f"Convert this cascade program to a TRAIN+INFER tensor network:\n{cascade_code}" + syntax_tag(syntax)
         pairs.append(_pair(q, tensor_code))
     return pairs
 
 
 def gen_tensor_to_cascade(count=3500):
-    """Convert TNET-based to equivalent cascade."""
+    """Convert TRAIN+INFER-based to equivalent cascade."""
     pairs = []
     for _ in range(count):
         syntax = pick_syntax()
@@ -127,8 +124,8 @@ def gen_equivalence_explanation(count=3000):
 
         prompts = [
             f"Explain how a {n}-bracket {struct_name} can be expressed as both cascade NML and tensor NML",
-            f"How would you convert a {struct_name} ({struct_desc}) between cascade and TNET form?",
-            f"What is the relationship between CMPF/JMPT cascade programs and TNET tensor programs for {struct_name}?",
+            f"How would you convert a {struct_name} ({struct_desc}) between cascade and TRAIN+INFER form?",
+            f"What is the relationship between CMPF/JMPT cascade programs and TRAIN+INFER tensor programs for {struct_name}?",
         ]
         q = random.choice(prompts)
 
@@ -136,7 +133,7 @@ def gen_equivalence_explanation(count=3000):
             f"A {n}-bracket {struct_name} ({struct_desc}) can be expressed two ways in NML:\n\n"
             f"1. **Cascade form**: Uses {n} CMPI/JMPF/SCLR chains. Each bracket tests the input against "
             f"a threshold and applies the corresponding rate. Deterministic, auditable, exact.\n\n"
-            f"2. **Tensor form**: Uses TNET to train a neural network that approximates the same "
+            f"2. **Tensor form**: Uses TRAIN+INFER to train a neural network that approximates the same "
             f"function. The network learns the thresholds and rates from training data. Compact, "
             f"adaptable, but approximate.\n\n"
             f"Both produce the same output for the same input (within floating-point tolerance "

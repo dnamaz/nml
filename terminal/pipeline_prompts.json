@@ -24,8 +24,8 @@
           "scenario": "Chatbot fine-tuning — adapt a language model to company-specific support conversations"
         },
         {
-          "label": "TNET 500 epochs",
-          "text": "Train a network using TNET with 500 epochs and learning rate 0.001",
+          "label": "TRAIN 500 epochs",
+          "text": "Train a network using TRAIN with 500 epochs, learning rate 0.001, and Adam optimizer. Use INFER for predictions.",
           "scenario": "House price estimator — train on square footage, bedrooms, location to predict sale price"
         },
         {
@@ -299,9 +299,9 @@
           "scenario": "Production serving — switch from training mode to eval mode by disabling dropout while keeping BN"
         },
         {
-          "label": "N-layer TNET config",
-          "text": "N-layer TNET: train a 4-layer MLP using config tensor with shape [4,3]",
-          "scenario": "AutoML experiment — quickly test different network depths by changing the config tensor size"
+          "label": "N-layer TRAIN config",
+          "text": "Train a 4-layer MLP using TRAIN with RV architecture descriptor and Adam optimizer, then run INFER",
+          "scenario": "AutoML experiment — quickly test different network depths by changing the RV architecture descriptor"
         }
       ]
     },
@@ -327,6 +327,126 @@
           "label": "SYS debug print",
           "text": "System call with SYS to print intermediate values during debugging",
           "scenario": "Debugging NaN loss — print activations at each layer to find where numerical instability starts"
+        }
+      ]
+    },
+    {
+      "name": "Tax Compliance & Payroll",
+      "prompts": [
+        {
+          "label": "Nexus threshold alerting",
+          "text": "I have employee headcount, transaction volume, and payroll amounts per state for 200 clients over 3 years. I need to predict when a client's remote workforce or revenue in a new state is approaching the legal tax nexus threshold, so they can register before penalties.",
+          "scenario": "Advisor will recommend: binary classification, MLP or logistic regression on state-level aggregates with time features"
+        },
+        {
+          "label": "Shadow audit anomaly detection",
+          "text": "I have 500,000 historical pay runs with withholding amounts for federal, state, and local taxes. Normal runs far outnumber errors. I need to detect subtle discrepancies like sudden drops in state disability insurance or incorrect local tax codes for specific zip codes before payroll is finalized.",
+          "scenario": "Advisor will recommend: anomaly detection, autoencoder or Isolation Forest on withholding deviation features"
+        },
+        {
+          "label": "Predictive tax liability forecasting",
+          "text": "I have 4 years of quarterly payroll tax liability data across multiple jurisdictions with seasonal hiring and bonus cycles. I need to forecast the next quarter's tax liability per jurisdiction so companies can manage cash flow.",
+          "scenario": "Advisor will recommend: time series regression, sliding window MLP on quarterly aggregates with seasonal features"
+        },
+        {
+          "label": "Optimal benefit/deduction modeling",
+          "text": "I have employee compensation data, current benefit elections (401k match, health plan tier, FSA/HSA), and the resulting payroll tax burden for 10,000 employees. I want to model how changes in benefit structures affect total employer payroll tax and employee net take-home pay.",
+          "scenario": "Advisor will recommend: regression, MLP to predict net pay and tax burden from benefit configuration inputs"
+        },
+        {
+          "label": "Tax bracket optimization",
+          "text": "I have employee salary, filing status, current deductions (FSA, HSA, 401k), and the resulting federal and state tax tiers. I want to show employees how adjusting voluntary deductions could move them into a more favorable tax bracket or maximize credits.",
+          "scenario": "Advisor will recommend: regression, linear model or MLP mapping deduction changes to marginal tax rate shifts"
+        },
+        {
+          "label": "Legislative impact simulation",
+          "text": "I have 3 years of payroll data across 50 states for 500 clients. When a new state or local tax law is proposed, I want to simulate how it would have impacted my client base using historical data — projected cost increase per client and affected employee count.",
+          "scenario": "Advisor will recommend: regression, MLP or linear model on historical payroll features with counterfactual tax parameter inputs"
+        },
+        {
+          "label": "Employee misclassification warning",
+          "text": "I have pay patterns for 5,000 contractors and 20,000 employees — pay frequency, hours worked, duration of engagement, and payment regularity. I need to flag contractors whose patterns start resembling full-time employees, indicating IRS reclassification risk.",
+          "scenario": "Advisor will recommend: binary classification, MLP with dropout on pay pattern features, explainability required"
+        },
+        {
+          "label": "Jurisdiction derivation",
+          "text": "I have 100,000 employee records with work addresses (zip code, city, county) and the correct local tax jurisdiction assignment. Many zip codes span multiple jurisdictions. I need to automatically derive the correct rooftop-accurate local tax jurisdiction for new employees.",
+          "scenario": "Advisor will recommend: multi-class classification, MLP on geocoded address features to predict jurisdiction ID"
+        },
+        {
+          "label": "Withholding tier risk scoring",
+          "text": "I have historical audit outcomes for 2,000 payroll filings — features include withholding accuracy, amendment count, late filing flags, multi-state complexity, and whether the filing was flagged or penalized. I want to score new filings on their audit risk.",
+          "scenario": "Advisor will recommend: binary classification, decision tree or logistic regression for interpretability, audit explainability required"
+        },
+        {
+          "label": "Multi-state payroll anomaly consensus",
+          "text": "Five regional payroll offices each have local withholding data they cannot share due to compliance rules. Each office needs to train a local anomaly detector and combine results into a consensus risk score without centralizing sensitive employee data.",
+          "scenario": "Advisor will recommend: NML Collective, TRAIN per worker + VOTE consensus for federated anomaly detection"
+        }
+      ]
+    },
+    {
+      "name": "Tax Filing & Payment Schedules",
+      "prompts": [
+        {
+          "label": "Deposit schedule shift prediction",
+          "text": "I have 3 years of monthly payroll tax deposit amounts and headcount growth for 400 employers. The IRS switches employers from monthly to semi-weekly deposits when their lookback period liability exceeds $50,000. I need to predict which employers will cross that threshold next year so they can prepare for the faster deposit cadence.",
+          "scenario": "Advisor will recommend: binary classification, MLP or logistic regression on trailing liability totals, headcount growth rate, and seasonal hiring features"
+        },
+        {
+          "label": "Next-day deposit trigger alert",
+          "text": "I have daily undeposited tax accumulation data for 200 employers with large or variable payrolls. The IRS requires a next-business-day deposit whenever undeposited taxes hit $100,000 in a single day. I need to predict which pay runs are likely to trigger this rule so treasury can pre-fund the deposit.",
+          "scenario": "Advisor will recommend: regression, MLP on payroll calendar features (bonus cycles, commission runs, headcount) to forecast single-day accumulation"
+        },
+        {
+          "label": "Quarterly 941 error detection",
+          "text": "I have 50,000 historical Form 941 quarterly filings with reported wages, federal income tax withheld, Social Security and Medicare taxes, and deposit totals. The most common audit trigger is when 941 totals don't reconcile with W-2 totals. I need to flag filings with likely reconciliation errors before submission.",
+          "scenario": "Advisor will recommend: anomaly detection, autoencoder on filing-to-deposit ratios and quarter-over-quarter variance features"
+        },
+        {
+          "label": "FUTA liability deposit timing",
+          "text": "I have quarterly FUTA (Form 940) liability data for 300 employers across states with varying credit reduction rates. FUTA deposits are required when cumulative liability exceeds $500. Some employers in credit reduction states (outstanding federal UI loans) owe significantly more. I need to forecast quarterly FUTA liability and flag credit reduction state exposure.",
+          "scenario": "Advisor will recommend: regression, MLP on headcount, wage base utilization ($7,000/employee cap), and state credit reduction flags"
+        },
+        {
+          "label": "ACA threshold proximity",
+          "text": "I have monthly full-time equivalent (FTE) employee counts for 500 companies over 2 years. Companies crossing 50 FTEs become Applicable Large Employers and must offer health coverage or face penalties of $2,970 per employee. I need to predict which companies will cross the 50-FTE threshold in the next two quarters so they can begin ACA compliance prep.",
+          "scenario": "Advisor will recommend: binary classification or regression, MLP on rolling 12-month FTE average, hiring velocity, and seasonal contractor patterns"
+        },
+        {
+          "label": "Payment timing optimization",
+          "text": "I have 2 years of deposit dates, amounts, and IRS penalty assessments for 150 employers on monthly deposit schedules (due by the 15th of the following month). Within the legal window, earlier deposits reduce penalty risk but cost float. I need to recommend optimal deposit dates that balance penalty avoidance against cash flow.",
+          "scenario": "Advisor will recommend: regression, MLP mapping deposit timing, amount, penalty history, and interest rates to a cost-minimizing payment date"
+        },
+        {
+          "label": "Penalty risk scoring",
+          "text": "I have penalty assessment history for 2,500 employers over 5 years — features include late deposit count, underpayment magnitude, deposit schedule type, prior abatement requests (first-time abatement is one-time), amendment frequency, and multi-state complexity. I want to score each upcoming filing period on its penalty likelihood.",
+          "scenario": "Advisor will recommend: binary classification, decision tree or logistic regression for interpretability — must explain why a period is high-risk for audit defense"
+        },
+        {
+          "label": "W-2 filing volume forecasting",
+          "text": "I have 4 years of annual W-2 filing counts per employer with hire/termination dates and seasonal workforce patterns. Employers filing 10+ information returns must e-file. Late W-2 penalties scale from $60/form (1-30 days) to $330/form (after August 1) to $660 for intentional disregard. I need to forecast W-2 volume and flag employers at risk of missing the January 31 deadline.",
+          "scenario": "Advisor will recommend: regression, sliding window MLP on monthly headcount snapshots and historical filing completion rates"
+        },
+        {
+          "label": "State withholding frequency prediction",
+          "text": "I have withholding liability and filing frequency data across 30 states for 200 employers. States assign filing frequency (monthly, quarterly, annual) based on liability size — e.g., California requires semi-weekly deposits above $350/period. As employers grow in a state, their frequency obligation changes. I need to predict frequency tier changes before they take effect.",
+          "scenario": "Advisor will recommend: multi-class classification, MLP on per-state trailing liability, headcount growth, and state-specific threshold features"
+        },
+        {
+          "label": "Multi-jurisdiction form selector",
+          "text": "I have employee work locations across 50 states and 600+ local jurisdictions (Ohio municipals, PA local services tax, NYC resident/non-resident), employer registrations, and reciprocity agreements (e.g., DC/MD/VA). For each new employee, I need to automatically determine which federal, state, and local tax forms and withholdings apply.",
+          "scenario": "Advisor will recommend: multi-class classification, MLP on geocoded work/residence location, employer registration status, and reciprocity flags"
+        },
+        {
+          "label": "Seasonal cash flow forecasting",
+          "text": "I have 3 years of semi-weekly deposit data for a 500-employee company with heavy seasonal hiring (doubles headcount Q4) and annual bonus payouts in March. Tax deposits spike during these periods. I need to forecast deposit amounts 30/60/90 days ahead aligned to the semi-weekly deposit calendar so treasury can reserve funds.",
+          "scenario": "Advisor will recommend: time series regression, sliding window MLP with seasonal decomposition features on deposit amounts and payroll calendar"
+        },
+        {
+          "label": "Small employer quarterly payment eligibility",
+          "text": "I have quarterly tax liability data for 1,000 small employers. Employers with $2,500 or less in quarterly liability can pay with their 941 filing instead of making separate deposits. I need to predict which employers will stay below this threshold so they can simplify their payment process, and flag those at risk of crossing it mid-quarter.",
+          "scenario": "Advisor will recommend: binary classification, logistic regression on trailing quarterly liability, headcount, and wage growth rate"
         }
       ]
     },
@@ -381,7 +501,7 @@
         {
           "label": "Distributed fraud scoring",
           "text": "Five bank branches each have local transaction data they cannot share. I need each branch to train a fraud detector locally and combine their results for a consensus score.",
-          "scenario": "Advisor will recommend: NML Collective, TNET per worker + VOTE consensus"
+          "scenario": "Advisor will recommend: NML Collective, TRAIN per worker + VOTE consensus"
         }
       ]
     }

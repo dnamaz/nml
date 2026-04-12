@@ -21,8 +21,8 @@
         {
           "name": "2-Layer MLP",
           "when": "Medium dataset (1k–100k), non-linear relationships, feature interactions matter.",
-          "nml_pattern": "MMUL + MADD + RELU (hidden) → MMUL + MADD + SIGM (output). Train with TNET or manual BKWD+WUPD.",
-          "nml_opcodes": ["MMUL", "MADD", "RELU", "SIGM", "TNET", "LOSS"],
+          "nml_pattern": "MMUL + MADD + RELU (hidden) → MMUL + MADD + SIGM (output). Train with TRAIN RU [@data @labels] or manual BKWD+WUPD.",
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "SIGM", "TRAIN", "LOSS"],
           "lesson_ref": "Lesson 06 — Classification Basics, Lesson 13 — Neural Networks",
           "sample": "lesson_06_multilayer_classifier.nml",
           "complexity": "moderate"
@@ -31,7 +31,7 @@
           "name": "MLP with BN + Dropout",
           "when": "Small-to-medium dataset where overfitting is a risk, need regularization.",
           "nml_pattern": "MMUL + MADD + BN + RELU + DROP per hidden layer → SIGM output.",
-          "nml_opcodes": ["MMUL", "MADD", "BN", "RELU", "DROP", "SIGM", "TNET"],
+          "nml_opcodes": ["MMUL", "MADD", "BN", "RELU", "DROP", "SIGM", "TRAIN"],
           "lesson_ref": "Lesson 10 — Regularization, Lesson 13 — Neural Networks",
           "sample": "lesson_10_regularized.nml",
           "complexity": "moderate"
@@ -84,7 +84,7 @@
           "name": "Multi-Layer MLP + Softmax",
           "when": "Non-linear class boundaries, medium dataset, need class probabilities.",
           "nml_pattern": "MMUL + MADD + RELU (hidden layers) → MMUL + MADD + SOFT (output). Use LOSS #2 (cross-entropy).",
-          "nml_opcodes": ["MMUL", "MADD", "RELU", "SOFT", "TNET", "LOSS"],
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "SOFT", "TRAIN", "LOSS"],
           "lesson_ref": "Lesson 06, Lesson 13 — Neural Networks",
           "sample": "lesson_06_multiclass.nml",
           "complexity": "moderate"
@@ -127,8 +127,8 @@
         {
           "name": "Neural Network Regression",
           "when": "Non-linear relationships, feature interactions, medium-to-large dataset.",
-          "nml_pattern": "MMUL + MADD + RELU (hidden) → MMUL + MADD (linear output). Train with TNET, LOSS #0 (MSE).",
-          "nml_opcodes": ["MMUL", "MADD", "RELU", "TNET", "LOSS"],
+          "nml_pattern": "MMUL + MADD + RELU (hidden) → MMUL + MADD (linear output). Train with TRAIN RU [@data @labels], LOSS #0 (MSE).",
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "TRAIN", "LOSS"],
           "lesson_ref": "Lesson 13 — Neural Networks",
           "sample": "lesson_13_self_train.nml",
           "complexity": "moderate"
@@ -198,7 +198,7 @@
           "name": "Neural Network Anomaly Detector",
           "when": "Complex feature interactions, labeled normal/anomaly data available.",
           "nml_pattern": "Multi-layer: MMUL + MADD + RELU → SIGM output. Score > 0.5 = anomaly.",
-          "nml_opcodes": ["MMUL", "MADD", "RELU", "SIGM", "TNET"],
+          "nml_opcodes": ["MMUL", "MADD", "RELU", "SIGM", "TRAIN"],
           "lesson_ref": "Lesson 13 — Neural Networks",
           "sample": "lesson_13_anomaly_detector.nml",
           "complexity": "moderate"
@@ -432,25 +432,25 @@
     },
     {
       "condition": "Training on edge device / limited memory",
-      "recommendation": "TNET with small config (1-2 layers). Use BN for training stability. Keep tensor shapes small.",
+      "recommendation": "TRAIN with small architecture (1-2 layers). Use BN for training stability. Keep tensor shapes small.",
       "avoid": "Large batch sizes, deep networks, attention layers."
     },
     {
       "condition": "Distributed across multiple nodes (NML Collective)",
-      "recommendation": "Train locally on each worker's data with TNET, use VOTE consensus for model agreement.",
+      "recommendation": "Train locally on each worker's data with TRAIN, use VOTE consensus for model agreement.",
       "avoid": "Centralized data pooling — defeats the purpose of distributed execution."
     }
   ],
 
   "nml_capability_map": {
     "supervised_training": {
-      "config_driven": "TNET Rconfig #epochs — auto forward/backward/update. R0=data, R1=config[n_layers,3], R9=labels.",
+      "config_driven": "TRAIN RU [@data @labels] — config-driven training. RV=architecture [n_layers, h1, act1, h2, act2, ...], RU=config [epochs, lr, optimizer(0=SGD,1=Adam), print_every, patience, min_delta]. Built-in early stopping, Adam, logging. Use INFER Rd Rs for forward-only after training.",
       "manual_loop": "LOOP #N → forward → LOSS → BKWD → WUPD → ENDP",
       "loss_types": {"0": "MSE (regression)", "1": "binary cross-entropy", "2": "categorical cross-entropy"},
       "activations": {"0": "ReLU", "1": "Sigmoid", "2": "Tanh", "3": "GELU", "4": "Linear (none)"}
     },
     "inference_only": {
-      "pattern": "LD weights → forward pass → ST output. No TNET/BKWD/WUPD.",
+      "pattern": "LD weights → forward pass → ST output. No TRAIN/BKWD/WUPD.",
       "infer_opcode": "INFER Rd Rs — config-driven forward pass only, no weight update."
     },
     "regularization": {
@@ -490,7 +490,7 @@
             "@b1 shape=1,8 — one bias per hidden neuron (initialize to 0.0)"
           ],
           "naming": "Convention: @w1/@b1 for layer 1, @w2/@b2 for layer 2, etc. Shape: [input_dim, output_dim] for weights, [1, output_dim] for biases.",
-          "notes": "TNET auto-creates weights from config — you only need to provide data and labels."
+          "notes": "TRAIN auto-creates weights from RV architecture descriptor — you only need to provide data and labels."
         },
         "inference_input": {
           "purpose": "A new, unseen sample to run through the trained model for prediction.",
@@ -507,7 +507,7 @@
           ]
         }
       },
-      "tnet_shortcut": "When using TNET config-driven training, you only need: @training_data (R0), config tensor (R1), and @training_labels (R9). TNET creates and manages all intermediate weights automatically.",
+      "train_shortcut": "When using TRAIN config-driven training: RV = architecture descriptor [n_layers, h1, act1, h2, act2, ...], RU = config [epochs, lr, optimizer, print_every, patience, min_delta], R0 = input data, R9 = labels. TRAIN RU [@data @labels] creates and manages all intermediate weights automatically. Use INFER Rd Rs for forward-only prediction after training.",
       "data_file_example": "; Credit card fraud detection — 5 training transactions\n; Features: amount_normalized, time_since_last, merchant_risk, distance_km, frequency_7d, is_international\n@training_data    shape=5,6  dtype=f32  data=0.12,0.85,0.03,0.15,0.0,0.10, 0.25,0.50,0.08,0.25,0.0,0.15, 0.08,0.95,0.01,0.10,0.0,0.05, 0.30,0.40,0.12,0.35,0.0,0.20, 0.18,0.60,0.05,0.20,1.0,0.15\n@training_labels  shape=5,1  dtype=f32  data=0.0,0.0,0.0,0.0,1.0\n; New transaction to score\n@new_transaction  shape=1,6  dtype=f32  data=0.95,0.10,0.85,0.90,1.0,1.0"
     }
   },

@@ -218,7 +218,7 @@ The runtime accepts all three interchangeably. Registers have classic (`R0`–`R
 
 ## Runtime Limits
 
-- 32 tensor registers, 64 named memory slots, 32-level call stack, 8-level loop nesting
+- 32 tensor registers, 256 named memory slots, 32-level call stack, 8-level loop nesting
 - Default cycle limit: 1,000,000 (override: `--max-cycles N`)
 - Error codes: -1 to -15 (see `docs/NML_SPEC.md`)
 

@@ -1662,7 +1662,7 @@ Use compact form for JSON payloads, agent messages, API fields, and any context 
 | 14 | ST | ↑ | STORE | Memory |
 | 15 | MOV | ← | COPY | Memory |
 | 16 | ALLC | □ | ALLOCATE | Memory |
-| 17 | RSHP | ⊞ | RESHAPE | Data Flow |
+| 17 | RSHP | ⊟ | RESHAPE | Data Flow |
 | 18 | TRNS | ⊤ | TRANSPOSE | Data Flow |
 | 19 | SPLT | ⊢ | SPLIT | Data Flow |
 | 20 | MERG | ⊣ | MERGE | Data Flow |

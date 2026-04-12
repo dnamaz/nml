@@ -33,7 +33,7 @@ from nml_core_training_gen import (
 
 # Opcode targets: (opcode, pairs_needed)
 ZERO_TIER = {
-    "BKWD": 3500, "WUPD": 3500, "LOSS": 3500, "TNET": 3500,
+    "BKWD": 3500, "WUPD": 3500, "LOSS": 3500, "TRAIN": 3500,
 }
 
 CRITICAL_TIER = {
@@ -150,14 +150,14 @@ def gen_LOSS(count):
         pairs.append(_pair(q, apply_syntax(lines, syntax)))
     return pairs
 
-def gen_TNET(count):
+def gen_TRAIN(count):
     pairs = []
     prompts = [
-        "Write NML to train a neural network using TNET for {e} epochs at lr {lr}",
-        "Use TNET to self-train a {topo} network",
-        "Write a self-training NML program with TNET",
-        "Train a network end-to-end using TNET with {e} epochs",
-        "Write NML that uses TNET to learn from training data",
+        "Write NML to train a neural network using TRAIN+INFER for {e} epochs at lr {lr}",
+        "Use TRAIN+INFER to self-train a {topo} network",
+        "Write a self-training NML program with TRAIN and INFER",
+        "Train a network end-to-end using TRAIN with {e} epochs",
+        "Write NML that uses TRAIN+INFER to learn from training data",
     ]
     topos = ["2-4-1", "2-8-1", "1-16-1", "3-8-1", "4-16-1", "1-64-1"]
     for _ in range(count):
@@ -171,8 +171,10 @@ def gen_TNET(count):
             _fmt("LD", "R9", "@training_targets"),
             _fmt("LD", "R1", "@w1"), _fmt("LD", "R2", "@b1"),
             _fmt("LD", "R3", "@w2"), _fmt("LD", "R4", "@b2"),
-            _fmt("TNET", f"#{epochs}", f"#{lr}"),
-            _fmt("ST", "RA", "@predictions"),
+            _fmt("ALLC", "RU", f"#[6]", f"{epochs},{lr},0,0,0,0"),
+            _fmt("TRAIN", "RU"),
+            _fmt("INFER", "R8", "R0"),
+            _fmt("ST", "R8", "@predictions"),
             _fmt("ST", "R1", "@trained_w1"),
             _fmt("ST", "R3", "@trained_w2"),
             "HALT",
@@ -858,7 +860,7 @@ def gen_GELU(count):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 GENERATORS = {
-    "BKWD": gen_BKWD, "WUPD": gen_WUPD, "LOSS": gen_LOSS, "TNET": gen_TNET,
+    "BKWD": gen_BKWD, "WUPD": gen_WUPD, "LOSS": gen_LOSS, "TRAIN": gen_TRAIN,
     "PTCH": gen_PTCH, "CMPR": gen_CMPR, "SYNC": gen_SYNC, "TRAP": gen_TRAP,
     "BNOT": gen_BNOT, "PADZ": gen_PADZ, "RSHP": gen_RSHP, "PROJ": gen_PROJ,
     "UPSC": gen_UPSC, "TRNS": gen_TRNS, "WHER": gen_WHER, "SIGN": gen_SIGN,

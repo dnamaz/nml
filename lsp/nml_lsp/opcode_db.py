@@ -21,6 +21,7 @@ class OpcodeInfo:
     symbolic: str = ""
     verbose: str = ""
     aliases: tuple[str, ...] = ()
+    constraints: str = ""        # shape/type constraints for data generation
 
 
 OPCODES: dict[str, OpcodeInfo] = {}
@@ -33,61 +34,75 @@ def _reg(info: OpcodeInfo) -> None:
 
 _reg(OpcodeInfo("MMUL", "Arithmetic", "Matrix multiply: Rd = Rs1 @ Rs2",
     "Rd Rs1 Rs2", "MMUL ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
-    symbolic="×", verbose="MATRIX_MULTIPLY"))
+    symbolic="×", verbose="MATRIX_MULTIPLY",
+    constraints="Rs1:[M,K] Rs2:[K,N] -> Rd:[M,N]. Inner dims must match. dtype:f32"))
 
 _reg(OpcodeInfo("MADD", "Arithmetic", "Element-wise add: Rd = Rs1 + Rs2",
     "Rd Rs1 Rs2", "MADD ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
-    symbolic="⊕", verbose="ADD", aliases=("ACCUMULATE",)))
+    symbolic="⊕", verbose="ADD", aliases=("ACCUMULATE",),
+    constraints="Rs1 and Rs2 must broadcast (NumPy right-align rules). dtype:f32"))
 
 _reg(OpcodeInfo("MSUB", "Arithmetic", "Element-wise subtract: Rd = Rs1 - Rs2",
     "Rd Rs1 Rs2", "MSUB ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
-    symbolic="⊖", verbose="SUBTRACT"))
+    symbolic="⊖", verbose="SUBTRACT",
+    constraints="Rs1 and Rs2 must broadcast (NumPy right-align rules). dtype:f32"))
 
 _reg(OpcodeInfo("EMUL", "Arithmetic", "Element-wise multiply: Rd = Rs1 * Rs2",
     "Rd Rs1 Rs2", "EMUL ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
-    symbolic="⊗", verbose="ELEMENT_MULTIPLY", aliases=("SCALE",)))
+    symbolic="⊗", verbose="ELEMENT_MULTIPLY", aliases=("SCALE",),
+    constraints="Rs1 and Rs2 must broadcast (NumPy right-align rules). dtype:f32"))
 
 _reg(OpcodeInfo("EDIV", "Arithmetic", "Element-wise divide: Rd = Rs1 / Rs2",
     "Rd Rs1 Rs2", "EDIV ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
-    symbolic="⊘", verbose="ELEMENT_DIVIDE"))
+    symbolic="⊘", verbose="ELEMENT_DIVIDE",
+    constraints="Rs1 and Rs2 must broadcast. Rs2 must not contain zeros. dtype:f32"))
 
 _reg(OpcodeInfo("SDOT", "Arithmetic", "Dot product: Rd = Rs1 · Rs2",
     "Rd Rs1 Rs2", "SDOT ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
-    symbolic="·", verbose="DOT_PRODUCT", aliases=("DOT",)))
+    symbolic="·", verbose="DOT_PRODUCT", aliases=("DOT",),
+    constraints="Rs1 and Rs2 must have same total element count. Output is scalar [1]. dtype:f32"))
 
 _reg(OpcodeInfo("SCLR", "Arithmetic", "Scalar multiply: Rd = Rs * #imm (or Rd = Rs1 * Rs2)",
     "Rd Rs #imm", "SCLR ${1:Rd} ${2:Rs} ${3:#imm}", 2, 3,
-    symbolic="∗", verbose="SET"))
+    symbolic="∗", verbose="SCALE",
+    constraints="Rs: any shape. #imm: float scalar. Output same shape as Rs. dtype:f32"))
 
 _reg(OpcodeInfo("SDIV", "Arithmetic", "Scalar divide: Rd = Rs1 / Rs2|#imm",
     "Rd Rs1 Rs2|#imm", "SDIV ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
-    symbolic="÷", verbose="DIVIDE", aliases=("SCALAR_DIVIDE",)))
+    symbolic="÷", verbose="DIVIDE", aliases=("SCALAR_DIVIDE",),
+    constraints="Operates on first element (scalar). Rs2/imm must not be zero. dtype:f32"))
 
 _reg(OpcodeInfo("SADD", "Arithmetic", "Scalar add: Rd = Rs + Rs2|#imm",
     "Rd Rs Rs2|#imm", "SADD ${1:Rd} ${2:Rs} ${3:Rs2}", 3, 3,
-    symbolic="∔", verbose="SCALAR_ADD"))
+    symbolic="∔", verbose="SCALAR_ADD",
+    constraints="Operates on first element (scalar). dtype:f32"))
 
 _reg(OpcodeInfo("SSUB", "Arithmetic", "Scalar subtract: Rd = Rs - Rs2|#imm",
     "Rd Rs Rs2|#imm", "SSUB ${1:Rd} ${2:Rs} ${3:Rs2}", 3, 3,
-    symbolic="∸", verbose="SCALAR_SUB"))
+    symbolic="∸", verbose="SCALAR_SUB",
+    constraints="Operates on first element (scalar). dtype:f32"))
 
 # ── Activation (4+1) ───────────────────────────────────────────────────────
 
 _reg(OpcodeInfo("RELU", "Activation", "Rectified linear unit: Rd = max(0, Rs)",
     "Rd Rs", "RELU ${1:Rd} ${2:Rs}", 2, 2,
-    symbolic="⌐", verbose="RECTIFY"))
+    symbolic="⌐", verbose="RECTIFY",
+    constraints="Rs: any shape. Output same shape. dtype:f32"))
 
 _reg(OpcodeInfo("SIGM", "Activation", "Sigmoid: Rd = 1/(1+exp(-Rs))",
     "Rd Rs", "SIGM ${1:Rd} ${2:Rs}", 2, 2,
-    symbolic="σ", verbose="SIGMOID"))
+    symbolic="σ", verbose="SIGMOID",
+    constraints="Rs: any shape. Output same shape, values in (0,1). dtype:f32"))
 
 _reg(OpcodeInfo("TANH", "Activation", "Hyperbolic tangent: Rd = tanh(Rs)",
     "Rd Rs", "TANH ${1:Rd} ${2:Rs}", 2, 2,
-    symbolic="τ", verbose="HYPERBOLIC_TANGENT"))
+    symbolic="τ", verbose="HYPERBOLIC_TANGENT",
+    constraints="Rs: any shape. Output same shape, values in (-1,1). dtype:f32"))
 
 _reg(OpcodeInfo("SOFT", "Activation", "Softmax: Rd = softmax(Rs)",
     "Rd Rs", "SOFT ${1:Rd} ${2:Rs}", 2, 2,
-    symbolic="Σ", verbose="SOFTMAX"))
+    symbolic="Σ", verbose="SOFTMAX",
+    constraints="Rs: [N,C] or [C]. Softmax over last dim. Output same shape, rows sum to 1. dtype:f32"))
 
 # ── Memory (4) ─────────────────────────────────────────────────────────────
 
@@ -175,7 +190,8 @@ _reg(OpcodeInfo("RET", "Subroutine", "Return from subroutine",
 
 _reg(OpcodeInfo("LEAF", "Tree", "Load immediate constant into register",
     "Rd #value", "LEAF ${1:Rd} ${2:#value}", 2, 2,
-    symbolic="∎", verbose="SET_VALUE", aliases=("SET_LEAF",)))
+    symbolic="∎", verbose="SET_VALUE", aliases=("SET_LEAF",),
+    constraints="#value: float literal. Creates scalar [1] tensor. dtype:f32"))
 
 _reg(OpcodeInfo("TACC", "Tree", "Accumulate: Rd = Rd + Rs (or Rd = Rs1 + Rs2)",
     "Rd Rs1 [Rs2]", "TACC ${1:Rd} ${2:Rs1} ${3:Rs2}", 2, 3,
@@ -199,65 +215,79 @@ _reg(OpcodeInfo("TRAP", "System", "Trigger runtime fault with optional error cod
 
 _reg(OpcodeInfo("CONV", "Vision", "2D convolution: Rd = Rs1 * Rs2 (kernel)",
     "Rd Rs Rkernel [#stride] [#pad]", "CONV ${1:Rd} ${2:Rs} ${3:Rkernel}", 3, 5,
-    symbolic="⊛", verbose="CONVOLVE"))
+    symbolic="⊛", verbose="CONVOLVE",
+    constraints="2D: Rs:[H,W] Rkernel:[KH,KW]. 4D: Rs:[N,C,H,W] Rkernel:[Co,Ci,KH,KW] (Ci must match C). #stride default 1, #pad default 0. dtype:f32"))
 
 _reg(OpcodeInfo("POOL", "Vision", "Max pooling with optional window size",
     "Rd Rs [#size] [#stride]", "POOL ${1:Rd} ${2:Rs}", 2, 4,
-    symbolic="⊓", verbose="MAX_POOL"))
+    symbolic="⊓", verbose="MAX_POOL",
+    constraints="Rs:[H,W] or [N,C,H,W]. #size: pool window (default 2). Output spatial dims = floor((H-size)/stride)+1. dtype:f32"))
 
 _reg(OpcodeInfo("UPSC", "Vision", "Upscale tensor by factor",
     "Rd Rs [#factor]", "UPSC ${1:Rd} ${2:Rs} ${3:#factor}", 2, 3,
-    symbolic="⊔", verbose="UPSCALE"))
+    symbolic="⊔", verbose="UPSCALE",
+    constraints="Rs:[H,W] or [N,C,H,W]. #factor: integer upscale multiplier. Output spatial dims *= factor. dtype:f32"))
 
 _reg(OpcodeInfo("PADZ", "Vision", "Zero-pad tensor",
     "Rd Rs [#amount]", "PADZ ${1:Rd} ${2:Rs} ${3:#amount}", 2, 3,
-    symbolic="⊡", verbose="ZERO_PAD"))
+    symbolic="⊡", verbose="ZERO_PAD",
+    constraints="Rs:[H,W] or [N,C,H,W]. #amount: pixels of zero padding per side. Output spatial dims += 2*amount. dtype:f32"))
 
 # ── NML-T Transformer (4) ──────────────────────────────────────────────────
 
 _reg(OpcodeInfo("ATTN", "Transformer", "Multi-head attention: Rd = Attention(Q, K, [V])",
     "Rd Rq Rk [Rv]", "ATTN ${1:Rd} ${2:Rq} ${3:Rk} ${4:Rv}", 3, 4,
-    symbolic="⊙", verbose="ATTENTION"))
+    symbolic="⊙", verbose="ATTENTION",
+    constraints="Rq:[S,D] Rk:[S,D] (must match). Rv:[S,Dv] optional (defaults to Rk). Output:[S,Dv]. dtype:f32"))
 
 _reg(OpcodeInfo("NORM", "Transformer", "Layer normalization",
     "Rd Rs [Rgamma] [Rbeta]", "NORM ${1:Rd} ${2:Rs}", 2, 4,
-    symbolic="‖", verbose="LAYER_NORM"))
+    symbolic="‖", verbose="LAYER_NORM",
+    constraints="Rs: any shape. Rgamma/Rbeta: [last_dim] (scale/shift). Output same shape as Rs. dtype:f32"))
 
 _reg(OpcodeInfo("EMBD", "Transformer", "Embedding lookup: Rd = Rtable[Rindex]",
     "Rd Rtable Rindex", "EMBD ${1:Rd} ${2:Rtable} ${3:Rindex}", 2, 3,
-    symbolic="⊏", verbose="EMBED"))
+    symbolic="⊏", verbose="EMBED",
+    constraints="Rtable:[V,D] (vocab_size, embed_dim). Rindex:[N] integer indices (0..V-1). Output:[N,D]. dtype:f32, Rindex values must be integers"))
 
 _reg(OpcodeInfo("GELU", "Transformer", "Gaussian error linear unit activation",
     "Rd Rs", "GELU ${1:Rd} ${2:Rs}", 2, 2,
-    symbolic="ℊ", verbose="GELU"))
+    symbolic="ℊ", verbose="GELU",
+    constraints="Rs: any shape. Output same shape. dtype:f32"))
 
 # ── NML-R Reduction (4) ────────────────────────────────────────────────────
 
 _reg(OpcodeInfo("RDUC", "Reduction", "Reduce tensor along dimension (sum/mean/max/min)",
     "Rd Rs [#dim] [#mode]", "RDUC ${1:Rd} ${2:Rs} ${3:#dim}", 2, 4,
-    symbolic="⊥", verbose="REDUCE", aliases=("ϛ",)))
+    symbolic="⊥", verbose="REDUCE", aliases=("ϛ",),
+    constraints="#dim: dimension to reduce (0=rows,1=cols). #mode: 0=sum,1=mean,2=max,3=min. Output loses reduced dim. dtype:f32"))
 
 _reg(OpcodeInfo("WHER", "Reduction", "Conditional select: Rd = where(Rcond, Rs1, [Rs2])",
     "Rd Rcond Rs1 [Rs2]", "WHER ${1:Rd} ${2:Rcond} ${3:Rs1}", 3, 4,
-    symbolic="⊻", verbose="WHERE"))
+    symbolic="⊻", verbose="WHERE",
+    constraints="Rcond, Rs1, Rs2 must have same shape. Rcond values: 0 or 1. dtype:f32"))
 
 _reg(OpcodeInfo("CLMP", "Reduction", "Clamp values: Rd = clamp(Rs, #min, #max)",
     "Rd Rs #min #max", "CLMP ${1:Rd} ${2:Rs} ${3:#min} ${4:#max}", 3, 4,
-    symbolic="⊧", verbose="CLAMP"))
+    symbolic="⊧", verbose="CLAMP",
+    constraints="Rs: any shape. #min, #max: float. Output same shape, all values in [min,max]. dtype:f32"))
 
 _reg(OpcodeInfo("CMPR", "Reduction", "Mask comparison: Rd = (Rs op #threshold)",
     "Rd Rs #op #threshold", "CMPR ${1:Rd} ${2:Rs} ${3:#op} ${4:#threshold}", 3, 4,
-    symbolic="⊜", verbose="MASK_COMPARE"))
+    symbolic="⊜", verbose="MASK_COMPARE",
+    constraints="Rs: any shape. #op: 0=GT,1=LT,2=EQ,3=GE,4=LE. #threshold: float. Output same shape, values 0 or 1. dtype:f32"))
 
 # ── NML-S Signal (2) ───────────────────────────────────────────────────────
 
 _reg(OpcodeInfo("FFT", "Signal", "Fast Fourier Transform",
     "Rd Rs Rtwiddle", "FFT ${1:Rd} ${2:Rs} ${3:Rtwiddle}", 2, 3,
-    symbolic="∿", verbose="FOURIER"))
+    symbolic="∿", verbose="FOURIER",
+    constraints="Rs:[N] signal (N should be power of 2). Rtwiddle:[N] twiddle factors. Output:[N] complex magnitudes. dtype:f32"))
 
 _reg(OpcodeInfo("FILT", "Signal", "Apply filter kernel to signal",
     "Rd Rs Rkernel [#mode]", "FILT ${1:Rd} ${2:Rs} ${3:Rkernel}", 3, 4,
-    symbolic="⋐", verbose="FILTER"))
+    symbolic="⋐", verbose="FILTER",
+    constraints="Rs:[N] signal. Rkernel:[K] filter coefficients (K <= N). Output:[N]. dtype:f32"))
 
 # ── NML-M2M (13) ───────────────────────────────────────────────────────────
 
@@ -275,7 +305,7 @@ _reg(OpcodeInfo("ENDF", "M2M", "End fragment block",
 
 _reg(OpcodeInfo("LINK", "M2M", "Import external fragment by name",
     "@name", "LINK ${1:@name}", 1, 1,
-    symbolic="⊕", verbose="IMPORT"))
+    symbolic="⊚", verbose="IMPORT"))
 
 _reg(OpcodeInfo("PTCH", "M2M", "Apply differential patch",
     "", "PTCH", 0, 0,
@@ -324,12 +354,14 @@ _reg(OpcodeInfo("WUPD", "Training", "Weight update: W -= lr * grad",
 _reg(OpcodeInfo("LOSS", "Training", "Compute loss: Rd = loss(Rpred, Rlabel, [#type])",
     "Rd Rpred Rlabel [#type]",
     "LOSS ${1:Rd} ${2:Rpred} ${3:Rlabel}", 3, 4,
-    symbolic="△", verbose="COMPUTE_LOSS"))
+    symbolic="△", verbose="COMPUTE_LOSS",
+    constraints="Rpred and Rlabel must have same shape [N,O]. #type: 0=MSE, 1=MAE, 2=cross-entropy. Output: scalar [1]. dtype:f32"))
 
-_reg(OpcodeInfo("TNET", "Training", "Train network (single-instruction training loop)",
-    "Rweights Rdata Rlabels [#epochs] [#lr] [#topology...]",
-    "TNET ${1:Rweights} ${2:Rdata} ${3:Rlabels}", 2, 9,
-    symbolic="⥁", verbose="TRAIN_NETWORK"))
+_reg(OpcodeInfo("TNET", "Training", "Legacy training opcode (redirects to TRAIN). Prefer TRAIN+INFER for new code.",
+    "Rconfig #epochs [#lr] [#optimizer]",
+    "TNET ${1:Rconfig} ${2:#epochs}", 2, 9,
+    symbolic="⥁", verbose="TRAIN_NETWORK",
+    constraints="Rconfig:[L,3] where each row=[in_size,out_size,activation]. activation: 0=relu,1=sigmoid,2=tanh,3=softmax,4=none. Data: @input shape=[N,in_size], @labels shape=[N,final_out_size]. dtype:f32"))
 
 # ── NML-TR Backward (11) ───────────────────────────────────────────────────
 
@@ -376,7 +408,7 @@ _reg(OpcodeInfo("ATTNBK", "Training", "Attention backward: computes Q, K, V grad
     "Rd_dq Rgrad Rq Rk Rv", "ATTNBK ${1:Rd_dq} ${2:Rgrad} ${3:Rq} ${4:Rk} ${5:Rv}", 5, 5,
     symbolic="⊙ˈ", verbose="ATTN_BACKWARD", aliases=("ATTN_BK",)))
 
-_reg(OpcodeInfo("TNDEEP", "Training", "N-layer dense network training with Adam/SGD",
+_reg(OpcodeInfo("TNDEEP", "Training", "Legacy N-layer training opcode (redirects to TRAIN). Prefer TRAIN+INFER for new code.",
     "#epochs #lr #optimizer [@input_data] [@labels]",
     "TNDEEP ${1:#epochs} ${2:#lr} ${3:#optimizer}", 3, 5,
     symbolic="⥁ˈ", verbose="TRAIN_DEEP"))
@@ -389,25 +421,30 @@ _reg(OpcodeInfo("TLOG", "Training", "Set training log interval (print every N ep
 
 _reg(OpcodeInfo("TRAIN", "Training", "Config-driven training: reads 6-element tensor [epochs, lr, optimizer, print_every, patience, min_delta]",
     "Rs [@input_data] [@labels]", "TRAIN ${1:Rs}", 1, 3,
-    symbolic="⟴", verbose="TRAIN_CONFIG"))
+    symbolic="⟴", verbose="TRAIN_CONFIG",
+    constraints="Rs:[6] config tensor = [epochs, lr, optimizer(0=SGD,1=Adam,2=AdamW), print_every, patience, min_delta]. Requires prior TNET to define network. @input/@labels: named data slots. dtype:f32"))
 
 _reg(OpcodeInfo("INFER", "Training", "Forward pass only (no weight update)",
     "Rd R_input", "INFER ${1:Rd} ${2:R_input}", 0, 2,
-    symbolic="⟶", verbose="FORWARD_PASS"))
+    symbolic="⟶", verbose="FORWARD_PASS",
+    constraints="R_input must match network input shape from TNET config. Output Rd has shape [1,final_out_size]. Requires prior TNET+TRAIN. dtype:f32"))
 
 _reg(OpcodeInfo("WDECAY", "Training", "Weight decay: Rd[i] *= (1 - lambda)",
     "Rd #lambda", "WDECAY ${1:Rd} ${2:#lambda}", 2, 2,
-    symbolic="ω", verbose="WEIGHT_DECAY"))
+    symbolic="ω", verbose="WEIGHT_DECAY",
+    constraints="Rd: weight tensor, any shape. #lambda: float decay rate (e.g. 0.0001). dtype:f32"))
 
 # ── NML-TR Phase 3 (2) ────────────────────────────────────────────────────
 
 _reg(OpcodeInfo("BN", "Training", "Batch normalization: Rd = norm(Rs, [Rgamma, [Rbeta]])",
     "Rd Rs [Rgamma] [Rbeta]", "BN ${1:Rd} ${2:Rs}", 2, 4,
-    symbolic="⊞", verbose="BATCH_NORM"))
+    symbolic="⊞", verbose="BATCH_NORM",
+    constraints="Rs:[N,F] batch data. Rgamma:[F] scale, Rbeta:[F] shift (optional, default 1/0). Output same shape as Rs. dtype:f32"))
 
 _reg(OpcodeInfo("DROP", "Training", "Inverted dropout: Rd = dropout(Rs, #rate)",
     "Rd Rs [#rate]", "DROP ${1:Rd} ${2:Rs} ${3:#rate}", 2, 3,
-    symbolic="≋", verbose="DROPOUT"))
+    symbolic="≋", verbose="DROPOUT",
+    constraints="Rs: any shape. #rate: float 0.0-1.0 (fraction to drop, 0.0=no dropout at inference). Output same shape. dtype:f32"))
 
 # ── NML-G General (5) ──────────────────────────────────────────────────────
 
@@ -417,19 +454,23 @@ _reg(OpcodeInfo("SYS", "General", "System call with code",
 
 _reg(OpcodeInfo("MOD", "General", "Modulo: Rd = Rs1 % Rs2",
     "Rd Rs1 Rs2", "MOD ${1:Rd} ${2:Rs1} ${3:Rs2}", 3, 3,
-    symbolic="%", verbose="MODULO"))
+    symbolic="%", verbose="MODULO",
+    constraints="Rs1, Rs2: scalar [1]. Values MUST be integers (casts to int internally). Rs2 must not be 0. Output: scalar [1]. dtype:i32"))
 
 _reg(OpcodeInfo("ITOF", "General", "Integer to float conversion: Rd = float(Rs)",
     "Rd Rs", "ITOF ${1:Rd} ${2:Rs}", 2, 2,
-    symbolic="⊶", verbose="INT_TO_FLOAT"))
+    symbolic="⊶", verbose="INT_TO_FLOAT",
+    constraints="Rs: any shape with integer values. Output same shape. dtype:i32->f32"))
 
 _reg(OpcodeInfo("FTOI", "General", "Float to integer conversion: Rd = int(Rs)",
     "Rd Rs", "FTOI ${1:Rd} ${2:Rs}", 2, 2,
-    symbolic="⊷", verbose="FLOAT_TO_INT"))
+    symbolic="⊷", verbose="FLOAT_TO_INT",
+    constraints="Rs: any shape with float values. Output same shape, truncated to int. dtype:f32->i32"))
 
 _reg(OpcodeInfo("BNOT", "General", "Bitwise NOT: Rd = ~Rs",
     "Rd Rs", "BNOT ${1:Rd} ${2:Rs}", 2, 2,
-    symbolic="¬", verbose="BITWISE_NOT"))
+    symbolic="¬", verbose="BITWISE_NOT",
+    constraints="Rs: any shape. Operates on integer bit representation. dtype:i32"))
 
 
 # ── Lookup helpers ──────────────────────────────────────────────────────────
@@ -452,6 +493,27 @@ def lookup(name: str) -> OpcodeInfo | None:
     if canonical:
         return OPCODES.get(canonical)
     return None
+
+
+def get_constraints(opcode_names: list[str]) -> dict[str, str]:
+    """Return {opcode: constraints} for the given opcodes that have constraints."""
+    result = {}
+    for name in opcode_names:
+        info = lookup(name)
+        if info and info.constraints:
+            result[info.canonical] = info.constraints
+    return result
+
+
+def constraints_prompt(opcode_names: list[str]) -> str:
+    """Build a concise constraints reference string for use in LLM prompts."""
+    cs = get_constraints(opcode_names)
+    if not cs:
+        return ""
+    lines = ["DATA CONSTRAINTS PER OPCODE:"]
+    for op, c in cs.items():
+        lines.append(f"  {op}: {c}")
+    return "\n".join(lines)
 
 
 # ── Register metadata ──────────────────────────────────────────────────────

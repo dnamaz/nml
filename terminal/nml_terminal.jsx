@@ -775,25 +775,21 @@ JMPT  #-8
 HALT`,
     memory: {}
   },
-  "TNET Training": {
-    code: `; Mini-batch SGD — TNET #epochs #lr #loss #batch_size
-; 4th immediate sets mini-batch size (0 = full-batch / auto)
-LD    R1 @w1
-LD    R2 @b1
-LD    R3 @w2
-LD    R4 @b2
+  "TRAIN + INFER": {
+    code: `; Config-driven training with TRAIN + INFER
+; RV = architecture: 2 layers, hidden=4 ReLU, output=1 linear
+; RU = config: 300 epochs, lr=0.05, Adam optimizer
 LD    R0 @training_data
 LD    R9 @training_labels
-TNET  #300 #0.0500 #0 #4
-ST    R8 @loss
+ALLC  RV [5] 2,4,0,1,4
+ALLC  RU [6] 300,0.05,1,0,0,0
+TRAIN RU
+INFER R8 R0
+ST    R8 @predictions
 HALT`,
     memory: {
       training_data:   { shape: [8, 2], data: [0.1,0.2, 0.3,0.4, 0.5,0.1, 0.7,0.8, 0.2,0.9, 0.4,0.3, 0.6,0.5, 0.8,0.1] },
       training_labels: { shape: [8, 1], data: [0, 0, 0, 1, 0, 0, 1, 1] },
-      w1: { shape: [2, 4], data: [ 0.1,-0.2, 0.3, 0.1, -0.1, 0.4,-0.2, 0.2] },
-      b1: { shape: [1, 4], data: [0, 0, 0, 0] },
-      w2: { shape: [4, 1], data: [0.2,-0.1, 0.3, 0.1] },
-      b2: { shape: [1, 1], data: [0] },
     }
   },
   "Symbolic": {
@@ -996,8 +992,8 @@ const OPCODE_DOCS = [
 { op: "BKWD", sym: "∇", desc: "Backward pass: compute gradients", schema: "Rg Ra Rl [Rm]" },
 { op: "WUPD", sym: "⟳", desc: "Weight update: W -= lr * grad", schema: "Rw Rg Rlr [Rmom]" },
 { op: "LOSS", sym: "△", desc: "Compute loss", schema: "Rd Rpred Rlbl [#t]" },
-{ op: "TNET", sym: "⥁", desc: "Train network loop", schema: "#ep #lr #loss #bs" },
-{ op: "TNDEEP", sym: "⥁ˈ", desc: "N-layer dense training", schema: "#ep #lr #opt" },
+{ op: "TNET", sym: "⥁", desc: "Legacy training (redirects to TRAIN)", schema: "Rcfg #ep [#lr]" },
+{ op: "TNDEEP", sym: "⥁ˈ", desc: "Legacy N-layer training (redirects to TRAIN)", schema: "#ep #lr #opt" },
 { op: "TLOG", sym: "⧖", desc: "Set log interval", schema: "#n" },
 { op: "TRAIN", sym: "⟴", desc: "Config-driven training", schema: "Rs [@d] [@l]" },
 { op: "INFER", sym: "⟶", desc: "Forward pass only", schema: "Rd R_in" },

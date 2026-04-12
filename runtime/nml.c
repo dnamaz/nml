@@ -1318,6 +1318,7 @@ static const OpcodeEntry OPCODE_TABLE[] = {
     {"\xe2\x86\x90", OP_MOV,  "core"},  /* ← */
     {"\xe2\x96\xa1", OP_ALLC, "core"},  /* □ */
     /* Data Flow */
+    {"\xe2\x8a\x9f", OP_RSHP, "core"},  /* ⊟ minus-in-box — reshape */
     {"\xe2\x8a\xa4", OP_TRNS, "core"},  /* ⊤ */
     {"\xe2\x8a\xa2", OP_SPLT, "core"},  /* ⊢ */
     {"\xe2\x8a\xa3", OP_MERG, "core"},  /* ⊣ */
@@ -1364,7 +1365,7 @@ static const OpcodeEntry OPCODE_TABLE[] = {
     {"\xc2\xa7", OP_META, "NML-M2M"},       /* § */
     {"\xe2\x97\x86", OP_FRAG, "NML-M2M"},   /* ◆ */
     {"\xe2\x97\x87", OP_ENDF, "NML-M2M"},   /* ◇ */
-    {"\xe2\x8a\x95", OP_LINK, "NML-M2M"},   /* ⊕ (context distinguishes from MADD) */
+    {"\xe2\x8a\x9a", OP_LINK, "NML-M2M"},   /* ⊚ circled-ring — import fragment */
     {"\xe2\x8a\xbf", OP_PTCH, "NML-M2M"},   /* ⊿ */
     {"\xe2\x9c\xa6", OP_SIGN, "NML-M2M"},   /* ✦ */
     {"\xe2\x9c\x93", OP_VRFY, "NML-M2M"},   /* ✓ */
@@ -1392,6 +1393,7 @@ static const OpcodeEntry OPCODE_TABLE[] = {
     {"DIVIDE",          OP_SDIV, "core"},
     {"RELU",            OP_RELU, "core"},  /* already readable */
     {"SIGMOID",         OP_SIGM, "core"},
+    {"HYPERBOLIC_TANGENT", OP_TANH, "core"},
     {"SOFTMAX",         OP_SOFT, "core"},
     {"LOAD",            OP_LD,   "core"},
     {"STORE",           OP_ST,   "core"},
@@ -2634,6 +2636,10 @@ static int vm_execute(VM *vm) {
             fprintf(stderr, "[TRACE] PC=%04d  %s\n", vm->pc, opcode_name(ins->op));
 
         int rc;
+        /* Variables used by TNET/TNDEEP → TRAIN redirect shims */
+        int train_cfg_reg = -1;
+        const char *train_data_label = NULL;
+        const char *train_target_label = NULL;
         switch (ins->op) {
             case OP_MMUL: rc=tensor_matmul(&REG(ins->reg[0]),&REG(ins->reg[1]),&REG(ins->reg[2])); if(rc) VM_ERROR(vm,rc,"MMUL shape error at PC=%d",vm->pc); RVALID(ins->reg[0])=1;
                 /* Lookahead fusion: if next op is an activation on the same output register, fuse in-place */
@@ -3206,7 +3212,11 @@ static int vm_execute(VM *vm) {
             /* N-layer config-driven mode: ins->reg[0] >= 0 means config tensor register.
              * Legacy 2-layer mode: ins->reg[0] == -1. */
             if (ins->reg[0] >= 0) {
-                /* ── N-layer TNET ── */
+                /* ── N-layer TNET → redirect to TRAIN ──
+                 * Translates TNET's config format [in,out,act] rows into TRAIN's
+                 * RV format [n_layers, h1, act1, h2, act2, ...], builds a config
+                 * tensor with hyperparams, initialises weight registers R1-R6 with
+                 * Xavier init, then jumps to the TRAIN execution path. */
                 Tensor *cfg = &REG(ins->reg[0]);
                 if (!RVALID(ins->reg[0]) || cfg->ndim < 1 || cfg->size < 3)
                     VM_ERROR(vm, NML_ERR_OPCODE, "TNET: config register R%d is empty or too small", ins->reg[0]);
@@ -3217,7 +3227,7 @@ static int vm_execute(VM *vm) {
                 float lr_n    = (ins->int_params[0] != 0) ? (float)(ins->int_params[0] / 1e6) : 0.001f;
                 int use_adam_n = ins->int_params[1];
 
-                /* Read layer specs: cfg row l = [in_size, out_size, activation] */
+                /* Read TNET config [in, out, act] rows and translate to RV format */
                 int in_sz[8], out_sz[8], act_type[8];
                 for (int l = 0; l < L; l++) {
                     in_sz[l]   = (int)tensor_getd(cfg, l*3 + 0);
@@ -3225,216 +3235,66 @@ static int vm_execute(VM *vm) {
                     act_type[l]= (int)tensor_getd(cfg, l*3 + 2);
                 }
 
-                /* Weights W[l]: [in_sz[l], out_sz[l]], biases b[l]: [1, out_sz[l]] */
-                float *W[8] = {NULL}, *b_arr[8] = {NULL};
-                float *mW[8]={NULL},*vW[8]={NULL},*mb[8]={NULL},*vb[8]={NULL};
-                for (int l = 0; l < L; l++) {
-                    int wsz = in_sz[l] * out_sz[l];
-                    W[l] = (float*)calloc(wsz, sizeof(float));
-                    b_arr[l] = (float*)calloc(out_sz[l], sizeof(float));
-                    if (!W[l] || !b_arr[l])
-                        VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET N-layer: alloc failed for layer %d", l);
-                    if (use_adam_n) {
-                        mW[l] = (float*)calloc(wsz, sizeof(float));
-                        vW[l] = (float*)calloc(wsz, sizeof(float));
-                        mb[l] = (float*)calloc(out_sz[l], sizeof(float));
-                        vb[l] = (float*)calloc(out_sz[l], sizeof(float));
-                        if (!mW[l]||!vW[l]||!mb[l]||!vb[l])
-                            VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET N-layer: Adam alloc failed for layer %d", l);
-                    }
-                    /* Xavier initialisation: scale = sqrt(2 / in_sz) */
-                    float scale_init = (in_sz[l] > 0) ? sqrtf(2.0f / in_sz[l]) : 0.1f;
-                    for (int i = 0; i < wsz; i++) {
-                        /* LCG pseudo-random in [-scale, scale] */
-                        static unsigned int _tnet_seed = 0xDEADBEEFu;
-                        _tnet_seed = _tnet_seed * 1664525u + 1013904223u;
-                        float r = (float)(_tnet_seed >> 8) / 8388608.0f - 1.0f; /* [-1,1) */
-                        W[l][i] = r * scale_init;
-                    }
-                }
-
-                Tensor *X_n  = &REG(0);
-                Tensor *Y_n  = &REG(9);
-                if (!RVALID(0) || !RVALID(9))
-                    VM_ERROR(vm, NML_ERR_OPCODE, "TNET N-layer: R0 (input) and R9 (labels) must be set");
-                int N_n = X_n->shape[0];
-
-                /* Intermediate activations: A[0]=input copy, A[l+1]=output of layer l */
-                /* We allocate per-epoch arrays on the heap to avoid VLAs */
-                float **A    = (float**)calloc(L+1, sizeof(float*));
-                float **dA   = (float**)calloc(L+1, sizeof(float*));
-                float **dW_n = (float**)calloc(L, sizeof(float*));
-                float **db_n = (float**)calloc(L, sizeof(float*));
-                if (!A||!dA||!dW_n||!db_n)
-                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET N-layer: activation array alloc failed");
-                A[0] = (float*)malloc((size_t)N_n * in_sz[0] * sizeof(float));
-                if (!A[0]) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET N-layer: A[0] alloc failed");
-                for (int l = 0; l < L; l++) {
-                    A[l+1]  = (float*)calloc((size_t)N_n * out_sz[l], sizeof(float));
-                    dA[l+1] = (float*)calloc((size_t)N_n * out_sz[l], sizeof(float));
-                    dW_n[l] = (float*)calloc((size_t)in_sz[l] * out_sz[l], sizeof(float));
-                    db_n[l] = (float*)calloc((size_t)out_sz[l], sizeof(float));
-                    if (!A[l+1]||!dA[l+1]||!dW_n[l]||!db_n[l])
-                        VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET N-layer: alloc failed at layer %d", l);
-                }
-                dA[0] = (float*)calloc((size_t)N_n * in_sz[0], sizeof(float));
-                if (!dA[0]) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET N-layer: dA[0] alloc failed");
-
-                const float BETA1n = 0.9f, BETA2n = 0.999f, EPSn = 1e-8f;
-                int adam_tn = 0;
-                float loss_n = 0.0f;
-
-                for (int ep = 0; ep < epochs_n; ep++) {
-                    /* Copy X to A[0] */
-                    for (int i = 0; i < N_n * in_sz[0]; i++)
-                        A[0][i] = tensor_getf(X_n, i);
-
-                    /* Forward pass */
-                    for (int l = 0; l < L; l++) {
-                        int Nin = in_sz[l], Nout = out_sz[l];
-                        /* Z = A[l] * W[l] + b[l] (no batch here — full dataset) */
-                        for (int i = 0; i < N_n; i++) {
-                            for (int j = 0; j < Nout; j++) {
-                                float sum = 0.0f;
-                                for (int p = 0; p < Nin; p++)
-                                    sum += A[l][i*Nin+p] * W[l][p*Nout+j];
-                                float z = sum + b_arr[l][j];
-                                /* activation */
-                                switch (act_type[l]) {
-                                    case 0: A[l+1][i*Nout+j] = z > 0.0f ? z : 0.0f; break;       /* ReLU */
-                                    case 1: A[l+1][i*Nout+j] = 1.0f/(1.0f+expf(-z)); break;      /* Sigmoid */
-                                    case 2: A[l+1][i*Nout+j] = tanhf(z); break;                  /* Tanh */
-                                    case 3: { /* GELU approx */
-                                        float inner = 0.7978845608f*(z+0.044715f*z*z*z);
-                                        A[l+1][i*Nout+j] = 0.5f*z*(1.0f+tanhf(inner));
-                                        break;
-                                    }
-                                    default: A[l+1][i*Nout+j] = z; break;                         /* Linear */
-                                }
-                            }
-                        }
-                    }
-
-                    /* Loss (MSE): L = sum((A[L] - Y)^2) / N */
-                    loss_n = 0.0f;
-                    int Nout_last = out_sz[L-1];
-                    for (int i = 0; i < N_n * Nout_last; i++) {
-                        float diff = A[L][i] - tensor_getf(Y_n, i);
-                        loss_n += diff * diff;
-                        dA[L][i] = 2.0f * diff / (N_n * Nout_last);
-                    }
-                    loss_n /= (N_n * Nout_last);
-
-                    /* Backward pass */
-                    for (int l = L-1; l >= 0; l--) {
-                        int Nin = in_sz[l], Nout = out_sz[l];
-
-                        /* Activation backward: compute dZ from dA[l+1] */
-                        float *dZ = (float*)malloc((size_t)N_n * Nout * sizeof(float));
-                        if (!dZ) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNET N-layer: dZ alloc failed");
-                        for (int i = 0; i < N_n; i++) {
-                            for (int j = 0; j < Nout; j++) {
-                                float da = dA[l+1][i*Nout+j];
-                                float z_val; /* re-compute pre-activation */
-                                float sum = 0.0f;
-                                for (int p = 0; p < Nin; p++)
-                                    sum += A[l][i*Nin+p] * W[l][p*Nout+j];
-                                z_val = sum + b_arr[l][j];
-                                float dz;
-                                switch (act_type[l]) {
-                                    case 0: dz = (z_val > 0.0f) ? da : 0.0f; break;
-                                    case 1: { float s = 1.0f/(1.0f+expf(-z_val)); dz = da*s*(1.0f-s); break; }
-                                    case 2: { float t = tanhf(z_val); dz = da*(1.0f-t*t); break; }
-                                    case 3: { /* GELU backward */
-                                        float inner = 0.7978845608f*(z_val+0.044715f*z_val*z_val*z_val);
-                                        float tanh_inner = tanhf(inner);
-                                        float sech2 = 1.0f - tanh_inner*tanh_inner;
-                                        float dgelu = 0.5f*(1.0f+tanh_inner)+0.5f*z_val*sech2*0.7978845608f*(1.0f+3.0f*0.044715f*z_val*z_val);
-                                        dz = da * dgelu; break;
-                                    }
-                                    default: dz = da; break;
-                                }
-                                dZ[i*Nout+j] = dz;
-                            }
-                        }
-
-                        /* dW[l] = A[l]^T * dZ  / N_n */
-                        for (int p = 0; p < Nin; p++)
-                            for (int j = 0; j < Nout; j++) {
-                                float sum = 0.0f;
-                                for (int i = 0; i < N_n; i++)
-                                    sum += A[l][i*Nin+p] * dZ[i*Nout+j];
-                                dW_n[l][p*Nout+j] = sum / N_n;
-                            }
-
-                        /* db[l] = mean(dZ, axis=0) */
-                        for (int j = 0; j < Nout; j++) {
-                            float sum = 0.0f;
-                            for (int i = 0; i < N_n; i++) sum += dZ[i*Nout+j];
-                            db_n[l][j] = sum / N_n;
-                        }
-
-                        /* dA[l] = dZ * W[l]^T */
-                        if (l > 0) {
-                            memset(dA[l], 0, (size_t)N_n * Nin * sizeof(float));
-                            for (int i = 0; i < N_n; i++)
-                                for (int p = 0; p < Nin; p++) {
-                                    float sum = 0.0f;
-                                    for (int j = 0; j < Nout; j++)
-                                        sum += dZ[i*Nout+j] * W[l][p*Nout+j];
-                                    dA[l][i*Nin+p] = sum;
-                                }
-                        }
-                        free(dZ);
-
-                        /* Weight update */
-                        if (use_adam_n) {
-                            adam_tn++;
-                            float bc1 = 1.0f - powf(BETA1n, (float)adam_tn);
-                            float bc2 = 1.0f - powf(BETA2n, (float)adam_tn);
-                            int wsz = Nin * Nout;
-                            for (int i = 0; i < wsz; i++) {
-                                mW[l][i] = BETA1n*mW[l][i] + (1.0f-BETA1n)*dW_n[l][i];
-                                vW[l][i] = BETA2n*vW[l][i] + (1.0f-BETA2n)*dW_n[l][i]*dW_n[l][i];
-                                W[l][i] -= lr_n * (mW[l][i]/bc1) / (sqrtf(vW[l][i]/bc2) + EPSn);
-                            }
-                            for (int j = 0; j < Nout; j++) {
-                                mb[l][j] = BETA1n*mb[l][j] + (1.0f-BETA1n)*db_n[l][j];
-                                vb[l][j] = BETA2n*vb[l][j] + (1.0f-BETA2n)*db_n[l][j]*db_n[l][j];
-                                b_arr[l][j] -= lr_n * (mb[l][j]/bc1) / (sqrtf(vb[l][j]/bc2) + EPSn);
-                            }
-                        } else {
-                            int wsz = Nin * Nout;
-                            for (int i = 0; i < wsz; i++) W[l][i] -= lr_n * dW_n[l][i];
-                            for (int j = 0; j < Nout; j++) b_arr[l][j] -= lr_n * db_n[l][j];
-                        }
-                    }
-
-                    if ((ep+1) % 100 == 0) {
-                        printf("TNET N-layer epoch %d loss=%.6f\n", ep+1, loss_n);
-                    }
-                }
-
-                /* Store final predictions (A[L]) in R8 */
+                /* Build RV architecture descriptor: [n_layers, h1, act1, h2, act2, ...] */
                 {
-                    int pred_shape[2] = {N_n, out_sz[L-1]};
-                    tensor_init_typed(&REG(8), 2, pred_shape, NML_F32);
-                    for (int i = 0; i < N_n * out_sz[L-1]; i++)
-                        tensor_setf(&REG(8), i, A[L][i]);
-                    RVALID(8) = 1;
+                    int rv_size = 1 + L * 2;
+                    int rv_shape[1] = {rv_size};
+                    tensor_free(&REG(31));
+                    tensor_init_typed(&REG(31), 1, rv_shape, NML_F64);
+                    tensor_setd(&REG(31), 0, (double)L);
+                    for (int l = 0; l < L; l++) {
+                        tensor_setd(&REG(31), 1 + l*2,     (double)out_sz[l]);
+                        tensor_setd(&REG(31), 1 + l*2 + 1, (double)act_type[l]);
+                    }
+                    RVALID(31) = 1;
                 }
 
-                /* Cleanup */
-                for (int l = 0; l < L; l++) {
-                    free(W[l]); free(b_arr[l]);
-                    free(A[l+1]); free(dA[l+1]);
-                    free(dW_n[l]); free(db_n[l]);
-                    if (use_adam_n) { free(mW[l]); free(vW[l]); free(mb[l]); free(vb[l]); }
+                /* Initialise weight registers R1-R6 (weight/bias pairs) with Xavier init */
+                {
+                    static unsigned int _tnet_seed = 0xDEADBEEFu;
+                    for (int l = 0; l < L; l++) {
+                        int w_reg = 1 + l * 2;
+                        int b_reg = 2 + l * 2;
+                        int w_rows = (l == 0) ? in_sz[0] : out_sz[l-1];
+                        int w_cols = out_sz[l];
+                        /* Weight: [w_rows, w_cols] */
+                        int w_shape[2] = {w_rows, w_cols};
+                        tensor_free(&REG(w_reg));
+                        tensor_init_typed(&REG(w_reg), 2, w_shape, NML_F32);
+                        float scale_init = (w_rows > 0) ? sqrtf(2.0f / w_rows) : 0.1f;
+                        for (int i = 0; i < w_rows * w_cols; i++) {
+                            _tnet_seed = _tnet_seed * 1664525u + 1013904223u;
+                            float r = (float)(_tnet_seed >> 8) / 8388608.0f - 1.0f;
+                            tensor_setf(&REG(w_reg), i, r * scale_init);
+                        }
+                        RVALID(w_reg) = 1;
+                        /* Bias: [w_cols] (zeros) */
+                        int b_shape[1] = {w_cols};
+                        tensor_free(&REG(b_reg));
+                        tensor_init_typed(&REG(b_reg), 1, b_shape, NML_F32);
+                        RVALID(b_reg) = 1;
+                    }
                 }
-                free(A[0]); free(dA[0]);
-                free(A); free(dA); free(dW_n); free(db_n);
 
-                break;
+                /* Build 6-element config tensor in RU (register 30) for TRAIN */
+                {
+                    int cfg_shape[1] = {6};
+                    tensor_free(&REG(30));
+                    tensor_init_typed(&REG(30), 1, cfg_shape, NML_F64);
+                    tensor_setd(&REG(30), 0, (double)epochs_n);
+                    tensor_setd(&REG(30), 1, (double)lr_n);
+                    tensor_setd(&REG(30), 2, (double)use_adam_n);
+                    tensor_setd(&REG(30), 3, 0.0); /* print_every: use TLOG */
+                    tensor_setd(&REG(30), 4, 0.0); /* patience: disabled */
+                    tensor_setd(&REG(30), 5, 1e-6);
+                    RVALID(30) = 1;
+                }
+
+                /* Redirect: set config register index and fall through to TRAIN */
+                train_cfg_reg = 30;
+                train_data_label = "";
+                train_target_label = "";
+                goto train_dispatch;
             }
             /* ── Legacy 2-layer TNET ── */
             /* Fused mini-batch training loop — f32 internal computation.
@@ -3930,722 +3790,36 @@ static int vm_execute(VM *vm) {
         }
 
         case OP_TNDEEP: {
-            /* TNDEEP #epochs #lr #optimizer [@input_data [@labels]]
-             * N-layer dense training. Architecture from RV: [n_layers, h1, act1, h2, act2, ...]
-             * Weights in R1, R2, ... (weight, bias pairs).
-             * Input/target: named @refs if provided (no register clobbering),
-             *               else falls back to R0=input, R9=target.
-             * Activations: 0=ReLU, 1=sigmoid, 2=tanh, 3=GELU
-             * Result: trained weights in-place, R8 = final loss
-             *
-             * Fast path (all f32 tensors): batch matrix operations, direct float* access,
-             * BLAS sgemm when NML_HAS_BLAS is defined (nml-fast / nml-metal builds).
-             * Scalar fallback for f64 or mixed-dtype weights. */
-            int epochs = (int)ins->imm;
-            float lr = (float)(ins->int_params[0] / 1e6);
-            int use_adam = ins->int_params[1];
+            /* ── TNDEEP → redirect to TRAIN ──
+             * Builds a 6-element config tensor from instruction fields and
+             * delegates to the TRAIN execution path.  RV and R1-R6 are already
+             * in the correct format (identical to TRAIN). */
+            {
+                int epochs_td = (int)ins->imm;
+                float lr_td   = (float)(ins->int_params[0] / 1e6);
+                int adam_td   = ins->int_params[1];
 
-            Tensor *arch = &REG(31); /* RV */
-            if (!RVALID(31) || arch->size < 1)
-                VM_ERROR(vm, NML_ERR_OPCODE, "TNDEEP: RV must contain architecture descriptor");
-            int n_layers = (int)tensor_getd(arch, 0);
-            if (n_layers < 1 || n_layers > 10)
-                VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: n_layers must be 1-10, got %d", n_layers);
+                /* Build config tensor in RU (register 30) */
+                int cfg_shape[1] = {6};
+                tensor_free(&REG(30));
+                tensor_init_typed(&REG(30), 1, cfg_shape, NML_F64);
+                tensor_setd(&REG(30), 0, (double)epochs_td);
+                tensor_setd(&REG(30), 1, (double)lr_td);
+                tensor_setd(&REG(30), 2, (double)adam_td);
+                tensor_setd(&REG(30), 3, 0.0);   /* print_every: use TLOG */
+                tensor_setd(&REG(30), 4, 0.0);   /* patience: disabled */
+                tensor_setd(&REG(30), 5, 1e-6);
+                RVALID(30) = 1;
 
-            /* Resolve input/target: named @ref takes priority over R0/R9 */
-            Tensor *input  = NULL;
-            Tensor *target = NULL;
-            if (ins->data_label[0]) {
-                MemorySlot *sl = vm_memory(vm, ins->data_label);
-                if (!sl || !sl->used)
-                    VM_ERROR(vm, NML_ERR_MEMORY, "TNDEEP: @%s not found", ins->data_label);
-                input = &sl->tensor;
-            } else {
-                input = &REG(0);
-            }
-            if (ins->target_label[0]) {
-                MemorySlot *sl = vm_memory(vm, ins->target_label);
-                if (!sl || !sl->used)
-                    VM_ERROR(vm, NML_ERR_MEMORY, "TNDEEP: @%s not found", ins->target_label);
-                target = &sl->tensor;
-            } else {
-                target = &REG(9);
-            }
-            int N = input->shape[0];
-
-            typedef struct { int rows, cols; int act; int w_reg, b_reg; } Layer;
-            Layer layers[10];
-            int prev_size = input->ndim >= 2 ? input->shape[1] : input->shape[0];
-            for (int l = 0; l < n_layers; l++) {
-                int h   = (int)tensor_getd(arch, 1 + l * 2);
-                int act = (1 + l * 2 + 1 < (int)arch->size) ? (int)tensor_getd(arch, 1 + l * 2 + 1) : 0;
-                layers[l].rows  = prev_size;
-                layers[l].cols  = h;
-                layers[l].act   = act;
-                layers[l].w_reg = 1 + l * 2;
-                layers[l].b_reg = 2 + l * 2;
-                prev_size = h;
+                train_cfg_reg = 30;
+                train_data_label = ins->data_label;
+                train_target_label = ins->target_label;
+                goto train_dispatch;
             }
 
-            int max_dim = 0;
-            for (int l = 0; l < n_layers; l++)
-                if (layers[l].cols > max_dim) max_dim = layers[l].cols;
-            if (layers[0].rows > max_dim) max_dim = layers[0].rows;
-            if (max_dim > 4096)
-                VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: max dimension %d exceeds 4096", max_dim);
-
-            int B      = (N <= 64) ? N : 64;
-            int nbatch = (N + B - 1) / B;
-
-            /* ── Determine vectorized path availability ── */
-            int all_f32 = (input->dtype == NML_F32 && target->dtype == NML_F32);
-            for (int l = 0; l < n_layers && all_f32; l++)
-                if (REG(layers[l].w_reg).dtype != NML_F32 ||
-                    REG(layers[l].b_reg).dtype != NML_F32)
-                    all_f32 = 0;
-
-            int all_f64 = (input->dtype == NML_F64 && target->dtype == NML_F64);
-            for (int l = 0; l < n_layers && all_f64; l++)
-                if (REG(layers[l].w_reg).dtype != NML_F64 ||
-                    REG(layers[l].b_reg).dtype != NML_F64)
-                    all_f64 = 0;
-
-            float loss = 0.0f;
-
-            if (all_f32) {
-                /* ════════════════════════════════════════════════════════
-                   FAST PATH — batch matrix operations, direct float* access
-                   Forward:  Z[l] = A[l-1] @ W[l] + b[l];  A[l] = act(Z[l])
-                   Backward: dW[l] = A[l-1]^T @ delta[l]
-                             delta[l-1] = (delta[l] @ W[l]^T) * act'(Z[l-1])
-                   All activation/gradient buffers use max_dim row stride so
-                   every BLAS/manual matmul sees a uniform leading dimension.
-                   ════════════════════════════════════════════════════════ */
-
-                /* Extract raw weight/bias float pointers */
-                float *W[10], *b_arr[10];
-                for (int l = 0; l < n_layers; l++) {
-                    W[l]     = REG(layers[l].w_reg).data.f32;
-                    b_arr[l] = REG(layers[l].b_reg).data.f32;
-                }
-
-                /* Allocate activation/gradient buffers (all Bn × max_dim) */
-                size_t slot = (size_t)B * max_dim;
-                float *A_buf     = (float *)malloc((size_t)(n_layers + 1) * slot * sizeof(float));
-                float *Z_buf     = (float *)malloc((size_t) n_layers      * slot * sizeof(float));
-                float *delta_buf = (float *)malloc((size_t) n_layers      * slot * sizeof(float));
-
-                /* Per-layer weight/bias gradient buffers (compact, no padding) */
-                size_t total_w = 0, total_b = 0;
-                for (int l = 0; l < n_layers; l++) {
-                    total_w += (size_t)layers[l].rows * layers[l].cols;
-                    total_b += (size_t)layers[l].cols;
-                }
-                float *dW_buf = (float *)calloc(total_w, sizeof(float));
-                float *db_buf = (float *)calloc(total_b, sizeof(float));
-
-                /* Adam moment buffers (float, one per parameter) */
-                float *mW_buf = NULL, *vW_buf = NULL, *mb_buf = NULL, *vb_buf = NULL;
-                if (use_adam) {
-                    mW_buf = (float *)calloc(total_w, sizeof(float));
-                    vW_buf = (float *)calloc(total_w, sizeof(float));
-                    mb_buf = (float *)calloc(total_b, sizeof(float));
-                    vb_buf = (float *)calloc(total_b, sizeof(float));
-                }
-
-                if (!A_buf || !Z_buf || !delta_buf || !dW_buf || !db_buf ||
-                    (use_adam && (!mW_buf || !vW_buf || !mb_buf || !vb_buf))) {
-                    free(A_buf); free(Z_buf); free(delta_buf);
-                    free(dW_buf); free(db_buf);
-                    free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
-                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: alloc failed");
-                }
-
-                /* Per-layer pointers into the flat buffers */
-                float *A[11], *Z[10], *delta[10];
-                float *dW[10], *db[10], *mW[10], *vW[10], *mb[10], *vb[10];
-                A[0] = A_buf;  /* will be overwritten with input copy each batch */
-                for (int l = 0; l < n_layers; l++) {
-                    A[l + 1]  = A_buf + (size_t)(l + 1) * slot;
-                    Z[l]      = Z_buf + (size_t)l * slot;
-                    delta[l]  = delta_buf + (size_t)l * slot;
-                }
-                size_t woff = 0, boff = 0;
-                for (int l = 0; l < n_layers; l++) {
-                    size_t wl = (size_t)layers[l].rows * layers[l].cols;
-                    size_t bl = (size_t)layers[l].cols;
-                    dW[l] = dW_buf + woff;
-                    db[l] = db_buf + boff;
-                    mW[l] = use_adam ? mW_buf + woff : NULL;
-                    vW[l] = use_adam ? vW_buf + woff : NULL;
-                    mb[l] = use_adam ? mb_buf + boff : NULL;
-                    vb[l] = use_adam ? vb_buf + boff : NULL;
-                    woff += wl; boff += bl;
-                }
-
-                const float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
-                int adam_step = 0;
-
-                /* Per-epoch shuffling: allocate and initialise permutation index */
-                int *perm_f32 = (int *)malloc((size_t)N * sizeof(int));
-                if (!perm_f32) {
-                    free(A_buf); free(Z_buf); free(delta_buf);
-                    free(dW_buf); free(db_buf);
-                    free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
-                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: perm alloc failed");
-                }
-                for (int i = 0; i < N; i++) perm_f32[i] = i;
-
-                for (int epoch = 0; epoch < epochs; epoch++) {
-                    /* Fisher-Yates shuffle */
-                    for (int i = N - 1; i > 0; i--) {
-                        int j = (int)((unsigned)rand() % (unsigned)(i + 1));
-                        int tmp = perm_f32[i]; perm_f32[i] = perm_f32[j]; perm_f32[j] = tmp;
-                    }
-                    loss = 0.0f;
-                    for (int batch = 0; batch < nbatch; batch++) {
-                        int s0 = batch * B;
-                        int Bn = (s0 + B <= N) ? B : N - s0;
-                        int in0 = layers[0].rows;
-
-                        /* Copy input batch into A[0] via permuted indices */
-                        for (int s = 0; s < Bn; s++) {
-                            int idx = perm_f32[s0 + s];
-                            memcpy(A[0] + (size_t)s * max_dim,
-                                   input->data.f32 + (size_t)idx * in0,
-                                   in0 * sizeof(float));
-                        }
-
-                        /* ── Forward pass ── */
-                        for (int l = 0; l < n_layers; l++) {
-                            int in_sz = layers[l].rows, out_sz = layers[l].cols;
-#ifdef NML_HAS_BLAS
-                            /* Z[l] = A[l-1] @ W[l]  (Bn×in_sz) @ (in_sz×out_sz) */
-                            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                                        Bn, out_sz, in_sz,
-                                        1.0f, A[l], max_dim,
-                                        W[l], out_sz,
-                                        0.0f, Z[l], max_dim);
-#else
-                            for (int s = 0; s < Bn; s++) {
-                                const float *a_row = A[l] + (size_t)s * max_dim;
-                                float       *z_row = Z[l] + (size_t)s * max_dim;
-                                for (int j = 0; j < out_sz; j++) {
-                                    float sum = 0.0f;
-                                    for (int p = 0; p < in_sz; p++)
-                                        sum += a_row[p] * W[l][p * out_sz + j];
-                                    z_row[j] = sum;
-                                }
-                            }
-#endif
-                            /* Add bias + apply activation, store both Z and A */
-                            for (int s = 0; s < Bn; s++) {
-                                float *z_row = Z[l] + (size_t)s * max_dim;
-                                float *a_row = A[l + 1] + (size_t)s * max_dim;
-                                for (int j = 0; j < out_sz; j++) {
-                                    float z = z_row[j] + b_arr[l][j];
-                                    z_row[j] = z;  /* keep pre-activation for backward */
-                                    switch (layers[l].act) {
-                                        case 1: a_row[j] = 1.0f / (1.0f + expf(-z)); break;
-                                        case 2: a_row[j] = tanhf(z); break;
-                                        default: a_row[j] = z > 0.0f ? z : 0.0f; break; /* ReLU */
-                                    }
-                                }
-                            }
-                        }
-
-                        /* ── Loss (MSE) and initial delta for last layer ── */
-                        int out_final = layers[n_layers - 1].cols;
-                        for (int s = 0; s < Bn; s++) {
-                            int idx = perm_f32[s0 + s];
-                            float *a_row = A[n_layers] + (size_t)s * max_dim;
-                            float *d_row = delta[n_layers - 1] + (size_t)s * max_dim;
-                            const float *y_row = target->data.f32 + (size_t)idx * out_final;
-                            for (int j = 0; j < out_final; j++) {
-                                float a = a_row[j], y = y_row[j];
-                                float diff = a - y;
-                                loss += diff * diff;
-                                float z   = Z[n_layers - 1][(size_t)s * max_dim + j];
-                                float da;
-                                switch (layers[n_layers - 1].act) {
-                                    case 1: da = a * (1.0f - a); break;
-                                    case 2: da = 1.0f - a * a;  break;
-                                    default: da = z > 0.0f ? 1.0f : 0.0f; break;
-                                }
-                                d_row[j] = 2.0f * diff * da / Bn;
-                            }
-                        }
-
-                        /* ── Backward pass ── */
-                        if (use_adam) { adam_step++; }
-                        float bc1 = use_adam ? 1.0f - powf(BETA1, (float)adam_step) : 1.0f;
-                        float bc2 = use_adam ? 1.0f - powf(BETA2, (float)adam_step) : 1.0f;
-
-                        for (int l = n_layers - 1; l >= 0; l--) {
-                            int in_sz = layers[l].rows, out_sz = layers[l].cols;
-
-                            /* dW[l] = A[l]^T @ delta[l]  →  in_sz × out_sz */
-                            memset(dW[l], 0, (size_t)in_sz * out_sz * sizeof(float));
-#ifdef NML_HAS_BLAS
-                            cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                                        in_sz, out_sz, Bn,
-                                        1.0f, A[l], max_dim,
-                                        delta[l], max_dim,
-                                        0.0f, dW[l], out_sz);
-#else
-                            for (int s = 0; s < Bn; s++) {
-                                const float *a_row = A[l]      + (size_t)s * max_dim;
-                                const float *d_row = delta[l]  + (size_t)s * max_dim;
-                                for (int p = 0; p < in_sz; p++)
-                                    for (int j = 0; j < out_sz; j++)
-                                        dW[l][p * out_sz + j] += a_row[p] * d_row[j];
-                            }
-#endif
-                            /* db[l] = sum_samples(delta[l]) */
-                            memset(db[l], 0, (size_t)out_sz * sizeof(float));
-                            for (int s = 0; s < Bn; s++) {
-                                const float *d_row = delta[l] + (size_t)s * max_dim;
-                                for (int j = 0; j < out_sz; j++)
-                                    db[l][j] += d_row[j];
-                            }
-
-                            /* Propagate gradient to layer l-1 */
-                            if (l > 0) {
-                                int prev_sz = layers[l - 1].cols; /* = in_sz */
-#ifdef NML_HAS_BLAS
-                                /* delta[l-1] = delta[l] @ W[l]^T  →  Bn × in_sz */
-                                cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                                            Bn, in_sz, out_sz,
-                                            1.0f, delta[l], max_dim,
-                                            W[l], out_sz,
-                                            0.0f, delta[l - 1], max_dim);
-#else
-                                for (int s = 0; s < Bn; s++) {
-                                    const float *d_row  = delta[l]     + (size_t)s * max_dim;
-                                    float       *dp_row = delta[l - 1] + (size_t)s * max_dim;
-                                    for (int p = 0; p < in_sz; p++) {
-                                        float sum = 0.0f;
-                                        for (int j = 0; j < out_sz; j++)
-                                            sum += d_row[j] * W[l][p * out_sz + j];
-                                        dp_row[p] = sum;
-                                    }
-                                }
-#endif
-                                /* Multiply by activation derivative of layer l-1 */
-                                for (int s = 0; s < Bn; s++) {
-                                    float *dp_row = delta[l - 1] + (size_t)s * max_dim;
-                                    for (int p = 0; p < prev_sz; p++) {
-                                        float z  = Z[l - 1][(size_t)s * max_dim + p];
-                                        float a  = A[l]    [(size_t)s * max_dim + p];
-                                        float da;
-                                        switch (layers[l - 1].act) {
-                                            case 1: da = a * (1.0f - a); break;
-                                            case 2: da = 1.0f - a * a;  break;
-                                            default: da = z > 0.0f ? 1.0f : 0.0f; break;
-                                        }
-                                        dp_row[p] *= da;
-                                    }
-                                }
-                                (void)prev_sz;
-                            }
-
-                            /* ── Weight update ── */
-                            if (use_adam) {
-                                for (int i = 0; i < in_sz * out_sz; i++) {
-                                    float g = dW[l][i];
-                                    mW[l][i] = BETA1 * mW[l][i] + (1.0f - BETA1) * g;
-                                    vW[l][i] = BETA2 * vW[l][i] + (1.0f - BETA2) * g * g;
-                                    W[l][i] -= lr * (mW[l][i] / bc1) / (sqrtf(vW[l][i] / bc2) + EPS);
-                                }
-                                for (int j = 0; j < out_sz; j++) {
-                                    mb[l][j] = BETA1 * mb[l][j] + (1.0f - BETA1) * db[l][j];
-                                    vb[l][j] = BETA2 * vb[l][j] + (1.0f - BETA2) * db[l][j] * db[l][j];
-                                    b_arr[l][j] -= lr * (mb[l][j] / bc1) / (sqrtf(vb[l][j] / bc2) + EPS);
-                                }
-                            } else {
-                                for (int i = 0; i < in_sz * out_sz; i++)
-                                    W[l][i] -= lr * dW[l][i];
-                                for (int j = 0; j < out_sz; j++)
-                                    b_arr[l][j] -= lr * db[l][j];
-                            }
-                        } /* end layer backward */
-                    } /* end batch */
-                    loss /= (float)(N * layers[n_layers - 1].cols);
-                } /* end epoch */
-
-                free(perm_f32);
-                free(A_buf); free(Z_buf); free(delta_buf);
-                free(dW_buf); free(db_buf);
-                free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
-
-            } else if (all_f64) {
-                /* ════════════════════════════════════════════════════════
-                   FAST PATH f64 — structurally identical to f32 path above;
-                   double buffers, cblas_dgemm (when NML_HAS_BLAS).
-                   ════════════════════════════════════════════════════════ */
-                double *W[10], *b_arr[10];
-                for (int l = 0; l < n_layers; l++) {
-                    W[l]     = REG(layers[l].w_reg).data.f64;
-                    b_arr[l] = REG(layers[l].b_reg).data.f64;
-                }
-
-                size_t slot = (size_t)B * max_dim;
-                double *A_buf     = (double *)malloc((size_t)(n_layers + 1) * slot * sizeof(double));
-                double *Z_buf     = (double *)malloc((size_t) n_layers      * slot * sizeof(double));
-                double *delta_buf = (double *)malloc((size_t) n_layers      * slot * sizeof(double));
-
-                size_t total_w = 0, total_b = 0;
-                for (int l = 0; l < n_layers; l++) {
-                    total_w += (size_t)layers[l].rows * layers[l].cols;
-                    total_b += (size_t)layers[l].cols;
-                }
-                double *dW_buf = (double *)calloc(total_w, sizeof(double));
-                double *db_buf = (double *)calloc(total_b, sizeof(double));
-
-                double *mW_buf = NULL, *vW_buf = NULL, *mb_buf = NULL, *vb_buf = NULL;
-                if (use_adam) {
-                    mW_buf = (double *)calloc(total_w, sizeof(double));
-                    vW_buf = (double *)calloc(total_w, sizeof(double));
-                    mb_buf = (double *)calloc(total_b, sizeof(double));
-                    vb_buf = (double *)calloc(total_b, sizeof(double));
-                }
-
-                if (!A_buf || !Z_buf || !delta_buf || !dW_buf || !db_buf ||
-                    (use_adam && (!mW_buf || !vW_buf || !mb_buf || !vb_buf))) {
-                    free(A_buf); free(Z_buf); free(delta_buf);
-                    free(dW_buf); free(db_buf);
-                    free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
-                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: alloc failed");
-                }
-
-                double *A[11], *Z[10], *delta[10];
-                double *dW[10], *db[10], *mW[10], *vW[10], *mb[10], *vb[10];
-                A[0] = A_buf;
-                for (int l = 0; l < n_layers; l++) {
-                    A[l + 1]  = A_buf + (size_t)(l + 1) * slot;
-                    Z[l]      = Z_buf + (size_t)l * slot;
-                    delta[l]  = delta_buf + (size_t)l * slot;
-                }
-                size_t woff = 0, boff = 0;
-                for (int l = 0; l < n_layers; l++) {
-                    size_t wl = (size_t)layers[l].rows * layers[l].cols;
-                    size_t bl = (size_t)layers[l].cols;
-                    dW[l] = dW_buf + woff;  db[l] = db_buf + boff;
-                    mW[l] = use_adam ? mW_buf + woff : NULL;
-                    vW[l] = use_adam ? vW_buf + woff : NULL;
-                    mb[l] = use_adam ? mb_buf + boff : NULL;
-                    vb[l] = use_adam ? vb_buf + boff : NULL;
-                    woff += wl; boff += bl;
-                }
-
-                const double BETA1 = 0.9, BETA2 = 0.999, EPS = 1e-8;
-                int adam_step = 0;
-
-                /* Per-epoch shuffling */
-                int *perm_f64 = (int *)malloc((size_t)N * sizeof(int));
-                if (!perm_f64) {
-                    free(A_buf); free(Z_buf); free(delta_buf);
-                    free(dW_buf); free(db_buf);
-                    free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
-                    VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: perm alloc failed");
-                }
-                for (int i = 0; i < N; i++) perm_f64[i] = i;
-
-                for (int epoch = 0; epoch < epochs; epoch++) {
-                    for (int i = N - 1; i > 0; i--) {
-                        int j = (int)((unsigned)rand() % (unsigned)(i + 1));
-                        int tmp = perm_f64[i]; perm_f64[i] = perm_f64[j]; perm_f64[j] = tmp;
-                    }
-                    double epoch_loss = 0.0;
-                    for (int batch = 0; batch < nbatch; batch++) {
-                        int s0 = batch * B;
-                        int Bn = (s0 + B <= N) ? B : N - s0;
-                        int in0 = layers[0].rows;
-
-                        for (int s = 0; s < Bn; s++) {
-                            int idx = perm_f64[s0 + s];
-                            memcpy(A[0] + (size_t)s * max_dim,
-                                   input->data.f64 + (size_t)idx * in0,
-                                   in0 * sizeof(double));
-                        }
-
-                        /* Forward */
-                        for (int l = 0; l < n_layers; l++) {
-                            int in_sz = layers[l].rows, out_sz = layers[l].cols;
-#ifdef NML_HAS_BLAS
-                            cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                                        Bn, out_sz, in_sz,
-                                        1.0, A[l], max_dim,
-                                        W[l], out_sz,
-                                        0.0, Z[l], max_dim);
-#else
-                            for (int s = 0; s < Bn; s++) {
-                                const double *a_row = A[l] + (size_t)s * max_dim;
-                                double       *z_row = Z[l] + (size_t)s * max_dim;
-                                for (int j = 0; j < out_sz; j++) {
-                                    double sum = 0.0;
-                                    for (int p = 0; p < in_sz; p++)
-                                        sum += a_row[p] * W[l][p * out_sz + j];
-                                    z_row[j] = sum;
-                                }
-                            }
-#endif
-                            for (int s = 0; s < Bn; s++) {
-                                double *z_row = Z[l] + (size_t)s * max_dim;
-                                double *a_row = A[l + 1] + (size_t)s * max_dim;
-                                for (int j = 0; j < out_sz; j++) {
-                                    double z = z_row[j] + b_arr[l][j];
-                                    z_row[j] = z;
-                                    switch (layers[l].act) {
-                                        case 1: a_row[j] = 1.0 / (1.0 + exp(-z)); break;
-                                        case 2: a_row[j] = tanh(z); break;
-                                        default: a_row[j] = z > 0.0 ? z : 0.0; break;
-                                    }
-                                }
-                            }
-                        }
-
-                        /* Loss + last-layer delta */
-                        int out_final = layers[n_layers - 1].cols;
-                        for (int s = 0; s < Bn; s++) {
-                            int idx = perm_f64[s0 + s];
-                            double *a_row = A[n_layers] + (size_t)s * max_dim;
-                            double *d_row = delta[n_layers - 1] + (size_t)s * max_dim;
-                            const double *y_row = target->data.f64 + (size_t)idx * out_final;
-                            for (int j = 0; j < out_final; j++) {
-                                double a = a_row[j], y = y_row[j], diff = a - y;
-                                epoch_loss += diff * diff;
-                                double z = Z[n_layers - 1][(size_t)s * max_dim + j], da;
-                                switch (layers[n_layers - 1].act) {
-                                    case 1: da = a * (1.0 - a); break;
-                                    case 2: da = 1.0 - a * a;  break;
-                                    default: da = z > 0.0 ? 1.0 : 0.0; break;
-                                }
-                                d_row[j] = 2.0 * diff * da / Bn;
-                            }
-                        }
-
-                        /* Backward */
-                        if (use_adam) { adam_step++; }
-                        double bc1 = use_adam ? 1.0 - pow(BETA1, (double)adam_step) : 1.0;
-                        double bc2 = use_adam ? 1.0 - pow(BETA2, (double)adam_step) : 1.0;
-
-                        for (int l = n_layers - 1; l >= 0; l--) {
-                            int in_sz = layers[l].rows, out_sz = layers[l].cols;
-
-                            memset(dW[l], 0, (size_t)in_sz * out_sz * sizeof(double));
-#ifdef NML_HAS_BLAS
-                            cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                                        in_sz, out_sz, Bn,
-                                        1.0, A[l], max_dim, delta[l], max_dim,
-                                        0.0, dW[l], out_sz);
-#else
-                            for (int s = 0; s < Bn; s++) {
-                                const double *a_row = A[l]     + (size_t)s * max_dim;
-                                const double *d_row = delta[l] + (size_t)s * max_dim;
-                                for (int p = 0; p < in_sz; p++)
-                                    for (int j = 0; j < out_sz; j++)
-                                        dW[l][p * out_sz + j] += a_row[p] * d_row[j];
-                            }
-#endif
-                            memset(db[l], 0, (size_t)out_sz * sizeof(double));
-                            for (int s = 0; s < Bn; s++) {
-                                const double *d_row = delta[l] + (size_t)s * max_dim;
-                                for (int j = 0; j < out_sz; j++) db[l][j] += d_row[j];
-                            }
-
-                            if (l > 0) {
-                                int prev_sz = layers[l - 1].cols;
-#ifdef NML_HAS_BLAS
-                                cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                                            Bn, in_sz, out_sz,
-                                            1.0, delta[l], max_dim, W[l], out_sz,
-                                            0.0, delta[l - 1], max_dim);
-#else
-                                for (int s = 0; s < Bn; s++) {
-                                    const double *d_row  = delta[l]     + (size_t)s * max_dim;
-                                    double       *dp_row = delta[l - 1] + (size_t)s * max_dim;
-                                    for (int p = 0; p < in_sz; p++) {
-                                        double sum = 0.0;
-                                        for (int j = 0; j < out_sz; j++)
-                                            sum += d_row[j] * W[l][p * out_sz + j];
-                                        dp_row[p] = sum;
-                                    }
-                                }
-#endif
-                                for (int s = 0; s < Bn; s++) {
-                                    double *dp_row = delta[l - 1] + (size_t)s * max_dim;
-                                    for (int p = 0; p < prev_sz; p++) {
-                                        double z = Z[l-1][(size_t)s*max_dim+p];
-                                        double a = A[l]  [(size_t)s*max_dim+p], da;
-                                        switch (layers[l - 1].act) {
-                                            case 1: da = a * (1.0 - a); break;
-                                            case 2: da = 1.0 - a * a;  break;
-                                            default: da = z > 0.0 ? 1.0 : 0.0; break;
-                                        }
-                                        dp_row[p] *= da;
-                                    }
-                                }
-                                (void)prev_sz;
-                            }
-
-                            if (use_adam) {
-                                for (int i = 0; i < in_sz * out_sz; i++) {
-                                    double g = dW[l][i];
-                                    mW[l][i] = BETA1*mW[l][i] + (1.0-BETA1)*g;
-                                    vW[l][i] = BETA2*vW[l][i] + (1.0-BETA2)*g*g;
-                                    W[l][i] -= lr * (mW[l][i]/bc1) / (sqrt(vW[l][i]/bc2) + EPS);
-                                }
-                                for (int j = 0; j < out_sz; j++) {
-                                    mb[l][j] = BETA1*mb[l][j] + (1.0-BETA1)*db[l][j];
-                                    vb[l][j] = BETA2*vb[l][j] + (1.0-BETA2)*db[l][j]*db[l][j];
-                                    b_arr[l][j] -= lr * (mb[l][j]/bc1) / (sqrt(vb[l][j]/bc2) + EPS);
-                                }
-                            } else {
-                                for (int i = 0; i < in_sz * out_sz; i++) W[l][i] -= lr * dW[l][i];
-                                for (int j = 0; j < out_sz; j++) b_arr[l][j] -= lr * db[l][j];
-                            }
-                        }
-                    } /* end batch */
-                    loss = (float)(epoch_loss / (N * layers[n_layers - 1].cols));
-                } /* end epoch */
-
-                free(perm_f64);
-                free(A_buf); free(Z_buf); free(delta_buf);
-                free(dW_buf); free(db_buf);
-                free(mW_buf); free(vW_buf); free(mb_buf); free(vb_buf);
-
-            } else {
-                /* ════════════════════════════════════════════════════════
-                   SCALAR FALLBACK — mixed-dtype weights (f32/f64/i32 mix)
-                   Uses tensor_getd/tensor_setd for dtype-transparent access.
-                   ════════════════════════════════════════════════════════ */
-                size_t buf_per_sample = (size_t)max_dim * (n_layers + 1);
-                double *fwd_buf = (double *)calloc((size_t)B * buf_per_sample, sizeof(double));
-                if (!fwd_buf) VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: alloc failed");
-
-                size_t total_params = 0;
-                for (int l = 0; l < n_layers; l++)
-                    total_params += (size_t)layers[l].rows * layers[l].cols + layers[l].cols;
-                double *adam_m = NULL, *adam_v = NULL;
-                if (use_adam) {
-                    adam_m = (double *)calloc(total_params, sizeof(double));
-                    adam_v = (double *)calloc(total_params, sizeof(double));
-                    if (!adam_m || !adam_v) {
-                        free(fwd_buf); free(adam_m); free(adam_v);
-                        VM_ERROR(vm, NML_ERR_OVERFLOW, "TNDEEP: adam alloc failed");
-                    }
-                }
-                const float BETA1 = 0.9f, BETA2 = 0.999f, EPS = 1e-8f;
-                int adam_t = 0;
-
-                for (int epoch = 0; epoch < epochs; epoch++) {
-                    loss = 0.0f;
-                    for (int batch = 0; batch < nbatch; batch++) {
-                        int s0 = batch * B;
-                        int Bn = (s0 + B <= N) ? B : N - s0;
-                        for (int sample = s0; sample < s0 + Bn; sample++) {
-                            double *prev_act = fwd_buf + (size_t)(sample - s0) * buf_per_sample;
-                            int prev_n = layers[0].rows;
-                            for (int j = 0; j < prev_n; j++)
-                                prev_act[j] = tensor_getd(input, sample * prev_n + j);
-                            double *layer_acts[11]; layer_acts[0] = prev_act;
-                            for (int l = 0; l < n_layers; l++) {
-                                double *cur_act = prev_act + (size_t)(l + 1) * max_dim;
-                                layer_acts[l + 1] = cur_act;
-                                Tensor *w = &REG(layers[l].w_reg);
-                                Tensor *b = &REG(layers[l].b_reg);
-                                int in_sz = layers[l].rows, out_sz = layers[l].cols;
-                                for (int j = 0; j < out_sz; j++) {
-                                    double sum = tensor_getd(b, j);
-                                    for (int p = 0; p < in_sz; p++)
-                                        sum += layer_acts[l][p] * tensor_getd(w, p * out_sz + j);
-                                    switch (layers[l].act) {
-                                        case 1: cur_act[j] = 1.0 / (1.0 + exp(-sum)); break;
-                                        case 2: cur_act[j] = tanh(sum); break;
-                                        default: cur_act[j] = sum > 0 ? sum : 0; break;
-                                    }
-                                }
-                            }
-                            int out_sz = layers[n_layers - 1].cols;
-                            double *final_act = layer_acts[n_layers];
-                            for (int j = 0; j < out_sz; j++) {
-                                double diff = final_act[j] - tensor_getd(target, sample * out_sz + j);
-                                loss += (float)(diff * diff);
-                            }
-                            double d_buf[4096], d_buf2[4096];
-                            double *d_cur = d_buf, *d_prev = d_buf2;
-                            for (int j = 0; j < out_sz; j++)
-                                d_cur[j] = 2.0 * (final_act[j] - tensor_getd(target, sample * out_sz + j)) / Bn;
-                            size_t adam_off = total_params;
-                            for (int l = n_layers - 1; l >= 0; l--) {
-                                Tensor *w = &REG(layers[l].w_reg);
-                                Tensor *b = &REG(layers[l].b_reg);
-                                int in_sz = layers[l].rows, o_sz = layers[l].cols;
-                                adam_off -= (size_t)in_sz * o_sz + o_sz;
-                                double d_pre[4096];
-                                for (int j = 0; j < o_sz; j++) {
-                                    double a = layer_acts[l + 1][j], da;
-                                    switch (layers[l].act) {
-                                        case 1: da = a * (1.0 - a); break;
-                                        case 2: da = 1.0 - a * a;  break;
-                                        default: da = a > 0 ? 1.0 : 0.0; break;
-                                    }
-                                    d_pre[j] = d_cur[j] * da;
-                                }
-                                if (use_adam) {
-                                    adam_t = epoch * N + sample + 1;
-                                    float bc1 = 1.0f - powf(BETA1, (float)adam_t);
-                                    float bc2 = 1.0f - powf(BETA2, (float)adam_t);
-                                    for (int p = 0; p < in_sz; p++)
-                                        for (int j = 0; j < o_sz; j++) {
-                                            double g = layer_acts[l][p] * d_pre[j];
-                                            size_t idx = adam_off + p * o_sz + j;
-                                            adam_m[idx] = BETA1 * adam_m[idx] + (1 - BETA1) * g;
-                                            adam_v[idx] = BETA2 * adam_v[idx] + (1 - BETA2) * g * g;
-                                            double mh = adam_m[idx] / bc1, vh = adam_v[idx] / bc2;
-                                            tensor_setd(w, p * o_sz + j,
-                                                tensor_getd(w, p * o_sz + j) - lr * mh / (sqrt(vh) + EPS));
-                                        }
-                                    for (int j = 0; j < o_sz; j++) {
-                                        size_t idx = adam_off + (size_t)in_sz * o_sz + j;
-                                        adam_m[idx] = BETA1 * adam_m[idx] + (1 - BETA1) * d_pre[j];
-                                        adam_v[idx] = BETA2 * adam_v[idx] + (1 - BETA2) * d_pre[j] * d_pre[j];
-                                        double mh = adam_m[idx] / bc1, vh = adam_v[idx] / bc2;
-                                        tensor_setd(b, j, tensor_getd(b, j) - lr * mh / (sqrt(vh) + EPS));
-                                    }
-                                } else {
-                                    for (int p = 0; p < in_sz; p++)
-                                        for (int j = 0; j < o_sz; j++)
-                                            tensor_setd(w, p * o_sz + j,
-                                                tensor_getd(w, p * o_sz + j) - lr * layer_acts[l][p] * d_pre[j]);
-                                    for (int j = 0; j < o_sz; j++)
-                                        tensor_setd(b, j, tensor_getd(b, j) - lr * d_pre[j]);
-                                }
-                                if (l > 0) {
-                                    for (int p = 0; p < in_sz; p++) {
-                                        double sum = 0;
-                                        for (int j = 0; j < o_sz; j++)
-                                            sum += d_pre[j] * tensor_getd(w, p * o_sz + j);
-                                        d_prev[p] = sum;
-                                    }
-                                    double *tmp = d_cur; d_cur = d_prev; d_prev = tmp;
-                                }
-                            }
-                        } /* end sample */
-                    } /* end batch */
-                    loss /= N;
-                } /* end epoch */
-                free(fwd_buf); free(adam_m); free(adam_v);
-            } /* end scalar fallback */
-
-            int ls[] = {1};
-            tensor_init_typed(&REG(8), 1, ls, NML_F64);
-            tensor_setd(&REG(8), 0, (double)loss);
-            RVALID(8) = 1;
+            /* (unreachable — goto above always taken) */
             break;
         }
-
         /* ── TLOG #n ─────────────────────────────────────────────────────────
          * Sets vm->tlog_interval to n (default 100).
          * The next TNDEEP or TRAIN call reads and clears this flag, printing
@@ -4672,12 +3846,21 @@ static int vm_execute(VM *vm) {
          * Input/target: @refs from instruction, else R0/R9
          * Output:       R8 = final loss  (same as TNDEEP)
          *
-         * TRAIN delegates to TNDEEP's existing internals once parameters are
-         * extracted, so fast-path (f32/BLAS) and scalar fallback both apply. */
-        case OP_TRAIN: {
-            Tensor *cfg = &REG(ins->reg[0]);
-            if (!RVALID(ins->reg[0]) || cfg->size < 1)
-                VM_ERROR(vm, NML_ERR_OPCODE, "TRAIN: config register R%d is empty", ins->reg[0]);
+         * This is the consolidated training entry point.  TNET (N-layer mode)
+         * and TNDEEP both redirect here via goto after translating their
+         * parameters.  Fast-path (f32/BLAS) and scalar fallback both apply. */
+        case OP_TRAIN:
+            /* Normal entry: read config register from instruction */
+            train_cfg_reg = ins->reg[0];
+            train_data_label = ins->data_label;
+            train_target_label = ins->target_label;
+        train_dispatch: {
+            /* Entry point for TNET/TNDEEP redirects.
+             * train_cfg_reg, train_data_label, train_target_label are set
+             * by the calling shim (or by the OP_TRAIN case above). */
+            Tensor *cfg = &REG(train_cfg_reg);
+            if (!RVALID(train_cfg_reg) || cfg->size < 1)
+                VM_ERROR(vm, NML_ERR_OPCODE, "TRAIN: config register R%d is empty", train_cfg_reg);
 
             int   epochs    = (cfg->size > 0) ? (int)tensor_getd(cfg, 0)   : 1000;
             float lr        = (cfg->size > 1) ? (float)tensor_getd(cfg, 1) : 0.001f;
@@ -4699,18 +3882,18 @@ static int vm_execute(VM *vm) {
             if (n_layers < 1 || n_layers > 10)
                 VM_ERROR(vm, NML_ERR_OVERFLOW, "TRAIN: n_layers must be 1-10, got %d", n_layers);
 
-            /* Resolve input/target (same priority as TNDEEP) */
+            /* Resolve input/target */
             Tensor *input = NULL, *target = NULL;
-            if (ins->data_label[0]) {
-                MemorySlot *sl = vm_memory(vm, ins->data_label);
+            if (train_data_label && train_data_label[0]) {
+                MemorySlot *sl = vm_memory(vm, train_data_label);
                 if (!sl || !sl->used)
-                    VM_ERROR(vm, NML_ERR_MEMORY, "TRAIN: @%s not found", ins->data_label);
+                    VM_ERROR(vm, NML_ERR_MEMORY, "TRAIN: @%s not found", train_data_label);
                 input = &sl->tensor;
             } else { input = &REG(0); }
-            if (ins->target_label[0]) {
-                MemorySlot *sl = vm_memory(vm, ins->target_label);
+            if (train_target_label && train_target_label[0]) {
+                MemorySlot *sl = vm_memory(vm, train_target_label);
                 if (!sl || !sl->used)
-                    VM_ERROR(vm, NML_ERR_MEMORY, "TRAIN: @%s not found", ins->target_label);
+                    VM_ERROR(vm, NML_ERR_MEMORY, "TRAIN: @%s not found", train_target_label);
                 target = &sl->tensor;
             } else { target = &REG(9); }
             int N = input->shape[0];

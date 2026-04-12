@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate ~15K self-training pairs using TNET/BKWD/WUPD/LOSS with diverse topologies.
+Generate ~15K self-training pairs using TRAIN+INFER/BKWD/WUPD/LOSS with diverse topologies.
 
 Output: domain/output/training/nml_selftrain_pairs.jsonl
 """
@@ -40,25 +40,25 @@ def gen_tnet_programs(count=5000):
         seed = random.choice([0, 42, 123, 999])
 
         prompts = [
-            f"Write NML to train a {topo_name} {desc} using TNET for {epochs} epochs at lr {lr}",
-            f"Self-train a {topo_name} network with TNET, {epochs} epochs, learning rate {lr}",
-            f"Write NML TNET program for {desc} ({topo_name} topology)",
-            f"Train a neural network ({topo_name}) using TNET with seed {seed}",
+            f"Write NML to train a {topo_name} {desc} using TRAIN+INFER for {epochs} epochs at lr {lr}",
+            f"Self-train a {topo_name} network with TRAIN+INFER, {epochs} epochs, learning rate {lr}",
+            f"Write NML TRAIN+INFER program for {desc} ({topo_name} topology)",
+            f"Train a neural network ({topo_name}) using TRAIN+INFER with seed {seed}",
         ]
         q = random.choice(prompts) + syntax_tag(syntax)
 
-        seed_arg = f"#{seed}" if random.random() < 0.3 else ""
-        tnet_args = [f"#{epochs}", f"#{lr}"]
-        if seed_arg:
-            tnet_args.append(seed_arg)
+        seed_val = seed if random.random() < 0.3 else 0
+        allc_vals = f"{epochs},{lr},0,{seed_val},0,0"
 
         lines = [
             _fmt("LD", "R0", "@training_inputs"),
             _fmt("LD", "R9", "@training_targets"),
             _fmt("LD", "R1", "@w1"), _fmt("LD", "R2", "@b1"),
             _fmt("LD", "R3", "@w2"), _fmt("LD", "R4", "@b2"),
-            _fmt("TNET", *tnet_args),
-            _fmt("ST", "RA", "@predictions"),
+            _fmt("ALLC", "RU", "#[6]", allc_vals),
+            _fmt("TRAIN", "RU"),
+            _fmt("INFER", "R8", "R0"),
+            _fmt("ST", "R8", "@predictions"),
             _fmt("ST", "R1", "@trained_w1"), _fmt("ST", "R2", "@trained_b1"),
             _fmt("ST", "R3", "@trained_w2"), _fmt("ST", "R4", "@trained_b2"),
             "HALT",
@@ -151,15 +151,11 @@ def gen_train_infer(count=2500):
             _fmt("LD", "R9", "@training_targets"),
             _fmt("LD", "R1", "@w1"), _fmt("LD", "R2", "@b1"),
             _fmt("LD", "R3", "@w2"), _fmt("LD", "R4", "@b2"),
-            _fmt("TNET", f"#{epochs}", f"#{lr}"),
+            _fmt("ALLC", "RU", f"#[6]", f"{epochs},{lr},0,0,0,0"),
+            _fmt("TRAIN", "RU"),
             _fmt("LD", "R0", "@new_input"),
-            _fmt("MMUL", "R5", "R0", "R1"),
-            _fmt("MADD", "R5", "R5", "R2"),
-            _fmt("RELU", "R5", "R5"),
-            _fmt("MMUL", "R6", "R5", "R3"),
-            _fmt("MADD", "R6", "R6", "R4"),
-            _fmt("SIGM", "R6", "R6"),
-            _fmt("ST", "R6", "@prediction"),
+            _fmt("INFER", "R8", "R0"),
+            _fmt("ST", "R8", "@prediction"),
             "HALT",
         ]
         pairs.append(_pair(q, apply_syntax(lines, syntax)))
@@ -175,7 +171,7 @@ def main():
     print(f"{'─' * 60}")
 
     p1 = gen_tnet_programs(5000)
-    print(f"  TNET programs:          {len(p1):>6}")
+    print(f"  TRAIN+INFER programs:   {len(p1):>6}")
     p2 = gen_manual_training(5000)
     print(f"  Manual training loops:  {len(p2):>6}")
     p3 = gen_loss_patterns(2500)

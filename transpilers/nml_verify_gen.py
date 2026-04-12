@@ -118,7 +118,7 @@ PROMPTS = [
     "Write NML for max pool backward using POOLBK.",
     "Write NML for layer norm backward using NORMBK.",
     "Write NML for attention backward using ATTNBK to get dQ, dK, dV.",
-    "Write NML to train a 2-layer dense network using TNDEEP with Adam optimizer.",
+    "Write NML to train a 2-layer dense network using TRAIN with Adam optimizer.",
     # --- Training loops with backward ops ---
     "Write NML for a complete training loop: forward (MMUL+RELU), LOSS, backward (RELUBK+MMULBK), WUPD.",
     "Write NML to train a dense layer: forward pass, MSE loss, SIGMBK backward, weight update in a LOOP.",
@@ -128,7 +128,7 @@ PROMPTS = [
     "Write NML to split a tensor using SPLT and merge with MERG.",
     "Write NML to reshape a tensor using RSHP.",
     "Write NML for element-wise division using EDIV.",
-    "Write NML using TNET to train a small network for 500 epochs.",
+    "Write NML using TRAIN to train a small network for 500 epochs.",
     "Write NML to compute MSE loss using LOSS and backpropagate using BKWD and WUPD.",
     "Write NML to apply tanh activation to a tensor.",
     "Write NML to convert a float to integer using FTOI.",
@@ -144,7 +144,7 @@ PROMPTS = [
     "Write NML using SYNC as a pipeline barrier between two stages.",
     "Write NML using TRAP to abort with error code 1 if input is negative.",
     # --- Real-world end-to-end ---
-    "Write NML for fraud detection: train with TNET on transaction data, run inference, and flag fraud if score >= 0.5.",
+    "Write NML for fraud detection: train with TRAIN on transaction data, run INFER, and flag fraud if score >= 0.5.",
     "Write NML for a binary classifier: forward pass with sigmoid, then CMPI threshold decision at 0.5.",
 ]
 

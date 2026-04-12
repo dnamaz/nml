@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-Generate ~15K training pairs for backward opcodes (NML-TR v0.8).
+Generate ~15K training pairs for backward opcodes (NML-TR v0.9).
 
-Covers all 11 backward opcodes:
+Covers backward opcodes + fused training:
   RELUBK, SIGMBK, TANHBK, GELUBK, SOFTBK (activation backward)
   MMULBK (matmul backward)
   CONVBK, POOLBK (vision backward)
   NORMBK (layer norm backward)
   ATTNBK (attention backward)
-  TNDEEP (N-layer dense training)
+  TRAIN + INFER (fused N-layer dense training and inference)
 
 Patterns:
   - Individual backward opcode usage (~3K)
   - Dense forward-backward-update loops, 2-4 layers (~4K)
   - CNN forward-backward-update loops (~3K)
   - Attention + norm backward loops (~2K)
-  - TNDEEP convenience examples (~1K)
+  - TRAIN+INFER convenience examples (~1K)
   - Mixed architecture training loops (~2K)
 
 Tri-syntax: ~60% classic, 25% symbolic, 15% verbose.
@@ -43,7 +43,7 @@ SYM.update({
     "RELUBK": "⌐ˈ", "SIGMBK": "σˈ", "TANHBK": "τˈ",
     "GELUBK": "ℊˈ", "SOFTBK": "Σˈ",
     "MMULBK": "×ˈ", "CONVBK": "⊛ˈ", "POOLBK": "⊓ˈ",
-    "NORMBK": "‖ˈ", "ATTNBK": "⊙ˈ", "TNDEEP": "⥁ˈ",
+    "NORMBK": "‖ˈ", "ATTNBK": "⊙ˈ", "TRAIN": "⥁", "INFER": "⊸",
 })
 VERBOSE.update({
     "RELUBK": "RELU_BACKWARD", "SIGMBK": "SIGMOID_BACKWARD",
@@ -51,7 +51,7 @@ VERBOSE.update({
     "SOFTBK": "SOFTMAX_BACKWARD", "MMULBK": "MATMUL_BACKWARD",
     "CONVBK": "CONV_BACKWARD", "POOLBK": "POOL_BACKWARD",
     "NORMBK": "NORM_BACKWARD", "ATTNBK": "ATTN_BACKWARD",
-    "TNDEEP": "TRAIN_DEEP",
+    "TRAIN": "TRAIN", "INFER": "INFER",
 })
 
 ACTIVATIONS = ["RELU", "SIGM", "TANH", "GELU"]
@@ -485,25 +485,25 @@ def gen_attention_training(count):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Category 5: TNDEEP convenience examples
+# Category 5: TRAIN+INFER convenience examples
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def gen_tndeep(count):
-    """TNDEEP N-layer dense training with architecture descriptor and @ref syntax."""
+def gen_train_infer(count):
+    """TRAIN+INFER fused N-layer dense training with architecture descriptor."""
     pairs = []
     prompts = [
-        "Write NML to train a {n}-layer dense network using TNDEEP",
-        "Use TNDEEP for fused {n}-layer training with {opt}",
-        "Train a {n}-layer network with TNDEEP (epochs={ep}, lr={lr})",
-        "NML fused deep training: TNDEEP with {n} layers",
-        "Write NML using TNDEEP to train a {desc} network",
-        "Use TNDEEP with {opt} optimizer to train on @training_data for {ep} epochs",
-        "Write NML that loads weights into R1-R4, architecture into RV, and calls TNDEEP",
-        "Train a neural network using the TNDEEP opcode with architecture descriptor in RV",
-        "Write NML using TNDEEP with named data references @training_data and @training_labels",
-        "Use the TNDEEP fused training opcode to train a {n}-layer {desc} network with {opt}",
-        "Write NML: load weights, load RV=arch, train with TNDEEP passing @training_data and @training_labels",
-        "Train a {desc} network with TNDEEP — pass data as @training_data @training_labels, save loss to R8",
+        "Write NML to train a {n}-layer dense network using TRAIN+INFER",
+        "Use TRAIN and INFER for fused {n}-layer training with {opt}",
+        "Train a {n}-layer network with TRAIN+INFER (epochs={ep}, lr={lr})",
+        "NML fused deep training: TRAIN with {n} layers then INFER",
+        "Write NML using TRAIN to train a {desc} network",
+        "Use TRAIN with {opt} optimizer to train on @training_data for {ep} epochs",
+        "Write NML that loads architecture into RV, config into RU, and calls TRAIN",
+        "Train a neural network using the TRAIN opcode with architecture in RV and config in RU",
+        "Write NML using TRAIN with named data references @training_data and @training_labels",
+        "Use the TRAIN opcode to train a {n}-layer {desc} network with {opt}, then INFER",
+        "Write NML: load RV=arch, ALLC RU=config, TRAIN on data, INFER for prediction",
+        "Train a {desc} network with TRAIN — pass data as @training_data @training_labels, INFER result into R8",
     ]
     configs = [
         (2, [4, 0, 1, 0], "2-layer 4-hidden ReLU"),
@@ -534,18 +534,21 @@ def gen_tndeep(count):
 
         arch_data = [float(n_layers)] + [float(x) for x in arch]
 
-        # New pattern: @data_ref and @label_ref go directly on the TNDEEP line.
-        # R0 and R9 are NOT pre-loaded — they stay free for post-training use.
+        # TRAIN+INFER pattern:
+        #   ALLC RV [size] arch_descriptor
+        #   ALLC RU [6] epochs,lr,optimizer,print_every,patience,min_delta
+        #   TRAIN RU @data @labels
+        #   INFER R8 R0
         lines = [
-            f"; TNDEEP: {desc} with {opt}",
-            f"; Data resolved via @refs — R0/R9 stay free after training",
+            f"; TRAIN+INFER: {desc} with {opt}",
+            f"; RV = architecture descriptor, RU = training config",
         ]
-        for i in range(n_layers):
-            lines.append(_fmt("LD", f"R{1 + i*2}", f"@w{i+1}"))
-            lines.append(_fmt("LD", f"R{2 + i*2}", f"@b{i+1}"))
-        lines.append(f"; Architecture: {arch_data}")
-        lines.append(_fmt("LD", "RV", "@architecture"))
-        lines.append(_fmt("TNDEEP", f"#{ep}", f"#{lr}", f"#{opt_val}", f"@{data_ref}", f"@{label_ref}"))
+        arch_size = len(arch_data)
+        arch_str = ",".join(str(int(v)) if v == int(v) else str(v) for v in arch_data)
+        lines.append(_fmt("ALLC", "RV", f"[{arch_size}]", arch_str))
+        lines.append(_fmt("ALLC", "RU", "[6]", f"{ep},{lr},{opt_val},0,0,0"))
+        lines.append(_fmt("TRAIN", "RU", f"@{data_ref}", f"@{label_ref}"))
+        lines.append(_fmt("INFER", "R8", "R0"))
         lines.append(_fmt("ST", "R8", "@final_loss"))
         lines.append("HALT")
         pairs.append(_pair(q, apply_syntax([l for l in lines], syntax)))
@@ -595,7 +598,7 @@ def gen_inference_after_training(count):
     pairs = []
     prompts = [
         "Write NML that trains on local data, then runs inference on new input",
-        "Self-training: TNDEEP to train, then forward pass for prediction",
+        "Self-training: TRAIN to learn, then INFER for prediction",
         "Train a network and immediately use it for inference",
         "Edge self-training: train on calibration data, predict on live data",
     ]
@@ -605,21 +608,15 @@ def gen_inference_after_training(count):
         ep = _epochs()
         q = random.choice(prompts) + syntax_tag(syntax)
         lines = [
-            "; Train on local data — data refs passed directly to TNDEEP",
-            _fmt("LD", "R1", "@w1"), _fmt("LD", "R2", "@b1"),
-            _fmt("LD", "R3", "@w2"), _fmt("LD", "R4", "@b2"),
-            _fmt("LD", "RV", "@architecture"),
-            _fmt("TNDEEP", f"#{ep}", f"#{lr}", "#1", "@training_input", "@training_target"),
-            _fmt("ST", "R8", "@training_loss"),
+            "; Train on local data using TRAIN+INFER",
+            _fmt("ALLC", "RV", "[5]", "2,8,0,1,0"),
+            _fmt("ALLC", "RU", "[6]", f"{ep},{lr},1,0,0,0"),
+            _fmt("TRAIN", "RU", "@training_input", "@training_target"),
             "",
-            "; Inference on new data (weights updated in-place, R0 is now free)",
+            "; Inference on new data",
             _fmt("LD", "R0", "@live_input"),
-            _fmt("MMUL", "R5", "R0", "R1"),
-            _fmt("MADD", "R5", "R5", "R2"),
-            _fmt("RELU", "R6", "R5"),
-            _fmt("MMUL", "R7", "R6", "R3"),
-            _fmt("MADD", "R7", "R7", "R4"),
-            _fmt("ST", "R7", "@prediction"),
+            _fmt("INFER", "R8", "R0"),
+            _fmt("ST", "R8", "@prediction"),
             "HALT",
         ]
         pairs.append(_pair(q, apply_syntax([l for l in lines if l is not None], syntax)))
@@ -651,7 +648,7 @@ def main():
         ("Dense 3-layer training",     gen_dense_3layer_training,        1500),
         ("CNN training loop",          gen_cnn_training,                 2500),
         ("Attention training loop",    gen_attention_training,           1500),
-        ("TNDEEP examples",            gen_tndeep,                       1000),
+        ("TRAIN+INFER examples",        gen_train_infer,                  1000),
         ("Mixed single-step training", gen_mixed_training,              1500),
         ("Self-training + inference",  gen_inference_after_training,      600),
     ]
