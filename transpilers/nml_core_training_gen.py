@@ -46,7 +46,7 @@ SYM = {
     "EDIV":"⊘","SDOT":"·","SCLR":"∗","SDIV":"÷",
     "LEAF":"∎","TACC":"∑",
     "RELU":"⌐","SIGM":"σ","TANH":"τ","SOFT":"Σ","GELU":"ℊ",
-    "RSHP":"⊞","TRNS":"⊤","SPLT":"⊢","MERG":"⊣",
+    "RSHP":"⊟","TRNS":"⊤","SPLT":"⊢","MERG":"⊣",
     "CMPF":"⋈","CMP":"≶","CMPI":"≺",
     "JMPT":"↗","JMPF":"↘","JUMP":"→",
     "LOOP":"↻","ENDP":"↺",

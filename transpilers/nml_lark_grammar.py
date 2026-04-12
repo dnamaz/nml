@@ -45,7 +45,7 @@ LOAD_OP: "LD" | "LEAF" | "MOV" | "LOAD" | "SET_VALUE" | "COPY"
 
 data_flow_instr: DFLOW_OP WS register WS register (WS operand)?
 DFLOW_OP: "RSHP" | "TRNS" | "SPLT" | "MERG" | "RESHAPE" | "TRANSPOSE" | "SPLIT" | "MERGE"
-        | "⊞" | "⊤" | "⊢" | "⊣"
+        | "⊟" | "⊤" | "⊢" | "⊣"
 
 compare_instr: "CMP" WS register WS register
              | "≶" WS register WS register

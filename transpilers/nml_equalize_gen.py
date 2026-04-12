@@ -128,7 +128,7 @@ def gen_WUPD(count):
 
 def gen_LOSS(count):
     pairs = []
-    modes = [("#0", "MSE"), ("#1", "cross-entropy"), ("#2", "MAE")]
+    modes = [("#0", "MSE"), ("#1", "MAE"), ("#2", "cross-entropy")]
     prompts = [
         "Write NML to compute {mode} loss between predictions and targets",
         "Calculate {mode} loss using the LOSS opcode",

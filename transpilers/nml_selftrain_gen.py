@@ -27,7 +27,7 @@ TOPOLOGIES = [
 ]
 
 ACTIVATIONS = ["RELU", "SIGM", "TANH", "GELU"]
-LOSS_MODES = [("#0", "MSE"), ("#1", "cross-entropy"), ("#2", "MAE")]
+LOSS_MODES = [("#0", "MSE"), ("#1", "MAE"), ("#2", "cross-entropy")]
 
 
 def gen_tnet_programs(count=5000):
@@ -37,25 +37,24 @@ def gen_tnet_programs(count=5000):
         topo_name, desc = random.choice(TOPOLOGIES)
         epochs = random.choice([50, 100, 200, 500, 1000, 2000, 5000])
         lr = random.choice([0.001, 0.005, 0.01, 0.05, 0.1, 0.3, 0.5])
-        seed = random.choice([0, 42, 123, 999])
+        optimizer = random.choice([0, 1])  # 0=SGD, 1=Adam
+        opt_name = "Adam" if optimizer else "SGD"
 
         prompts = [
             f"Write NML to train a {topo_name} {desc} using TRAIN+INFER for {epochs} epochs at lr {lr}",
             f"Self-train a {topo_name} network with TRAIN+INFER, {epochs} epochs, learning rate {lr}",
             f"Write NML TRAIN+INFER program for {desc} ({topo_name} topology)",
-            f"Train a neural network ({topo_name}) using TRAIN+INFER with seed {seed}",
+            f"Train a neural network ({topo_name}) using TRAIN+INFER with {opt_name} optimizer",
         ]
         q = random.choice(prompts) + syntax_tag(syntax)
-
-        seed_val = seed if random.random() < 0.3 else 0
-        allc_vals = f"{epochs},{lr},0,{seed_val},0,0"
 
         lines = [
             _fmt("LD", "R0", "@training_inputs"),
             _fmt("LD", "R9", "@training_targets"),
             _fmt("LD", "R1", "@w1"), _fmt("LD", "R2", "@b1"),
             _fmt("LD", "R3", "@w2"), _fmt("LD", "R4", "@b2"),
-            _fmt("ALLC", "RU", "#[6]", allc_vals),
+            _fmt("LD", "RU", "@train_config"),
+            f"; @train_config shape=6 data={epochs},{lr},{optimizer},0,0,0.0001",
             _fmt("TRAIN", "RU"),
             _fmt("INFER", "R8", "R0"),
             _fmt("ST", "R8", "@predictions"),

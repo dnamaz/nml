@@ -47,7 +47,7 @@ _FRAG_END = re.compile(
     r"^\s*(?:◇|ENDF|END_FRAGMENT)\b", re.IGNORECASE
 )
 _LINK_LINE = re.compile(
-    r"^\s*(?:⊕|LINK|IMPORT)\s+@(\S+)", re.IGNORECASE
+    r"^\s*(?:⊚|⊕|LINK|IMPORT)\s+@(\S+)", re.IGNORECASE
 )
 _META_LINE = re.compile(
     r"^\s*META\s+@(\S+)\s*(.*)", re.IGNORECASE
@@ -116,7 +116,7 @@ def resolve_links(
     nml_program: str,
     fragment_library: Optional[dict[str, Fragment]] = None,
 ) -> str:
-    """Replace all LINK / ⊕ @name references with the fragment body inline."""
+    """Replace all LINK / ⊚ @name references with the fragment body inline."""
     if fragment_library is None:
         fragment_library = extract_fragments(nml_program)
 

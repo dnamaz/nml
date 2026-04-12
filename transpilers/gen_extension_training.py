@@ -461,7 +461,7 @@ def gen_m2m_pairs() -> list[dict]:
         {
             "instruction": "What are the symbolic opcodes for FRAG, ENDF, and LINK?",
             "input": "",
-            "output": "FRAG = ◆ (open fragment), ENDF = ◇ (close fragment), LINK = ⊕ (import fragment). Example: ◆ my_calc opens a fragment named my_calc, ◇ closes it, ⊕ @my_calc imports it.",
+            "output": "FRAG = ◆ (open fragment), ENDF = ◇ (close fragment), LINK = ⊚ (import fragment). Example: ◆ my_calc opens a fragment named my_calc, ◇ closes it, ⊚ @my_calc imports it.",
         },
         {
             "instruction": "Write NML fragments for a multi-step calculation using symbolic syntax.",
